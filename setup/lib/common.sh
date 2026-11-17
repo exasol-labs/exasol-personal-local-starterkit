@@ -254,9 +254,9 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # exasol-personal_2.4.0_checksums.txt - and every S3 binary pinned in
 # versions.json is byte-identical to the one inside that checksummed archive.
 EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.4.0}"
-EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.13.1}"
+EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.0}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.4.0}"
-EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
+EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # uv is the Python tool runner: uvx is the process the AI client launches to
 # run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
 # the kit's managed Python wherever the system one is too old. It is pinned
@@ -265,7 +265,7 @@ EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
 # will RUN at all: below it uv's bundled CA store trusts an emSign root whose
 # intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
 # on the machine is used only at or above this floor.
-EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.7}"
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.8}"
 EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
 EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in
@@ -461,14 +461,26 @@ _exakit_log_file() {
 # comes from a dozen places in four modules, and a gate per line is a gate
 # somebody forgets. warn/error are deliberately NOT gated — a job that says
 # nothing while it works must still say something when it goes wrong.
+# EXAKIT_ITEM_LOG — set by exakit_item_begin for the length of ONE item of a
+# grouped step (exapump, the database features under "Setup Utilities"). The
+# item's info/ok lines, the ones ok_step/info_step keep included, go to that
+# file instead of the screen: the item says itself in its own two lines when it
+# ends, and replays these only if it failed. The logfile gets every line as
+# before; warn/error still print at once.
 info() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'INFO %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '    %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "INFO  $*"
 }
 ok() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'OK %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '      %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "OK    $*"
 }
 # ok_step / info_step — the lines a one-line step keeps.
@@ -500,6 +512,81 @@ info_step() {
     info "$@"
     ui_spin_resume
     EXAKIT_QUIET_DETAIL="$_ifs_prev"
+}
+
+# A GROUPED STEP: one heading, several items under it, each drawn as a spinner
+# while it works and then as two lines -- a tick with the item and its time,
+# and one dim line of what was done:
+#
+#   ▸ Step 3/6  Setup Utilities
+#       ✓ exapump v0.14.0                        (14s)
+#           profile [starter-kit] · connection verified
+#
+# Display only: every step underneath runs, records and resumes exactly as it
+# does on its own. exakit_step_group_begin prints the heading and makes
+# begin_step draw no heading of its own (an item it skips is one line at the
+# item column); exakit_item_begin/_end bracket one item. ⇄ twins:
+# Start-ExakitStepGroup, Start-ExakitStepItem, Complete-ExakitStepItem in
+# exakit-common.ps1.
+EXAKIT_STEP_GROUP=0
+exakit_step_group_begin() {
+    exakit_step_heading "$1"
+    EXAKIT_STEP_GROUP=1
+}
+exakit_step_group_end() {
+    EXAKIT_STEP_GROUP=0
+}
+# exakit_item_line <mark> <title> [time] [detail] — an item's two lines. The
+# title is padded so the times line up; the detail is dim, one level further in.
+exakit_item_line() {
+    if [ -n "${3:-}" ]; then
+        printf '    %s %-38s %s(%s)%s\n' "$1" "$2" "${UI_DIM:-}" "$3" "${UI_RESET:-}"
+    else
+        printf '    %s %s\n' "$1" "$2"
+    fi
+    [ -z "${4:-}" ] || printf '        %s%s%s\n' "${UI_DIM:-}" "$4" "${UI_RESET:-}"
+}
+# exakit_item_begin <title> — start one item: its spinner names it, and its
+# info/ok lines are held (EXAKIT_ITEM_LOG) until it ends.
+exakit_item_begin() {
+    EXAKIT_ITEM_TITLE="$1"
+    EXAKIT_ITEM_T0="$(date +%s 2>/dev/null || echo 0)"
+    EXAKIT_ITEM_LOG="$(mktemp "${TMPDIR:-/tmp}/exakit-item.XXXXXX" 2>/dev/null)" || EXAKIT_ITEM_LOG=""
+    _UI_SPIN_INDENT='    '
+    _UI_SPIN_PREFIX="$1"
+}
+# exakit_item_end <rc> [title] [detail] — end the item. Done: the tick, the
+# title (the one it began with unless a better one is given), the time, and the
+# detail. Not done: a cross, then every line the item held, so the facts it did
+# establish are on screen under the error it already printed.
+exakit_item_end() {
+    _eie_rc="$1"
+    _eie_title="${2:-$EXAKIT_ITEM_TITLE}"
+    _eie_el=$(( $(date +%s 2>/dev/null || echo 0) - ${EXAKIT_ITEM_T0:-0} ))
+    _eie_log="${EXAKIT_ITEM_LOG:-}"
+    EXAKIT_ITEM_LOG=""
+    _UI_SPIN_INDENT='  '
+    _UI_SPIN_PREFIX=''
+    if [ "$_eie_rc" -eq 0 ]; then
+        exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s" "${3:-}"
+    else
+        exakit_item_line "${UI_ERR:-}${UI_CROSS:-[x]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s"
+        if [ -n "$_eie_log" ] && [ -s "$_eie_log" ]; then
+            while IFS= read -r _eie_line || [ -n "$_eie_line" ]; do
+                case "$_eie_line" in
+                    "OK "*)   printf '        %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "${_eie_line#OK }" ;;
+                    "INFO "*) printf '        %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "${_eie_line#INFO }" ;;
+                esac
+            done < "$_eie_log"
+        fi
+    fi
+    [ -z "$_eie_log" ] || rm -f "$_eie_log"
+    return 0
+}
+# exakit_item_held <pattern> — did the item's held lines say this? For the
+# detail line, which says in a few words what the held lines said in full.
+exakit_item_held() {
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && [ -f "$EXAKIT_ITEM_LOG" ] && grep -q -- "$1" "$EXAKIT_ITEM_LOG" 2>/dev/null
 }
 # heading <text> — a green ▸ at the STEP indent (two spaces).
 #
@@ -2150,11 +2237,11 @@ exakit_uv_target() {
 # .sha256 sidecars and re-hashed from the downloaded archives before pinning.
 exakit_uv_pinned_sha256() {
     case "$1" in
-        uv-0.13.7-linux-aarch64)  echo "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc" ;;
-        uv-0.13.7-linux-x86_64)   echo "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83" ;;
-        uv-0.13.7-macos-aarch64)  echo "81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731" ;;
-        uv-0.13.7-macos-x86_64)   echo "20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7" ;;
-        uv-0.13.7-windows-x86_64) echo "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021" ;;
+        uv-0.13.8-linux-aarch64)  echo "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585" ;;
+        uv-0.13.8-linux-x86_64)   echo "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91" ;;
+        uv-0.13.8-macos-aarch64)  echo "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558" ;;
+        uv-0.13.8-macos-x86_64)   echo "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3" ;;
+        uv-0.13.8-windows-x86_64) echo "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8" ;;
         *) echo "" ;;
     esac
 }
@@ -4804,6 +4891,28 @@ _exakit_marketplace_python() {
                 ;;
         esac
         case "$2" in
+            uninstall)
+                # The module answers with the paths it removed (or would
+                # remove), one per line on stdout. Passed straight through they
+                # reached the terminal as bare absolute paths: in the middle of
+                # the --yes plan and again spliced into the "Removing the kit"
+                # spinner line. A dry run lists them as plan lines; a real run
+                # sends them to the logfile, like every other path a removal
+                # touches. Twin of the $DryRun / Write-ExakitLog arms at the end
+                # of Invoke-ExakitMarketplacePython in exakit-common.ps1.
+                _mcp_out="$(_exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@")"
+                _mcp_rc=$?
+                while IFS= read -r _mcp_line; do
+                    [ -n "$_mcp_line" ] || continue
+                    if [ "${3:-}" = --dry-run ]; then
+                        info "  will remove: $(ui_tilde "$_mcp_line")"
+                    else
+                        _exakit_log_file "INFO  $1 $_mcp_line"
+                    fi
+                done <<EXAKIT_MCP_UNINSTALL_EOF
+$_mcp_out
+EXAKIT_MCP_UNINSTALL_EOF
+                return "$_mcp_rc" ;;
             latest|validate)
                 EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                     _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
@@ -5950,9 +6059,12 @@ exakit_addon_activity() {
     # One "row|text" record per add-on (several install side by side): this row's
     # replaces its own, the others stay. Written whole, then moved in, so the
     # table animator never reads half a file.
+    # grep -v exits 1 when this row was the only record: nothing to keep is
+    # not an error, and under a `set -e` caller it would end the whole run.
     {
-        [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ] && \
-            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null
+        if [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ]; then
+            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null || :
+        fi
         printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$(printf '%s' "$1" | tr '\r\n' '  ')"
     } > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
@@ -6593,6 +6705,9 @@ exakit_marketplace_offer() {
     ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
     # Nothing to install and nobody to ask: nothing on screen.
     [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || return 0
+    # Two empty lines first: the offer is a new part of the run, not one more
+    # line of the install step above it. ⇄ twin: Request-ExakitMarketplaceOffer.
+    printf '\n\n'
     heading "Supercharging Exasol with Add-ons"
     if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
         # ONE table: every add-on on offer, the missing ones of the two installing
@@ -9217,6 +9332,12 @@ begin_step() {
             # and a manifest read, so a second one costs nothing.
             step_artifact_state "$1" >/dev/null 2>&1
             _bs_rerun=1
+        elif [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+            # An item of a grouped step: one line at the item column, under the
+            # group's heading.
+            exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$2" "" "already done, skipping"
+            _exakit_log_file "OK    $2 — already done, skipping"
+            return 1
         else
             # Step-level line (a whole step's status, not a nested outcome).
             printf '\n  %s%s%s %s%s%s %s— already done, skipping%s\n' \
@@ -9226,7 +9347,12 @@ begin_step() {
             return 1
         fi
     fi
-    exakit_step_heading "$2"
+    # In a grouped step the group printed the heading; the item draws itself.
+    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+        _exakit_log_file "STEP  $2"
+    else
+        exakit_step_heading "$2"
+    fi
     if [ "$_bs_rerun" -eq 1 ]; then
         info "Recorded as done, but ${EXAKIT_STEP_RERUN_REASON:-what it installed is missing — running it again}"
     fi
@@ -10276,6 +10402,9 @@ ALLOW.append("mcp__exasol")
 # recommend.
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
 
+import re
+LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
+
 doc = {}
 if os.path.exists(path):
     try:
@@ -10297,6 +10426,13 @@ for key, wanted in (("allow", ALLOW), ("deny", DENY)):
     existing = permissions.setdefault(key, [])
     if not isinstance(existing, list):
         continue
+    # Rules for commands that no longer exist were left behind by earlier kits;
+    # drop them on the way through and count that as a change. Twin of the
+    # Test-ExakitLegacyAllowlistRule filter in Set-ExakitReadonlyAllowlist.
+    stale = [entry for entry in existing if isinstance(entry, str) and LEGACY.match(entry)]
+    for entry in stale:
+        existing.remove(entry)
+        added += 1
     for entry in wanted:
         if entry not in existing:
             existing.append(entry)
@@ -10340,6 +10476,15 @@ for prefix in PREFIXES:
     ALLOW.append("Bash(%s tls-pin --json)" % prefix)
 ALLOW.append("mcp__exasol")
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
+# Rules earlier kits wrote for commands this kit no longer has (`update-check`
+# merged into `version`, `mcp-validate` into `mcp-doctor`), in every spelling
+# they were written in. The current lists above never name them, so uninstall
+# printed "permission rules removed" and left all three mcp-validate rules
+# behind. Same pattern as Test-ExakitLegacyAllowlistRule in exakit-common.ps1.
+import re
+LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
+def is_ours(entry, ours):
+    return entry in ours or (isinstance(entry, str) and LEGACY.match(entry) is not None)
 try:
     with open(path) as handle:
         doc = json.load(handle)
@@ -10355,7 +10500,7 @@ for key, ours in (("allow", ALLOW), ("deny", DENY)):
     existing = permissions.get(key)
     if not isinstance(existing, list):
         continue
-    kept = [entry for entry in existing if entry not in ours]
+    kept = [entry for entry in existing if not is_ours(entry, ours)]
     removed += len(existing) - len(kept)
     permissions[key] = kept
 if removed:
@@ -12368,6 +12513,7 @@ except (OSError, ValueError):
 if not isinstance(doc, dict):
     sys.exit(1)
 doc.setdefault("installed", True)
+import os
 if "remedy" not in doc:
     # From a WARNING or ERROR finding only. Taking the first next_action made a
     # healthy machine answer "Install the client..." off an INFO finding about
@@ -12394,6 +12540,13 @@ if "remedy" not in doc:
             not any(isinstance(c, dict) and c.get("state") == "configured" for c in clients):
         remedy = "exakit mcp-setup"
     doc["remedy"] = remedy
+# The caller's remedy (mcp-doctor over a deployment the launcher records as
+# failed while its database answers) only where the doctor found none of its
+# own: a client fix it found is not hidden behind exakit start.
+if doc.get("remedy") is None and os.environ.get("EXAKIT_MCP_RESULT_REMEDY"):
+    doc["remedy"] = os.environ["EXAKIT_MCP_RESULT_REMEDY"]
+    if os.environ.get("EXAKIT_MCP_RESULT_REMEDY_HINT"):
+        doc["remedy_hint"] = os.environ["EXAKIT_MCP_RESULT_REMEDY_HINT"]
 print(json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False))
 EXAKIT_MCP_STAMP_PY
     }
@@ -12949,12 +13102,33 @@ exakit_print_soft_failures() {
 _exakit_install_exapump() {
     _eie_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
+    # Under "Setup Utilities" the item's spinner names what it is doing now.
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="downloading"
     exapump_install || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="writing the connection profile"
     exapump_create_profile || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="verifying the connection"
     exapump_validate_connection
     _eie_rc=$?
     EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"
     return $_eie_rc
+}
+
+# The exapump item's tick line and detail, from the lines it held: the version
+# it reports installing (or that it found one already there), the profile name
+# someone types again, and that the connection was verified.
+_exakit_exapump_item_title() {
+    _eit_v="$(grep -oE '^OK exapump v[0-9][^ ]* installed' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK exapump v//; s/ installed$//')"
+    if [ -n "$_eit_v" ]; then printf 'exapump v%s\n' "$_eit_v"; else printf '%s\n' "$1"; fi
+}
+_exakit_exapump_item_detail() {
+    _eid=""
+    exakit_item_held '^OK exapump already installed' && _eid="already installed"
+    exakit_item_held '^OK exapump runs via the ' && _eid="${_eid:+$_eid · }runs in a container"
+    _eid_p="$(grep -oE '^OK Connection profile \[[^]]*\]' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK Connection //')"
+    [ -z "$_eid_p" ] || _eid="${_eid:+$_eid · }$_eid_p"
+    exakit_item_held '^OK Database ready' && _eid="${_eid:+$_eid · }connection verified"
+    printf '%s\n' "$_eid"
 }
 
 # One line for this step's server work: the launcher's MCP server, as the
@@ -13431,35 +13605,45 @@ kit_shared_steps() {
         info "Skipping exapump, the sample data, the AI bridge and pyexasol - they all need the database, which is not installed"
     fi
 
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v exapump_install >/dev/null 2>&1; then
-        if begin_step exapump "Step ${_step_no}/${_total}  exapump (data loading CLI)"; then
-            if exakit_soft_step exapump "exakit update" "exapump" \
-                    _exakit_install_exapump; then
-                mark_step exapump
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  exapump — not part of this installation, skipping"
-    fi
-    _step_no=$((_step_no + 1))
-
-    # CONFIGURE DATABASE FEATURES, right after exapump: the database is up and
+    # SETUP UTILITIES: exapump, then the database features, as ONE step with
+    # one item each. Two steps underneath, as before -- exapump is recorded in
+    # steps_completed and resumes on its own, the database features run on
+    # every pass -- shown under one heading (exakit_step_group_begin).
+    #
+    # The database features come right after exapump: the database is up and
     # exapump can run the setup SQL, and nothing has loaded data or connected
     # an AI client yet. The core tasks of scope "database" run here (today the
     # SQL preprocessor framework) - installed when missing, verified on every
     # pass. A task that fails is booked in the closing summary and the steps
     # after it still run; each checks its own prerequisites.
-    _kss_feature_label="Step ${_step_no}/${_total}  Configure database features"
+    _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
     if [ "$_kss_nodb" = 1 ]; then
         :
-    elif ! command -v exakit_core_database_step >/dev/null 2>&1; then
-        info "$_kss_feature_label — not part of this installation, skipping"
-    elif exakit_soft_failed exapump; then
-        info "$_kss_feature_label — skipped: it runs its setup through exapump, which is not installed"
     else
-        exakit_core_database_step "$_kss_feature_label" "$_kit_root"
+        exakit_step_group_begin "$_kss_util_label"
+        if command -v exapump_install >/dev/null 2>&1; then
+            _kss_ep_title="exapump${EXAKIT_EXAPUMP_VERSION:+ v$EXAKIT_EXAPUMP_VERSION}"
+            if begin_step exapump "$_kss_ep_title"; then
+                exakit_item_begin "$_kss_ep_title"
+                if exakit_soft_step exapump "exakit update" "exapump" \
+                        _exakit_install_exapump; then
+                    mark_step exapump
+                    exakit_item_end 0 "$(_exakit_exapump_item_title "$_kss_ep_title")" "$(_exakit_exapump_item_detail)"
+                else
+                    exakit_item_end 1
+                fi
+            fi
+        else
+            info "exapump — not part of this installation, skipping"
+        fi
+        if ! command -v exakit_core_database_step >/dev/null 2>&1; then
+            info "Database features — not part of this installation, skipping"
+        elif exakit_soft_failed exapump; then
+            info "Database features — skipped: they are set up through exapump, which is not installed"
+        else
+            exakit_core_database_step "Database features" "$_kit_root"
+        fi
+        exakit_step_group_end
     fi
     _step_no=$((_step_no + 1))
 
@@ -13614,6 +13798,12 @@ connection_summary() {
     else
         ui_panel_line "$(printf '%-13s %s' "SQL client" "$(ui_link https://dbeaver.io/download/ "DBeaver") or $(ui_link https://www.dbvis.com/download/ "DbVisualizer")")"
     fi
+    # Federation: shown where a source can be connected from here, the same
+    # test as the data table's "Connect other data sources" row (the module is
+    # loaded and the kit's pyexasol, which runs the engine, is installed).
+    if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
+        ui_panel_line "$(printf '%-13s %s' "Federation" "exakit connect  ·  exakit source")"
+    fi
     ui_panel_line "$(printf '%-13s %s' "Everything" "exakit info  ·  exakit guide")"
     ui_panel_end
 }
@@ -13638,17 +13828,18 @@ connection_panel() {
     # to read one key out of the same file: ~53ms each, ~890ms for the panel.
     # The spinner above explains that wait; batching removes it.
     #
-    # THE ORDER OF THESE SIX NAMES IS THE CONTRACT with the loop below. Every
+    # THE ORDER OF THESE NAMES IS THE CONTRACT with the loop below. Every
     # variable is initialised first, so a missing manifest leaves them empty
     # and the panel prints "unknown" exactly as it did before.
-    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""
+    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""; _cp_tls_fp=""
     _cp_values="$(manifest_get_many \
         runtime.type \
         runtime.dsn \
         runtime.user \
         runtime.password_file \
         components.mcp_server.connection.user \
-        components.mcp_server.connection.password_file 2>/dev/null)"
+        components.mcp_server.connection.password_file \
+        runtime.tls_fingerprint 2>/dev/null)"
     _cp_i=0
     while IFS= read -r _cp_line; do
         _cp_i=$((_cp_i + 1))
@@ -13659,6 +13850,7 @@ connection_panel() {
             4) _pwfile="$_cp_line" ;;
             5) _mcp_user="$_cp_line" ;;
             6) _mcp_pwfile="$_cp_line" ;;
+            7) _cp_tls_fp="$_cp_line" ;;
         esac
     done <<_EXAKIT_CONN_EOF
 $_cp_values
@@ -13678,7 +13870,19 @@ _EXAKIT_CONN_EOF
     [ -n "$_pwfile" ]    && ui_panel_line "Admin pass:   $(ui_tilde "$_pwfile")"
     [ -n "$_mcp_user" ]  && ui_panel_line "MCP user:     $_mcp_user"
     [ -n "$_mcp_pwfile" ] && ui_panel_line "MCP pass:     $(ui_tilde "$_mcp_pwfile")"
-    ui_panel_line "TLS:          enabled (self-signed certificate)"
+    # The pin, from the manifest only (no handshake here: `exakit status`
+    # compares it with the live certificate). The command goes on its own row:
+    # on the TLS row it would take the panel past 80 columns. The same test as
+    # exakit_tls_recorded_fingerprint: 64 lowercase hex digits or no pin.
+    case "$_cp_tls_fp" in ''|*[!0-9a-f]*) _cp_tls_fp="" ;; esac
+    [ "${#_cp_tls_fp}" -eq 64 ] || _cp_tls_fp=""
+    if [ -n "$_cp_tls_fp" ]; then
+        ui_panel_line "TLS:          enabled (self-signed certificate) · pinned"
+        ui_panel_line "              details: exakit tls-pin"
+    else
+        ui_panel_line "TLS:          enabled (self-signed certificate) · not pinned"
+        ui_panel_line "              pin it: exakit tls-pin --accept"
+    fi
 
     _exapump="$(manifest_get components.exapump.path 2>/dev/null)"
     if [ -n "$_exapump" ]; then
@@ -14056,6 +14260,35 @@ _exakit_remove_installed_skills() {
 
 
 
+# _exakit_uninstall_leftover_report — say what of the database survived a
+# teardown, and the one command that removes it. Reads what personal_teardown
+# left in EXAKIT_TEARDOWN_LEFTOVERS / EXAKIT_TEARDOWN_REMEDY. Printed LAST, after
+# the spinner has ended, so it is the final thing on the screen and not lost
+# among the record lines. Twin of Write-ExakitUninstallLeftoverReport.
+_exakit_uninstall_leftover_report() {
+    error "The database was NOT removed. Still on this machine:"
+    printf '%s\n' "${EXAKIT_TEARDOWN_LEFTOVERS:-the local Exasol Personal deployment}" | while IFS= read -r _ulr_line; do
+        [ -n "$_ulr_line" ] && info "  $_ulr_line"
+    done
+    if [ -n "${EXAKIT_TEARDOWN_REMEDY:-}" ]; then
+        info "Remove it with (this deletes the database and all its data):"
+        info "  $EXAKIT_TEARDOWN_REMEDY"
+    fi
+    return 0
+}
+
+# _exakit_uninstall_teardown_warnings — one warn line per check the teardown
+# could not run (EXAKIT_TEARDOWN_WARNINGS, set by personal_teardown_leftovers).
+# Shared by the full uninstall and the database-only removal, so neither folds
+# an unanswered engine into a plain "removed".
+_exakit_uninstall_teardown_warnings() {
+    [ -n "${EXAKIT_TEARDOWN_WARNINGS:-}" ] || return 0
+    printf '%s\n' "$EXAKIT_TEARDOWN_WARNINGS" | while IFS= read -r _un_tw; do
+        [ -n "$_un_tw" ] && warn "$_un_tw"
+    done
+    return 0
+}
+
 # _exakit_uninstall_component <key> <dry> — one selectable piece of the kit,
 # removed on its own. Each removal also clears its manifest record and step
 # flag, so `exakit status`, `exakit version` and an installer re-run all read the
@@ -14084,7 +14317,15 @@ _exakit_uninstall_component() {
             fi
             info "Removing the local Exasol $_uc_type deployment and all data"
             case "$_uc_type" in
-                personal) personal_teardown --data || warn "Database removal reported errors" ;;
+                personal)
+                    if ! personal_teardown --data; then
+                        # Not best-effort: the deployment is still there, so
+                        # the step stays marked and the caller is told.
+                        _exakit_uninstall_leftover_report
+                        _exakit_uninstall_teardown_warnings
+                        return 1
+                    fi
+                    _exakit_uninstall_teardown_warnings ;;
                 *)        warn "Unknown runtime type '$_uc_type'; skipping database removal" ;;
             esac
             exakit_unmark_step runtime
@@ -14135,7 +14376,7 @@ _exakit_uninstall_component() {
             exakit_unmark_step pyexasol
             ;;
         everything)
-            exakit_uninstall_run "$_uc_dry"
+            exakit_uninstall_run "$_uc_dry" || return 1
             ;;
         *)
             # A marketplace add-on: its module owns the removal.
@@ -14700,6 +14941,56 @@ _exakit_autostart_unregister() {
     return 0
 }
 
+# _exakit_uninstall_orphan_autostart <dry> — remove (or, with dry=1, list)
+# every boot entry the kit owns by its name prefix that step 0a left behind.
+# Uninstall unregisters by id, so an add-on that had already lost
+# its files or manifest record kept its LaunchAgent / unit for good. Only
+# "$EXAKIT_AUTOSTART_PREFIX.<id>.plist|.service" matches: the prefix ends in a
+# dot, so nothing that merely starts with the same letters is touched. Twin of
+# Invoke-ExakitUninstallOrphanAutostart.
+_exakit_uninstall_orphan_autostart() {
+    _uoa_dry="${1:-0}"
+    _uoa_known=" $(exakit_service_ids 2>/dev/null | tr '\n' ' ') "
+    for _uoa_f in "$EXAKIT_LAUNCHAGENT_DIR/$EXAKIT_AUTOSTART_PREFIX".*.plist \
+                  "$EXAKIT_SYSTEMD_USER_DIR/$EXAKIT_AUTOSTART_PREFIX".*.service; do
+        [ -f "$_uoa_f" ] || continue
+        _uoa_name="${_uoa_f##*/}"
+        case "$_uoa_name" in
+            *.plist)   _uoa_label="${_uoa_name%.plist}" ;;
+            *.service) _uoa_label="${_uoa_name%.service}" ;;
+            *) continue ;;
+        esac
+        _uoa_id="${_uoa_label#"$EXAKIT_AUTOSTART_PREFIX".}"
+        [ -n "$_uoa_id" ] && [ "$_uoa_id" != "$_uoa_label" ] || continue
+        if [ "$_uoa_dry" = "1" ]; then
+            # Step 0a already listed a registered service's entry.
+            case "$_uoa_known" in
+                *" $_uoa_id "*) _exakit_autostart_registered "$_uoa_id" 2>/dev/null && continue ;;
+            esac
+            info "  will remove: the leftover automatic-start entry for $_uoa_id ($_uoa_f)"
+            continue
+        fi
+        case "$_uoa_name" in
+            *.plist)
+                launchctl unload "$_uoa_f" >/dev/null 2>&1
+                rm -f "$_uoa_f"
+                ;;
+            *.service)
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user disable --now "$_uoa_name" >/dev/null 2>&1
+                fi
+                rm -f "$_uoa_f"
+                command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1
+                ;;
+        esac
+        if [ -e "$_uoa_f" ]; then
+            warn "Could not remove the leftover automatic-start entry $_uoa_f"
+        else
+            ok "$_uoa_id: leftover automatic-start entry removed"
+        fi
+    done
+    return 0
+}
 
 # _exakit_autostart_registered <id> — is a boot entry in place?
 _exakit_autostart_registered() {
@@ -15026,10 +15317,21 @@ EXAKIT_UM_PANEL_EOF
     [ "$_um_answer" = "UNINSTALL" ] || { info "Uninstall cancelled — nothing was removed."; return 0; }
 
     printf '\n'
+    _um_rc=0
     for _um_key in $_um_picked; do
-        _exakit_uninstall_component "$_um_key" 0 || return $?
+        # A failed component stops the run with its own exit code; a database
+        # that survived is also said plainly below.
+        _exakit_uninstall_component "$_um_key" 0 || { _um_rc=$?; break; }
     done
     printf '\n'
+    # The database survived (the report above names it and the command that
+    # removes it): "Done" would be the one false line of the run.
+    if [ "$_um_rc" -ne 0 ]; then
+        case "$_um_key" in
+            database|everything) error "Uninstall did not finish: the database is still on this machine (see above)." ;;
+        esac
+        return "$_um_rc"
+    fi
     # A full uninstall has just deleted the exakit binary, so pointing at
     # `exakit info` sends the reader to a command that no longer exists -
     # the last word of the run being one that cannot be followed. Anything
@@ -15062,17 +15364,203 @@ EXAKIT_UM_PANEL_EOF
 # in uv's own shared folder (another project of yours may use it). Said with
 # the command that removes each, never removed here (audit DAY-09).
 exakit_uninstall_leftovers() {
-    info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
-    command -v uv >/dev/null 2>&1 || return 0
-    _ul_dir="$(uv python dir 2>/dev/null || true)"
-    [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] || return 0
-    _ul_py="$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)"
-    [ -n "$_ul_py" ] || return 0
-    info "uv keeps the Python $EXAKIT_MANAGED_PYTHON_VERSION it downloaded for the kit in $_ul_dir. If nothing else of yours uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION"
+    # One line, not two paragraphs: both items are optional tidying, and each
+    # carries the one thing needed to act on it.
+    _ul_more=""
+    if command -v uv >/dev/null 2>&1; then
+        _ul_dir="$(uv python dir 2>/dev/null || true)"
+        if [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] && \
+           [ -n "$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)" ]; then
+            _ul_more="; uv's Python $EXAKIT_MANAGED_PYTHON_VERSION (if nothing else uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION)"
+        fi
+    fi
+    info "Left for you: any PATH entry for $(ui_tilde "$EXAKIT_BIN_DIR") in your shell profile$_ul_more"
+}
+
+# _exakit_kit_mcp_server_pids - the pids of running exasol-mcp-server processes
+# that THIS kit configured, one per line. An AI client that was open during the
+# uninstall keeps its MCP server alive, pointed at a database that is gone.
+#
+# PROOF, NOT A NAME MATCH. Another tool may run its own exasol-mcp-server, so a
+# process qualifies only when its command line names exasol-mcp-server AND its
+# environment carries what the kit wrote into every client config: EXA_USER is
+# the kit's read-only MCP user and EXA_DSN is a loopback address on THIS
+# deployment's port (<port>, the caller's personal_db_port; empty means no
+# port is known and nothing qualifies). The
+# environment is read from /proc/<pid>/environ (Linux; EXAKIT_PROC_ROOT
+# overrides /proc for the tests) or `ps -E` (macOS);
+# where neither answers, nothing qualifies and nothing is stopped. No
+# PowerShell twin: Windows cannot read another process's environment, so the
+# Windows uninstall only asks the user to restart open AI clients.
+_exakit_kit_mcp_server_pids() {
+    _kmp_user="${EXAKIT_MCP_USER:-mcp_readonly}"
+    _kmp_port="${1:-}"
+    _kmp_proc="${EXAKIT_PROC_ROOT:-/proc}"
+    case "$_kmp_port" in ''|*[!0-9]*) return 0 ;; esac
+    ps -axww -o pid=,command= 2>/dev/null | while read -r _kmp_pid _kmp_cmd; do
+        case "$_kmp_cmd" in *exasol-mcp-server*) ;; *) continue ;; esac
+        case "$_kmp_pid" in ''|*[!0-9]*) continue ;; esac
+        [ "$_kmp_pid" != "$$" ] || continue
+        if [ -r "$_kmp_proc/$_kmp_pid/environ" ]; then
+            _kmp_env=" $(tr '\0' ' ' < "$_kmp_proc/$_kmp_pid/environ" 2>/dev/null) "
+        else
+            # `ps -E` prints the command line FIRST, then the environment: an
+            # EXA_USER=... in the arguments would pass for the environment.
+            # Strip the plain command text off the front; when it is not the
+            # prefix (the process changed between the two reads), nothing is
+            # proven.
+            _kmp_plain="$(ps -ww -o command= -p "$_kmp_pid" 2>/dev/null)"
+            _kmp_raw="$(ps -E -ww -o command= -p "$_kmp_pid" 2>/dev/null)"
+            [ -n "$_kmp_plain" ] || continue
+            case "$_kmp_raw" in "$_kmp_plain"*) ;; *) continue ;; esac
+            _kmp_env=" ${_kmp_raw#"$_kmp_plain"} "
+        fi
+        case "$_kmp_env" in *" EXA_USER=$_kmp_user "*) ;; *) continue ;; esac
+        case "$_kmp_env" in
+            *" EXA_DSN=127.0.0.1:$_kmp_port "*|*" EXA_DSN=localhost:$_kmp_port "*|*" EXA_DSN=[::1]:$_kmp_port "*)
+                printf '%s\n' "$_kmp_pid" ;;
+        esac
+    done
+}
+_exakit_stop_pid() { kill -TERM "$1" 2>/dev/null; }
+
+# _exakit_uninstall_recorded_db_port <deploy-dir> - the dbPort recorded in
+# <deploy-dir>/deployment.json, or nothing: no file, or no number there. No
+# default port - an unproven port must match no MCP server at all.
+_exakit_uninstall_recorded_db_port() {
+    _urp_file="${1:-}/deployment.json"
+    [ -n "${1:-}" ] && [ -f "$_urp_file" ] || return 0
+    _urp="$(tr -d '\012\015' < "$_urp_file" 2>/dev/null | \
+        sed -n 's/.*"dbPort"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    case "$_urp" in ''|*[!0-9]*) return 0 ;; esac
+    printf '%s' "$_urp"
+}
+
+# _exakit_uninstall_mcp_processes <dry> <port> - stop the kit's own MCP
+# servers (TERM), or in a dry run name them. <port> is the deployment's
+# database port, captured before the deployment was removed.
+_exakit_uninstall_mcp_processes() {
+    _ump_pids="$(_exakit_kit_mcp_server_pids "${2:-}" 2>/dev/null | tr '\n' ' ')"
+    _ump_pids="${_ump_pids% }"
+    [ -n "$_ump_pids" ] || return 0
+    _ump_n=0
+    for _ump_pid in $_ump_pids; do _ump_n=$((_ump_n + 1)); done
+    if [ "$1" = "1" ]; then
+        info "  will stop: $_ump_n exasol-mcp-server processes (pids $_ump_pids)"
+        return 0
+    fi
+    _ump_gone=""
+    for _ump_pid in $_ump_pids; do
+        _exakit_stop_pid "$_ump_pid" && _ump_gone="${_ump_gone:+$_ump_gone }$_ump_pid"
+    done
+    [ -n "$_ump_gone" ] && ok_step "Stopped the kit's exasol-mcp-server processes (pids $_ump_gone)"
+    return 0
+}
+
+# _exakit_uninstall_closing_hints - what uninstall leaves on purpose:
+# open AI clients still hold the removed MCP entry, and uv keeps the MCP server
+# package in its own cache (~200 MB), which is uv's to clean, not ours.
+# Silent on a dry run: they are advice for after a real removal, and --yes runs
+# the plan first, so printing them there too said them twice. Twin of
+# Write-ExakitUninstallClosingHints.
+_exakit_uninstall_closing_hints() {
+    [ "${1:-0}" = "1" ] && return 0
+    _uch_uv="uv"
+    if ! command -v uv >/dev/null 2>&1 && [ -x "${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv" ]; then
+        _uch_uv="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv"
+    fi
+    info "Restart any AI client that was open so it drops the Exasol MCP server; free uv's cached copy with: $_uch_uv cache clean exasol-mcp-server"
+}
+
+# _exakit_uninstall_kit_images <dry> - the container images the database used.
+#
+# On Linux, WSL and Windows the launcher deploys the database into Docker or
+# Podman, and the engine keeps what it pulled: exasol/nano (~800 MB) was
+# still on a machine after a full uninstall, and nothing on screen said so.
+# Only that repository is ever touched (podman spells it docker.io/exasol/...;
+# rmi gets the exact reference the engine listed), every tag of it including
+# <none>, and `rmi` runs WITHOUT -f: an image a container still
+# uses stays, with the one command that removes it later. macOS deploys into
+# the launcher's own VM, so the host engine holds nothing of the kit's there.
+# Every engine call is bounded, so a hung engine cannot stall the uninstall.
+# Twin of Invoke-ExakitUninstallKitImages.
+# Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx), so an
+# image of it on this machine is the user's own.
+EXAKIT_KIT_IMAGE_REPOS="exasol/nano"
+_exakit_uninstall_kit_images() {
+    _kim_dry="${1:-0}"
+    _kim_os="$(detect_os 2>/dev/null || uname -s 2>/dev/null)"
+    case "$_kim_os" in macos|Darwin) return 0 ;; esac
+    _kim_any=0
+    _kim_gone=""
+    for _kim_eng in docker podman; do
+        command -v "$_kim_eng" >/dev/null 2>&1 || continue
+        _kim_any=1
+        if ! _kim_list="$(exakit_run_bounded 30 "$_kim_eng" images --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)"; then
+            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano"
+            continue
+        fi
+        _kim_rows="$(printf '%s\n' "$_kim_list" | while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
+            _kr_bare="${_kr_repo#docker.io/}"
+            for _kr_want in $EXAKIT_KIT_IMAGE_REPOS; do
+                [ "$_kr_bare" = "$_kr_want" ] && printf '%s|%s|%s|%s|%s\n' "$_kr_bare" "$_kr_tag" "$_kr_id" "$_kr_size" "$_kr_repo"
+            done
+        done)"
+        [ -n "$_kim_rows" ] || continue
+        # A here-document, not a pipe: the loop sets _kim_gone, and a pipe
+        # would run it in a subshell that drops the value.
+        # Tagged rows first, then <none> rows: every tag of an image is removed
+        # by its own name (an image with two tags needs both, or it stays), and
+        # a <none> row whose id a tag already covered is skipped - podman lists
+        # one image twice when it carries a tag AND a <none> row, and that
+        # second row is not "kept".
+        _kim_seen=" "
+        _kim_rows="$(printf '%s\n' "$_kim_rows" | awk -F'|' '$2!="" && $2!="<none>"'; printf '%s\n' "$_kim_rows" | awk -F'|' '$2=="" || $2=="<none>"')"
+        while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size _kr_listed; do
+            [ -n "$_kr_repo" ] || continue
+            case "$_kr_tag" in
+                ''|'<none>') case "$_kim_seen" in *" $_kr_id "*) continue ;; esac ;;
+            esac
+            [ -n "$_kr_id" ] && _kim_seen="$_kim_seen$_kr_id "
+            _kr_name="$_kr_repo:$_kr_tag"
+            # A dangling image has no tag to name it by; its id is the handle.
+            # Otherwise the exact reference the engine listed (docker.io/...
+            # under podman), so rmi names the very image it was shown.
+            case "$_kr_tag" in ''|'<none>') _kr_ref="$_kr_id" ;; *) _kr_ref="${_kr_listed:-$_kr_repo}:$_kr_tag" ;; esac
+            # A <none> row whose id another repository also names (the user
+            # tagged the kit's image): podman's rmi by id deletes an image
+            # with a single name, the user's tag with it. Kept.
+            if [ "$_kr_ref" = "$_kr_id" ] && printf '%s\n' "$_kim_list" | awk -F'|' -v id="$_kr_id" -v repos="$EXAKIT_KIT_IMAGE_REPOS" '
+                BEGIN { n = split(repos, r, " ") }
+                $3 == id { b = $1; sub(/^docker\.io\//, "", b); k = 0; for (i = 1; i <= n; i++) if (b == r[i]) k = 1; if (!k) f = 1 }
+                END { exit f ? 0 : 1 }'; then
+                info "Kept image $_kr_name (id $_kr_id): it also carries another repository's tag."
+                continue
+            fi
+            if [ "$_kim_dry" = "1" ]; then
+                info "  will remove: $_kim_eng image $_kr_name${_kr_size:+ ($_kr_size)}"
+                continue
+            fi
+            if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
+                _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
+            else
+                info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
+            fi
+        done <<KIMROWS
+$_kim_rows
+KIMROWS
+        [ -n "$_kim_gone" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_gone"
+        _kim_gone=""
+    done
+    if [ "$_kim_any" = 0 ]; then
+        info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+    fi
+    return 0
 }
 
 exakit_uninstall_run() {
     _dry="${1:-0}"
+    EXAKIT_UNINSTALL_DB_LEFT=0
     # A real run narrates itself on ONE line. Every path it touches was printed
     # as its own bullet -- three per add-on, then the deployment, the MCP
     # configs, the kit home and one per CLI binary -- around twenty lines of
@@ -15094,10 +15582,19 @@ exakit_uninstall_run() {
     # NOT in a dry run: there, listing every path IS the output. That is the
     # only thing --dry-run produces and the reason anyone asks for it.
     _un_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
-    if [ "$_dry" != "1" ] && [ -t 1 ]; then
+    #
+    # Quiet on EVERY real run, not only on a terminal: an agent's shell or a
+    # pipe has no spinner to read, so there the record lines are the whole
+    # output, one per area, instead of every plan line under them.
+    if [ "$_dry" != "1" ]; then
         EXAKIT_QUIET_DETAIL=1
         ui_spin_begin "Removing the kit"
     fi
+    # _un_phase <label> — the spinner line names the phase under way. Display
+    # only: no spinner (dry run, no terminal) and it does nothing.
+    _un_phase() {
+        [ "$_dry" = "1" ] || ! command -v ui_spin_relabel >/dev/null 2>&1 || ui_spin_relabel "$1"
+    }
     _step() { # _step <message>  — narrate the action (or the plan line)
         if [ "$_dry" = "1" ]; then info "  will remove: $1"; else info "$1"; fi
     }
@@ -15227,11 +15724,17 @@ EXAKIT_PRESERVED_PATHS_EOF
             fi
         done
     fi
+    # 0a') Orphaned boot entries: every LaunchAgent / systemd user unit
+    #      carrying the kit's prefix, whatever the registry says. An add-on
+    #      whose files or manifest record were already gone is no longer a
+    #      service id, so the loop above never saw its entry.
+    _exakit_uninstall_orphan_autostart "$_dry"
 
     # 0b) Kit-managed marketplace add-ons that live OUTSIDE the kit home (the
     #    VS Code extension). Anything under the kit home or the bin dir is
     #    swept by steps 5-6 regardless; a system-installed copy the kit never
     #    managed is not touched (each hook enforces that itself).
+    _un_phase "Removing add-ons"
     _un_addons_gone=""
     # Tells an add-on hook that the kit home goes next, so it does not promise
     # to keep something step 5 is about to delete (dash-server's instance).
@@ -15250,11 +15753,29 @@ EXAKIT_PRESERVED_PATHS_EOF
     fi
     [ -n "$_un_addons_gone" ] && _done "Add-ons removed: $_un_addons_gone"
 
+    _un_phase "Removing the database"
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
+    # Whether this machine really had a deployment when the uninstall began:
+    # the container images (step 1c) belong to the engine, not to the kit's
+    # home, so only a run that found a deployment may remove them - a sandboxed
+    # HOME (the test suites) must never reach the real engine's images.
+    _un_had_deploy=0
+    [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && _un_had_deploy=1
+    # The deployment's port, read while its deployment.json still exists:
+    # step 2b proves an MCP server is the kit's by EXA_DSN on this port.
+    # ONLY from that file (never personal_db_port's 8563 fallback): no
+    # deployment.json, or no number in it, leaves it empty and step 2b stops
+    # nothing.
+    _un_mcp_port=""
+    [ "$_un_had_deploy" = 1 ] && \
+        _un_mcp_port="$(_exakit_uninstall_recorded_db_port "$EXAKIT_PERSONAL_DEPLOY_DIR")"
     if [ -n "$_type" ] && ! exakit_component_is_managed database; then
         exakit_preserve_component database
+        # A database the kit does not own stays, and so do its images and the
+        # MCP servers pointed at it.
+        _un_had_deploy=0
     elif [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
@@ -15262,7 +15783,11 @@ EXAKIT_PRESERVED_PATHS_EOF
         _step "local Exasol $_type deployment and ALL its data"
         if [ "$_dry" != "1" ]; then
             case "$_type" in
-                personal) personal_teardown --data || warn "Database removal reported errors (continuing uninstall)" ;;
+                # Still best-effort for the REST of the run (one piece failing
+                # must not strand the others), but no longer for the answer:
+                # the record line below is skipped, the leftovers are reported
+                # at the end, and the run returns 1.
+                personal) personal_teardown --data || EXAKIT_UNINSTALL_DB_LEFT=1 ;;
                 *)        warn "Unknown runtime type '$_type'; skipping database removal" ;;
             esac
         fi
@@ -15272,9 +15797,36 @@ EXAKIT_PRESERVED_PATHS_EOF
         # refused to remove is found again by name, and nothing else on screen
         # ever says what it was called.
         case "$_type" in
-            personal) _done "Database removed: the local Exasol Personal deployment and all its data" ;;
+            personal)
+                [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ] || \
+                    _done "Database removed: the local deployment and all its data"
+                # A container check that could not run is said right under
+                # that line, never folded into it.
+                [ "$_dry" = "1" ] || _exakit_uninstall_teardown_warnings ;;
             *)        : ;;
         esac
+        # 1b) What the launcher leaves beside the deployment: its download
+        #     cache (~500 MB) and the state directories the deployment lived in.
+        #     Only once the deployment is gone, and never while another
+        #     deployment shares them. The dry run lists the same paths.
+        if [ "$_type" = personal ] && [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
+           command -v personal_launcher_cache_dir >/dev/null 2>&1 && \
+           [ -z "$(personal_other_deployments)" ]; then
+            _un_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+            if [ -n "$_un_cache" ] && [ -d "$_un_cache" ] && [ ! -L "$_un_cache" ]; then
+                _un_csize="$(du -sh "$_un_cache" 2>/dev/null | awk '{print $1}')"
+                _step "Exasol launcher download cache $_un_cache${_un_csize:+ ($_un_csize)}"
+                _rm "$_un_cache"
+                _done "Launcher download cache removed: $_un_cache${_un_csize:+ ($_un_csize)}"
+            fi
+            _un_prune="$(personal_prunable_state_dirs)"
+            if [ -n "$_un_prune" ]; then
+                printf '%s\n' "$_un_prune" | while IFS= read -r _un_pd; do
+                    _step "empty launcher folder $_un_pd"
+                    [ "$_dry" = "1" ] || rmdir "$_un_pd" 2>/dev/null || break
+                done
+            fi
+        fi
     else
         # No runtime.type: the manifest is missing or truncated (an interrupted
         # install, a half-written record, a kit home staged by a dry run). The
@@ -15289,10 +15841,32 @@ EXAKIT_PRESERVED_PATHS_EOF
         info "If a local deployment exists it is still on disk, with all its data, at:"
         info "  ${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
         info "Remove it by hand, or re-install and then uninstall again to have the kit do it."
+        # And when it IS there, the run must not end on "complete": the same
+        # leftover report and status as a teardown that left it behind.
+        _un_dd="${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
+        if [ "$_dry" != "1" ] && [ -e "$_un_dd" ]; then
+            EXAKIT_UNINSTALL_DB_LEFT=1
+            EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $_un_dd (the database and ALL its data)"
+            EXAKIT_TEARDOWN_REMEDY="rm -rf '$(printf '%s' "$_un_dd" | sed "s/'/'\\\\''/g")'"
+        fi
+    fi
+
+    # 1c) The container images the deployment ran from, once its containers
+    #     are gone (a full uninstall only; removing just the database keeps
+    #     them, so a re-install does not pull them again). Same guards as 1b:
+    #     never while the database is still there or another deployment
+    #     still runs from the same image.
+    if [ "$_type" = personal ] && [ "$_un_had_deploy" = 1 ] && \
+       [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
+       command -v _exakit_uninstall_kit_images >/dev/null 2>&1 && \
+       [ -z "$(personal_other_deployments 2>/dev/null)" ]; then
+        _un_phase "Removing container images"
+        _exakit_uninstall_kit_images "$_dry"
     fi
 
     # 2) Managed MCP configuration in every AI client the kit configures.
     #    Best-effort: a failure here must not block the rest.
+    _un_phase "Removing AI client settings"
     if command -v exakit_mcp_operation >/dev/null 2>&1; then
         # The client list comes from the one function that owns it rather than
         # being spelled out here: this line named three clients while the
@@ -15304,7 +15878,7 @@ EXAKIT_PRESERVED_PATHS_EOF
             exakit_mcp_operation uninstall >/dev/null 2>&1 || \
                 warn "Removing the managed AI client config reported issues (continuing uninstall)"
         fi
-        _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
+        _done "MCP entry removed from the AI clients: ${_un_mcp_clients:-all managed clients}"
     fi
     # The launcher's MCP server the kit set up (mcp_sidecar_apply), on a
     # deployment that stays: a database the kit did not remove keeps running,
@@ -15319,6 +15893,14 @@ EXAKIT_PRESERVED_PATHS_EOF
         fi
     fi
 
+    # 2b) MCP servers the open AI clients still run for the kit, now pointed
+    #     at nothing. Only processes proven to be the kit's (see the helper),
+    #     and only when this run found a deployment: a sandboxed HOME (the
+    #     test suites) must never reach the real machine's processes.
+    if [ "$_un_had_deploy" = 1 ] && command -v _exakit_uninstall_mcp_processes >/dev/null 2>&1; then
+        _exakit_uninstall_mcp_processes "$_dry" "$_un_mcp_port"
+    fi
+
     # 3) Installed AI skills (shared with the selectable uninstall menu).
     _exakit_remove_installed_skills "$_dry"
 
@@ -15328,6 +15910,7 @@ EXAKIT_PRESERVED_PATHS_EOF
         _rm "$EXAKIT_HOME/exapump"
     fi
 
+    _un_phase "Removing kit files"
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots,
     #    and the pyexasol / marketplace add-on virtual environments and state
     #    (dash-server's venv and instance data live under the kit home too).
@@ -15347,8 +15930,9 @@ EXAKIT_PRESERVED_PATHS_EOF
                 for _un_old in "${EXAKIT_HOME}"-backups-*; do
                     [ -d "$_un_old" ] && [ ! -L "$_un_old" ] && [ "$_un_old" != "$_un_keep" ] && rm -rf "$_un_old"
                 done
-                info "AI client config snapshots kept at $_un_keep, readable by you only; they hold the MCP password."
-                info "  Delete it once your AI clients work: rm -rf '$_un_keep'"
+                # On screen even in a quiet run: a folder holding a password,
+                # left behind on purpose, is the one thing to read here.
+                info_step "AI client config snapshots kept at $(ui_tilde "$_un_keep") (they hold the MCP password). Delete once your AI clients work: rm -rf '$_un_keep'"
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
@@ -15383,17 +15967,18 @@ EXAKIT_PRESERVED_PATHS_EOF
                 done
             fi
             if _un_keep_notebooks; then
-                _done "Kit-owned files removed from $EXAKIT_HOME; your work was kept there ($(_un_kept_work)); reused resources were preserved"
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); your $(_un_kept_work) stay there"
             else
-                _done "Kit-owned files removed from $EXAKIT_HOME; reused resources were preserved"
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); files other tools reuse stay there"
             fi
         else
             _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
             _rm "$EXAKIT_HOME"
-            _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+            _done "Kit home removed: $(ui_tilde "$EXAKIT_HOME")"
         fi
     fi
 
+    _un_phase "Removing commands"
     # 6) CLI binaries. Removed last so earlier steps can still call the launcher.
     #    Removing the running exakit binary itself is safe (the inode survives
     #    until the process exits). Marketplace add-on launchers are swept by
@@ -15405,7 +15990,10 @@ EXAKIT_PRESERVED_PATHS_EOF
     fi
     _un_bins_gone=""
     for _bin in $_bins; do
-        case "$_un_protected_bins" in *" $_bin "*) info "Keeping $_bin (not installed by this kit)."; continue ;; esac
+        # Named only when there is something there to keep: the registry lists
+        # every add-on, and "Keeping dbt-exasol" over one never installed read
+        # as if the kit had found it.
+        case "$_un_protected_bins" in *" $_bin "*) [ -e "$EXAKIT_BIN_DIR/$_bin" ] && info "Keeping $_bin (not installed by this kit)."; continue ;; esac
         _un_bin_path="$EXAKIT_BIN_DIR/$_bin"
         case "$_bin" in
             exasol) _un_bin_path="${_un_exasol_path:-$_un_bin_path}" ;;
@@ -15417,18 +16005,18 @@ EXAKIT_PRESERVED_PATHS_EOF
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi
     done
-    [ -n "$_un_bins_gone" ] && _done "Kit-owned commands removed: $_un_bins_gone"
+    [ -n "$_un_bins_gone" ] && _done "Commands removed: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
-    # Said last, and said plainly, because it is the one thing the reader cannot
-    # find out afterwards: the logfile that held the per-path detail lived inside
-    # the kit home this run has just deleted, so the lines above are the only
-    # account of what was removed that still exists anywhere.
-    if [ "$_dry" != "1" ]; then
-        info_step "The lines above are the whole record of this uninstall — the install log lived in the kit home and went with it."
+    command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints "$_dry"
+    # Every step here is best-effort - each failure warns and carries on - with
+    # ONE exception: the database. A run that left it on the machine says so,
+    # last, with the command that removes it, and answers 1 so no caller can
+    # print "complete" over it.
+    if [ "$_dry" != "1" ] && [ "${EXAKIT_UNINSTALL_DB_LEFT:-0}" = 1 ]; then
+        printf '\n'
+        _exakit_uninstall_leftover_report
+        return 1
     fi
-    # Explicit, because every step here is best-effort: each failure warns and
-    # carries on, so the function has always succeeded, and leaving the status to
-    # whatever the last line happened to be made that an accident of ordering.
     return 0
 }

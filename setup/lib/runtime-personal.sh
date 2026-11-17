@@ -984,6 +984,15 @@ personal_db_answers() {
 # 27-second first-boot budget ran out on exactly that, and a port-open wait
 # returned the instant the container started. openssl where it exists (macOS,
 # nearly every Linux), python3 otherwise, the bare port as the last resort.
+#
+# THE OUTPUT IS THE ANSWER, NEVER openssl's EXIT STATUS. macOS ships LibreSSL
+# as /usr/bin/openssl, and its s_client exits 1 after a completed handshake
+# when stdin reaches EOF. Piped into `grep -q` under the `set -o pipefail`
+# of setup/exakit and the setup scripts, that 1 failed the probe against a
+# database that was up - so a slow first boot was never recovered and
+# `exakit status` called the database's own port "held by another process". `grep -q` also closes the
+# pipe at its match and can SIGPIPE (141) the client: the same trap as
+# personal_help_names_token. So the output is captured, then tested.
 personal_tls_answers() {
     _pta_port="$(personal_db_port)"
     if command -v openssl >/dev/null 2>&1; then
@@ -1027,6 +1036,17 @@ personal_foreign_db_hint() {
        [ "$(legacy_container_state 2>/dev/null || true)" = "running" ]; then
         printf ' It is the container database of your previous starter kit (%s), which this kit no longer manages. Stop it (%s stop %s) and re-run the installer, which then offers to copy its data across.' \
             "$(legacy_container)" "$(legacy_engine_name)" "$(legacy_container)"
+        return 0
+    fi
+    # THE KIT'S OWN RUNNER IS NOT A FOREIGN DATABASE. A deployment the
+    # launcher records as failed while its runner still runs the VM answers
+    # here too, and telling that user to stop "a database this kit did not
+    # deploy" sent them hunting for one that does not exist.
+    if command -v _personal_port_held_by_own_runner >/dev/null 2>&1 && \
+       _personal_port_held_by_own_runner; then
+        _pfh_pids="$(printf '%s' "$_ppo_pids" | tr '\n' ' ' | sed 's/ *$//')"
+        printf ' It is this kit'"'"'s own Exasol database process (pid %s), not another database. Stop it with: kill %s (your data stays), then run: exakit start' \
+            "$_pfh_pids" "$_pfh_pids"
         return 0
     fi
     printf ' It answers like an Exasol database this kit did not deploy: stop that database first, then re-run.'
@@ -1292,6 +1312,148 @@ personal_reap_orphan_daemon() {
     fi
     ok "Freed port $_rod_port (removed a leftover Exasol runner daemon)"
     return 0
+}
+
+# personal_stop_runner_of_failed_deployment - a deployment the launcher
+# records as "deployment_failed" WHILE ITS OWN RUNNER STILL RUNS THE VM. An
+# older kit could leave exactly that: the launcher gave up on a first boot,
+# the runner kept the VM up and the database answers TLS, and from then on
+# the launcher refuses every command - deploy, start, stop and destroy alike -
+# with "VM is already running". The kit's deploy retry then failed, and the
+# foreign-database hint told the user to stop a database that was the kit's
+# own. The cure, proven by hand on a user's Mac: stop that runner (its VM
+# exits with it), and the launcher's deploy then brings the deployment up.
+#
+# ONLY OUR RUNNER, ONLY WHEN CERTAIN. Every listener on this deployment's
+# port must be the launcher's runner (_personal_is_runner_process) AND be
+# executed from the launcher's own cache (personal_launcher_cache_dir). One
+# listener that fails either test - a foreign process, a runner of unknown
+# origin - and nothing is touched; the caller keeps its old behaviour. No
+# lsof, no listener: nothing to do.
+#
+# DATA. Stopping the runner is stopping the VM: the deployment directory and
+# its data disk are files the runner has open, not files it deletes, and the
+# kit already stops this same process in personal_reap_orphan_daemon. SIGTERM
+# first, which lets the VM exit on its own terms; SIGKILL only for a runner
+# that has not exited and released the port within the budget.
+#
+# Returns 0 when a runner was stopped and the port is free, 1 otherwise
+# (nothing of ours there, not certain, or the port is still held).
+EXAKIT_PERSONAL_RUNNER_STOP_WAIT="${EXAKIT_PERSONAL_RUNNER_STOP_WAIT:-20}"
+# _personal_runner_of_this_deployment PID - 0 when PID is proven to work for
+# THIS deployment: its working directory is $EXAKIT_PERSONAL_DEPLOY_DIR (or
+# below it), or it holds a file open under that directory. A runner from the
+# same launcher cache can serve another deployment (another directory, another
+# port mapping), and stopping it would stop someone else's VM. lsof is the
+# only witness; where it cannot answer, nothing is proven and 1 is returned.
+# A deploy dir that would prove everything - empty, "/", $HOME itself or an
+# ancestor of $HOME such as /Users or /home (any process with a file open in
+# the home folder would count) - proves nothing: 1. On macOS the HOME check
+# ignores case: APFS is case-insensitive and bash 3.2's pwd -P keeps the case
+# as typed, so /users/me is the same folder as /Users/me. A match is the directory itself or a path below it with a "/" after it,
+# so a sibling like <dir>2 never counts.
+_personal_runner_of_this_deployment() {
+    _prd_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+    [ -n "$_prd_dir" ] && [ -d "$_prd_dir" ] || return 1
+    while [ "${_prd_dir%/}" != "$_prd_dir" ]; do _prd_dir="${_prd_dir%/}"; done
+    [ -n "$_prd_dir" ] || return 1
+    _prd_phys="$(cd "$_prd_dir" 2>/dev/null && pwd -P)"
+    [ -n "$_prd_phys" ] || return 1
+    [ "$_prd_phys" != "/" ] || return 1
+    if [ -n "${HOME:-}" ]; then
+        _prd_home="$(cd "$HOME" 2>/dev/null && pwd -P)"
+        _prd_cmp="$_prd_phys"
+        if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+            _prd_home="$(printf '%s' "$_prd_home" | tr '[:upper:]' '[:lower:]')"
+            _prd_cmp="$(printf '%s' "$_prd_cmp" | tr '[:upper:]' '[:lower:]')"
+        fi
+        if [ -n "$_prd_home" ]; then
+            [ "$_prd_cmp" != "$_prd_home" ] || return 1
+            case "$_prd_home" in "$_prd_cmp"/*) return 1 ;; esac
+        fi
+    fi
+    _prd_paths="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+$(lsof -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p')"
+    _prd_hit=1
+    while IFS= read -r _prd_path; do
+        [ -n "$_prd_path" ] || continue
+        case "$_prd_path" in
+            "$_prd_dir"|"$_prd_dir"/*|"$_prd_phys"|"$_prd_phys"/*) _prd_hit=0; break ;;
+        esac
+    done <<EOF
+$_prd_paths
+EOF
+    return "$_prd_hit"
+}
+
+# _personal_port_held_by_own_runner - 0 when the deployment port has at least
+# one listener and EVERY listener is the launcher's runner executed from the
+# launcher's own cache AND proven to belong to this deployment
+# (_personal_runner_of_this_deployment). Sets _ppo_pids to those listeners.
+_personal_port_held_by_own_runner() {
+    _ppo_pids=""
+    command -v lsof >/dev/null 2>&1 || return 1
+    _ppo_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+    [ -n "$_ppo_cache" ] || return 1
+    _ppo_found="$(personal_db_port_pids)"
+    [ -n "$_ppo_found" ] || return 1
+    for _ppo_pid in $_ppo_found; do
+        _personal_is_own_runner_pid "$_ppo_pid" "$_ppo_cache" || return 1
+    done
+    _ppo_pids="$_ppo_found"
+}
+
+# _personal_is_own_runner_pid PID CACHE - 0 when PID is the launcher's runner,
+# executed from CACHE, and proven to work for this deployment.
+_personal_is_own_runner_pid() {
+    _personal_is_runner_process "$1" || return 1
+    case "$(ps -p "$1" -o command= 2>/dev/null || true)" in
+        *"$2"/*exasol-local-runner*) ;;
+        *) return 1 ;;
+    esac
+    _personal_runner_of_this_deployment "$1" || return 1
+}
+
+personal_stop_runner_of_failed_deployment() {
+    _personal_port_held_by_own_runner || return 1
+    _psr_pids="$_ppo_pids"
+    info "Exasol marked this database as failed, but it is still running. Restarting it cleanly (your data is kept)..."
+    command -v _exakit_log_file >/dev/null 2>&1 &&
+        _exakit_log_file "INFO  stopping runner pid(s)$(printf ' %s' $_psr_pids) on port $(personal_db_port) (launcher state deployment_failed)"
+    for _psr_pid in $_psr_pids; do
+        kill -TERM "$_psr_pid" 2>/dev/null || true
+    done
+    _psr_waited=0
+    while [ "$_psr_waited" -lt "$EXAKIT_PERSONAL_RUNNER_STOP_WAIT" ]; do
+        _psr_alive=""
+        for _psr_pid in $_psr_pids; do
+            kill -0 "$_psr_pid" 2>/dev/null && _psr_alive=1
+        done
+        [ -z "$_psr_alive" ] && [ -z "$(personal_db_port_pids)" ] && break
+        sleep 1
+        _psr_waited=$((_psr_waited + 1))
+    done
+    _psr_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+    for _psr_pid in $_psr_pids; do
+        if kill -0 "$_psr_pid" 2>/dev/null; then
+            # Proven again before a KILL: after the wait the pid may be another
+            # process. A proven runner that already let go of the port is still
+            # forced: it may hold the VM, and the deploy that follows needs it.
+            if [ -z "$_psr_cache" ] || ! _personal_is_own_runner_pid "$_psr_pid" "$_psr_cache"; then
+                warn "Process $_psr_pid is still running but is no longer proven to be this deployment's runner - it was not forced."
+                continue
+            fi
+            warn "The runner (pid $_psr_pid) did not exit within ${EXAKIT_PERSONAL_RUNNER_STOP_WAIT}s - forcing it."
+            pkill -9 -P "$_psr_pid" 2>/dev/null || true
+            kill -9 "$_psr_pid" 2>/dev/null || true
+        fi
+    done
+    _psr_waited=0
+    while [ "$_psr_waited" -lt 3 ] && [ -n "$(personal_db_port_pids)" ]; do
+        sleep 1
+        _psr_waited=$((_psr_waited + 1))
+    done
+    [ -z "$(personal_db_port_pids)" ]
 }
 
 # _personal_vm_already_running <log-line> - did the launcher, since that line of
@@ -1612,6 +1774,18 @@ personal_recover_slow_first_boot() {
     done
     ok "The database answered after $(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))s"
     personal_set_first_boot_pending 0
+    # NOTHING TO RECONCILE when the launcher already says its database is up:
+    # a deploy over a running VM is what the launcher answers with "VM is
+    # already running" and a record that then refuses every command, stop
+    # included. Its own ready state plus the handshake is the same evidence
+    # personal_deployment_running accepts as ours. Any other answer - failed,
+    # unknown, empty - still gets the reconcile below.
+    case "$(personal_launcher_state 2>/dev/null || true)" in
+        database_ready|running)
+            ok "The launcher's record agrees with the running database"
+            return 0
+            ;;
+    esac
     EXAKIT_ACTIVE_LABEL="Reconciling the launcher's record"
     # THE RECONCILE IS THE OWNERSHIP PROOF. A handshake says a database answers
     # on the port, not whose: with Windows and WSL sharing one network stack it
@@ -2500,6 +2674,9 @@ personal_deploy_local() {
             info "The launcher records this deployment as failed - retrying its deploy."
             EXAKIT_ACTIVE_LABEL="Retrying the deployment"
             PERSONAL_CONTAINER_ERROR=""
+            # Its own runner still holding the VM makes that deploy fail with
+            # "VM is already running"; stop it first when it is certainly ours.
+            personal_stop_runner_of_failed_deployment || true
             _pdl_redeployed=0
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
                 _pdl_redeployed=1
@@ -3462,6 +3639,9 @@ personal_start() {
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy instead of a start it would ignore."
             PERSONAL_CONTAINER_ERROR=""
+            # A VM its runner still runs answers that deploy with "VM is
+            # already running"; stop our own runner first (only when certain).
+            personal_stop_runner_of_failed_deployment || true
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
                 ok "Database started"
                 return 0
@@ -3877,13 +4057,32 @@ personal_destroy() {
 # Personal deployment keeps runtime and data together, so removing it always
 # deletes the database content; without --data we refuse instead of silently
 # destroying data the documented contract says would be kept.
+#
+# THE END STATE IS CHECKED, NOT ASSUMED. This used to return the status of its
+# last line - a manifest write - so a destroy that failed, a destroy that
+# exited 0 and left the deployment behind, and a destroy that never ran at all
+# all answered 0, and `exakit uninstall` printed "Database removed" over a
+# database that was still there. Returns 1 when anything of the deployment
+# remains, with what remains in EXAKIT_TEARDOWN_LEFTOVERS (one item per line)
+# and the one command that removes it in EXAKIT_TEARDOWN_REMEDY. Twin of
+# Remove-Personal.
 personal_teardown() {
+    EXAKIT_TEARDOWN_LEFTOVERS=""
+    EXAKIT_TEARDOWN_REMEDY=""
     if [ "${1:-}" != "--data" ]; then
         warn "An Exasol Personal deployment keeps the database software and your data together — removing it deletes every table you loaded."
         info "Use 'exakit stop' to stop it without deleting, or 'exakit uninstall' to remove everything."
         return 1
     fi
-    if personal_deployment_exists; then
+    # Read BEFORE the destroy: both live in the deployment's own state files,
+    # which the destroy deletes, and the check afterwards needs them.
+    _ptd_id="$(_personal_deployment_id 2>/dev/null || true)"
+    _ptd_port="$(personal_db_port 2>/dev/null || true)"
+    # The directory alone decides whether destroy is tried. `exasol info`
+    # fails on a deployment the launcher records as "deployment_failed", and
+    # gating on it skipped the destroy entirely for exactly the deployments
+    # people uninstall to get rid of.
+    if [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] || personal_deployment_exists; then
         info "Destroying the local Exasol Personal deployment"
         # --auto-approve: the launcher's 'destroy' prompts for confirmation by
         # default. run_logged sends its output to the log, so that prompt is
@@ -3899,7 +4098,142 @@ personal_teardown() {
     # dir) so a future deploy and MCP clients get a clean port.
     personal_reap_orphan_daemon || \
         warn "Could not fully free port $(personal_db_port); if a later deploy fails to bind it, stop the leftover process holding that port and retry."
+    if ! personal_teardown_leftovers "$_ptd_id" "$_ptd_port"; then
+        return 1
+    fi
     manifest_set runtime.status "removed"
+    return 0
+}
+
+# personal_teardown_leftovers <deployment-id> <port> — what of the deployment
+# is still on this machine after a destroy: its directory, the kit's own
+# runner listening on its port, and (on Linux/WSL) a container carrying its
+# id. Fills EXAKIT_TEARDOWN_LEFTOVERS and EXAKIT_TEARDOWN_REMEDY; returns 1
+# when anything remains. A foreign listener on the port is not ours and is not
+# counted (personal_reap_orphan_daemon already said so).
+personal_teardown_leftovers() {
+    _ptl_id="${1:-}"
+    _ptl_port="${2:-$EXAKIT_PERSONAL_PORT}"
+    EXAKIT_TEARDOWN_LEFTOVERS=""
+    _ptl_kill=""; _ptl_rm=""; _ptl_dir=""
+    _ptl_add() { EXAKIT_TEARDOWN_LEFTOVERS="${EXAKIT_TEARDOWN_LEFTOVERS:+$EXAKIT_TEARDOWN_LEFTOVERS
+}$1"; }
+    if command -v lsof >/dev/null 2>&1; then
+        for _ptl_pid in $(lsof -nP -iTCP:"$_ptl_port" -sTCP:LISTEN -t 2>/dev/null | sort -u); do
+            _personal_is_runner_process "$_ptl_pid" || continue
+            _ptl_add "the Exasol runner process (pid $_ptl_pid) still listening on port $_ptl_port"
+            _ptl_kill="${_ptl_kill:+$_ptl_kill }$_ptl_pid"
+        done
+    fi
+    # An engine that hangs or refuses (the user is not in the docker group)
+    # answered nothing here, so "Database removed" showed over a container that
+    # was still there. Its failure is now a warning with the command to check
+    # by hand - a warning, not a leftover: it alone never fails the run.
+    EXAKIT_TEARDOWN_WARNINGS=""
+    if [ -n "$_ptl_id" ] && personal_engine_platform; then
+        for _ptl_eng in docker podman; do
+            command -v "$_ptl_eng" >/dev/null 2>&1 || continue
+            _ptl_errf="$(mktemp "${TMPDIR:-/tmp}/exakit-ptl.XXXXXX" 2>/dev/null || true)"
+            _ptl_list="$(exakit_run_bounded "${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}" "$_ptl_eng" ps -a --format '{{.Names}}' 2>"${_ptl_errf:-/dev/null}")"
+            _ptl_rc=$?
+            if [ "$_ptl_rc" != 0 ]; then
+                if [ "$_ptl_rc" = 124 ] || [ "$_ptl_rc" = 137 ]; then
+                    _ptl_why="$_ptl_eng did not answer within ${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}s"
+                else
+                    _ptl_why="$(sed -n '/./{p;q;}' "${_ptl_errf:-/dev/null}" 2>/dev/null | cut -c1-160)"
+                    if [ -n "$_ptl_why" ]; then _ptl_why="$_ptl_eng said: $_ptl_why"; else _ptl_why="$_ptl_eng refused: exit $_ptl_rc"; fi
+                fi
+                EXAKIT_TEARDOWN_WARNINGS="${EXAKIT_TEARDOWN_WARNINGS:+$EXAKIT_TEARDOWN_WARNINGS
+}Could not ask $_ptl_eng whether the database's container is gone ($_ptl_why). Check by hand once $_ptl_eng answers: $_ptl_eng ps -a --filter name=$_ptl_id (if $_ptl_eng needs sudo here: sudo $_ptl_eng ps -a --filter name=$_ptl_id)"
+            fi
+            [ -n "$_ptl_errf" ] && rm -f "$_ptl_errf"
+            for _ptl_name in $(printf '%s\n' "$_ptl_list" | \
+                    awk -v id="$_ptl_id" '
+                        { n = $0; sub(/\r$/, "", n); li = length(id); ln = length(n); f = 0 }
+                        n == id { f = 1 }
+                        ln > li && (substr(n, 1, li + 1) == id "-" || substr(n, 1, li + 1) == id "_") { f = 1 }
+                        ln > li && (substr(n, ln - li) == "-" id || substr(n, ln - li) == "_" id) { f = 1 }
+                        f { print n }'); do
+                _ptl_add "the $_ptl_eng container $_ptl_name"
+                _ptl_rm="${_ptl_rm:+$_ptl_rm; }$_ptl_eng rm -f $_ptl_name"
+            done
+        done
+    fi
+    if [ -e "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; then
+        _ptl_add "the deployment directory $EXAKIT_PERSONAL_DEPLOY_DIR (the database and ALL its data)"
+        # A quote in the path is closed, escaped and reopened ('\'') so the
+        # remedy pastes as one argument, like the PowerShell twin's ''.
+        _ptl_dir="rm -rf '$(printf '%s' "$EXAKIT_PERSONAL_DEPLOY_DIR" | sed "s/'/'\\\\''/g")'"
+    fi
+    EXAKIT_TEARDOWN_REMEDY=""
+    # Joined with "; ", as the PowerShell twin: a runner that exited before the
+    # paste must not stop the rm -rf after it.
+    [ -n "$_ptl_kill" ] && EXAKIT_TEARDOWN_REMEDY="kill $_ptl_kill 2>/dev/null"
+    [ -n "$_ptl_rm" ]   && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY; }$_ptl_rm"
+    [ -n "$_ptl_dir" ]  && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY; }$_ptl_dir"
+    [ -z "$EXAKIT_TEARDOWN_LEFTOVERS" ]
+}
+
+# personal_launcher_cache_dir — the launcher's download cache (the Nano image,
+# the runner, the presets; around 500 MB). The launcher is a Go binary and
+# keeps it at os.UserCacheDir()/.exasol: ~/Library/Caches/.exasol on macOS,
+# $XDG_CACHE_HOME/.exasol (only when absolute, as Go requires) or
+# ~/.cache/.exasol elsewhere. Twin of Get-PersonalLauncherCacheDir.
+personal_launcher_cache_dir() {
+    [ -n "${HOME:-}" ] || return 1
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) printf '%s\n' "$HOME/Library/Caches/.exasol" ;;
+        *)  case "${XDG_CACHE_HOME:-}" in
+                /*) printf '%s\n' "$XDG_CACHE_HOME/.exasol" ;;
+                *)  printf '%s\n' "$HOME/.cache/.exasol" ;;
+            esac ;;
+    esac
+}
+
+# personal_other_deployments — every entry in the launcher's deployments
+# directory other than the kit's own deployment, one per line. Anything there
+# (another deployment, or a file nobody can vouch for) keeps the shared cache
+# and the state directories in place.
+#
+# Both places a deployment can live are scanned: beside the configured deploy
+# dir, and the launcher's default ~/.exasol/personal/deployments when the kit's
+# deployment is elsewhere (EXAKIT_PERSONAL_DEPLOY_DIR set). The launcher cache
+# is shared by every deployment, wherever it lives.
+personal_other_deployments() {
+    _pod_parent="$(dirname "$EXAKIT_PERSONAL_DEPLOY_DIR")"
+    _pod_default="${HOME:-}/.exasol/personal/deployments"
+    for _pod_dir in "$_pod_parent" "$_pod_default"; do
+        [ -n "${HOME:-}" ] || [ "$_pod_dir" = "$_pod_parent" ] || continue
+        [ -d "$_pod_dir" ] || continue
+        for _pod_e in "$_pod_dir"/* "$_pod_dir"/.[!.]* "$_pod_dir"/..?*; do
+            [ -e "$_pod_e" ] || [ -L "$_pod_e" ] || continue
+            [ "$_pod_e" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && continue
+            printf '%s\n' "$_pod_e"
+        done
+        # One scan when the two are the same directory.
+        [ "$_pod_parent" = "$_pod_default" ] && break
+    done
+    return 0
+}
+
+# personal_prunable_state_dirs — the launcher's state directories
+# (deployments, personal, .exasol, bottom-up) that are empty once the kit's
+# deployment is gone, one per line. The same answer before the destroy (what a
+# dry run lists) and after it (what is removed). Removal is rmdir only.
+personal_prunable_state_dirs() {
+    _pp_child="$EXAKIT_PERSONAL_DEPLOY_DIR"
+    _pp_d="$(dirname "$_pp_child")"
+    for _pp_name in deployments personal .exasol; do
+        [ "$(basename "$_pp_d")" = "$_pp_name" ] || return 0
+        [ -d "$_pp_d" ] && [ ! -L "$_pp_d" ] || return 0
+        for _pp_e in "$_pp_d"/* "$_pp_d"/.[!.]* "$_pp_d"/..?*; do
+            [ -e "$_pp_e" ] || [ -L "$_pp_e" ] || continue
+            [ "$_pp_e" = "$_pp_child" ] || return 0
+        done
+        printf '%s\n' "$_pp_d"
+        _pp_child="$_pp_d"
+        _pp_d="$(dirname "$_pp_d")"
+    done
 }
 
 personal_upgrade_plan() {

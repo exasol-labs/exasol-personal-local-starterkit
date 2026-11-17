@@ -661,7 +661,7 @@ _exakit_vs_and() {
 # _exakit_vs_prepare_said — is the database prepared without a question? A
 # person connecting at a terminal (picking the source was the permission) or
 # --yes. Then each step is one spinner line that its tick replaces, under the
-# "Preparing the database" header its caller printed.
+# "Enabling Federation" header its caller printed.
 _exakit_vs_prepare_said() {
     _exakit_vs_interactive || [ "${EXAKIT_VS_ASSUME_YES:-0}" = 1 ]
 }
@@ -673,10 +673,13 @@ _exakit_vs_prepare_said() {
 _exakit_vs_prep_step() {
     _eps_doing="$1"; _eps_done="$2"; shift 2
     _eps_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-prep.XXXXXX")" || _eps_out=/dev/null
+    # The spinner sits where its tick line will: under the heading, not at the margin.
+    _UI_SPIN_INDENT='      '
     ui_spin_begin "$_eps_doing"
     ( EXAKIT_QUIET_DETAIL=1; "$@" ) > "$_eps_out" 2>&1
     _eps_rc=$?
     ui_spin_end
+    _UI_SPIN_INDENT='  '
     cat "$_eps_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
     if [ "$_eps_rc" -eq 0 ]; then
         ok "$_eps_done"
@@ -724,7 +727,7 @@ _exakit_vs_java_restart() {
 # download of about 250 MiB and one database restart, done through the kit's
 # own stop/start so add-on services come back and DNS is repaired. A person
 # connecting at a terminal gave it by picking the source, and --yes gives it:
-# two steps under "Preparing the database", nothing asked. Otherwise asked.
+# two steps under "Enabling Federation", nothing asked. Otherwise asked.
 _exakit_vs_install_java() {
     if ! _exakit_vs_prepare_said; then
         info "Virtual schemas run Java inside the database, and its Java language container is not installed."
@@ -858,7 +861,7 @@ _exakit_vs_run() {
             grep '^FAIL ' "$_evx_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
             grep -v '^FAIL ' "$_evx_out" > "$_evx_out.said"
             _exakit_vs_render "$_evx_out.said"; rm -f "$_evx_out.said"
-            exakit_step_heading "Preparing the database"
+            exakit_step_heading "Enabling Federation"
         else
             _exakit_vs_render "$_evx_out"
         fi
@@ -1642,6 +1645,87 @@ EOF
     exakit_vs_engine "$@"
 }
 
+# _exakit_vs_tui_radio <question> <default> <values> <names> <hints> [guide] —
+# a choice answered with the arrows instead of typed: the question, one
+# "(•) Name   hint" row per value (values space-separated, names and hints
+# |-separated, in the same order), the default selected first; Enter takes the
+# selected one into _EVT_ANSWER, and the whole block is then erased, so nothing
+# of it stays on the screen - the answer shows where answers show (the panel).
+# With [guide] set, ? opens the source's guide (returns 3, the caller asks
+# again). Returns 2 with nothing drawn without a fancy terminal (the caller
+# asks the typed question instead), 1 at the end of the input. The stored values
+# are the same ones the typed question takes. ⇄ twin: Read-ExakitVsTuiRadio.
+_exakit_vs_tui_radio() {
+    _etc_q="$1"; _etc_def="$2"; _etc_guide="${6:-}"
+    _EVT_ANSWER=""
+    _etc_tty="$(_exakit_prompt_tty)"
+    [ -n "$_etc_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 2
+    _etc_vals=(); _etc_names=(); _etc_hints=()
+    for _etc_v in $3; do _etc_vals[${#_etc_vals[@]}]="$_etc_v"; done
+    _etc_n=${#_etc_vals[@]}
+    [ "$_etc_n" -gt 0 ] || return 2
+    _etc_rest="$4|"; _etc_hrest="$5|"; _etc_i=0; _etc_w=0
+    while [ "$_etc_i" -lt "$_etc_n" ]; do
+        _etc_names[$_etc_i]="${_etc_rest%%|*}"; _etc_rest="${_etc_rest#*|}"
+        _etc_hints[$_etc_i]="${_etc_hrest%%|*}"; _etc_hrest="${_etc_hrest#*|}"
+        [ -n "${_etc_names[$_etc_i]}" ] || _etc_names[$_etc_i]="${_etc_vals[$_etc_i]}"
+        [ "${#_etc_names[$_etc_i]}" -gt "$_etc_w" ] && _etc_w=${#_etc_names[$_etc_i]}
+        _etc_i=$(( _etc_i + 1 ))
+    done
+    _etc_cur=0; _etc_i=0
+    while [ "$_etc_i" -lt "$_etc_n" ]; do
+        [ "${_etc_vals[$_etc_i]}" = "$_etc_def" ] && _etc_cur=$_etc_i
+        _etc_i=$(( _etc_i + 1 ))
+    done
+    _etc_cols="$(_ui_term_cols)"
+    _etc_keys="↑/↓ choose · Enter confirm"
+    [ -n "$_etc_guide" ] && _etc_keys="$_etc_keys · ? guide"
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
+    _etc_drawn=0; _etc_rc=0
+    while :; do
+        _etc_frame="  ${UI_ASK}?${UI_RESET} ${UI_BOLD}$(_ui_fit_row "$_etc_q" 4 "$_etc_cols")${UI_RESET}"$'\n'
+        _etc_i=0
+        while [ "$_etc_i" -lt "$_etc_n" ]; do
+            _etc_name="${_etc_names[$_etc_i]}"
+            _etc_row="$_etc_name$(ui_repeat ' ' $(( _etc_w - ${#_etc_name} + 4 )))${_etc_hints[$_etc_i]}"
+            _etc_row="$(_ui_fit_row "$_etc_row" 9 "$_etc_cols")"
+            _etc_name="${_etc_row:0:${#_etc_name}}"; _etc_hint="${_etc_row:${#_etc_name}}"
+            if [ "$_etc_i" -eq "$_etc_cur" ]; then
+                _etc_frame="$_etc_frame    ${UI_ACCENT}(•)${UI_RESET} ${UI_BOLD}$_etc_name${UI_RESET}${UI_DIM}$_etc_hint${UI_RESET}"$'\n'
+            else
+                _etc_frame="$_etc_frame    ( ) $_etc_name${UI_DIM}$_etc_hint${UI_RESET}"$'\n'
+            fi
+            _etc_i=$(( _etc_i + 1 ))
+        done
+        _etc_frame="$_etc_frame    ${UI_DIM}$(_ui_fit_row "$_etc_keys" 4 "$_etc_cols")${UI_RESET}"$'\n'
+        if [ "$_etc_drawn" -gt 0 ]; then printf '\r\033[%dA\033[0J%s' "$_etc_drawn" "$_etc_frame"
+        else printf '%s' "$_etc_frame"; fi
+        _etc_drawn=$(( _etc_n + 2 ))
+        _ui_menu_key "$_etc_tty" || { _etc_rc=1; break; }
+        case "$UI_KEY" in
+            "") _EVT_ANSWER="${_etc_vals[$_etc_cur]}"; break ;;
+            "$(printf '\004')") _etc_rc=1; break ;;
+            "?") [ -n "$_etc_guide" ] && { _etc_rc=3; break; } ;;
+            k|K) _etc_cur=$(( _etc_cur - 1 )) ;;
+            j|J) _etc_cur=$(( _etc_cur + 1 )) ;;
+            "$(printf '\033')")
+                case "$UI_KEY_SEQ" in
+                    '[A') _etc_cur=$(( _etc_cur - 1 )) ;;
+                    '[B') _etc_cur=$(( _etc_cur + 1 )) ;;
+                esac ;;
+        esac
+        [ "$_etc_cur" -lt 0 ] && _etc_cur=$(( _etc_n - 1 ))
+        [ "$_etc_cur" -ge "$_etc_n" ] && _etc_cur=0
+    done
+    # Answered: the question and its rows go - nothing of them stays printed.
+    printf '\r\033[%dA\033[0J' "$_etc_drawn"
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
+    return "$_etc_rc"
+}
+
 # _exakit_vs_tui_field <i> [why] — field i asked under the panel (with why it is
 # asked again, when there is a reason): its label, a red * when it is required,
 # its notes and its default. Enter takes the default; an optional one with none is
@@ -1698,7 +1782,15 @@ _exakit_vs_tui_field() {
             _EVT_VAL[$_etf_i]="$_EVT_ANSWER"; _EVT_ANSWER=""
             break
         fi
-        _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1
+        _etf_crc=2
+        if [ "$_etf_k" = choice ]; then
+            # The arrows on a fancy terminal; the typed question everywhere else.
+            _exakit_vs_tui_radio "${_EVT_Q[$_etf_i]:-Which ${_etf_lab}?}" "$_etf_def" "${_EVT_CH[$_etf_i]}" \
+                "${_EVT_CHN[$_etf_i]}" "${_EVT_CHH[$_etf_i]}" 1; _etf_crc=$?
+            [ "$_etf_crc" = 1 ] && return 1
+            [ "$_etf_crc" = 3 ] && _EVT_ANSWER="?"
+        fi
+        if [ "$_etf_crc" = 2 ]; then _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1; fi
         # ? alone (then Enter): this source's guide, then the same question
         # again, every answer kept. ? with anything else is text. Never in a
         # hidden prompt (a credential, a connection string): ? can be part of
@@ -2086,15 +2178,29 @@ doc = json.load(sys.stdin)
 given = [l.split("=", 1)[0] for l in sys.argv[1].splitlines() if "=" in l]
 for f in doc["inputs"]:
     if f.get("setting") and f["name"] not in given:
+        labels = f.get("choice_labels") or f["choices"]
+        hints = list(f.get("choice_hints") or ()) + [""] * len(labels)
+        # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+        names = [l.split(" (")[0] if h else l for l, h in zip(labels, hints)]
         print("|".join([f["name"], f["label"], " ".join(f["choices"]), f.get("default") or "",
-                        "; ".join("%s: %s" % c for c in zip(f["choices"], f.get("choice_labels") or f["choices"]))]))
+                        "; ".join("%s: %s" % c for c in zip(f["choices"], labels)),
+                        f.get("question") or "", "\x1f".join(names), "\x1f".join(hints[:len(labels)])]))
         break' "$_evo_sets" 2>/dev/null)"
         [ -n "$_ets_open" ] || return 0
-        IFS='|' read -r _ets_name _ets_label _ets_choices _ets_def _ets_words <<EOF
+        IFS='|' read -r _ets_name _ets_label _ets_choices _ets_def _ets_words _ets_q _ets_cn _ets_ch <<EOF
 $_ets_open
 EOF
-        printf '  %s%s%s\n' "${UI_DIM:-}" "$_ets_words" "${UI_RESET:-}" >&2
-        _ets_v="$(prompt_text "$_ets_label ($(printf '%s' "$_ets_choices" | sed 's/ /, /g'))" "$_ets_def")" || return 1
+        # The arrows on a fancy terminal (nothing of the question stays on the
+        # screen); the typed question everywhere else.
+        _exakit_vs_tui_radio "${_ets_q:-Which ${_ets_label}?}" "$_ets_def" "$_ets_choices" \
+            "${_ets_cn//$'\x1f'/|}" "${_ets_ch//$'\x1f'/|}" 1 >&2; _ets_crc=$?
+        case "$_ets_crc" in
+            0) _ets_v="$_EVT_ANSWER"; _EVT_ANSWER="" ;;
+            1) return 1 ;;
+            3) _exakit_vs_guide_back "$_evo_id"; continue ;;
+            *) printf '  %s%s%s\n' "${UI_DIM:-}" "$_ets_words" "${UI_RESET:-}" >&2
+               _ets_v="$(prompt_text "$_ets_label ($(printf '%s' "$_ets_choices" | sed 's/ /, /g'))" "$_ets_def")" || return 1 ;;
+        esac
         case " $_ets_choices " in
             *" $_ets_v "*) _evo_sets="$_evo_sets
 $_ets_name=$_ets_v" ;;
@@ -2133,17 +2239,24 @@ for f in doc["inputs"]:
     # and the lines said above it (the rest of the line, one per |).
     print("|".join(str(x).replace("|", "/") for x in
                    (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]),
-                    f.get("draft") or "", f.get("prompt") or "") + tuple(f.get("hint") or ())))
+                    f.get("draft") or "", f.get("prompt") or "", f.get("question") or "",
+                    # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+                    "\x1f".join(l.split(" (")[0] if h else l for l, h in
+                                 zip(f.get("choice_labels") or f["choices"], list(f.get("choice_hints") or ()) + [""] * 99)),
+                    "\x1f".join(f.get("choice_hints") or ())) + tuple(f.get("hint") or ())))
 PY
     _evo_label=""
     _EVT_NAME=(); _EVT_LAB=(); _EVT_LABF=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
     _EVT_FROM=(); _EVT_NOTES=""; _EVT_DRAFT=(); _EVT_HINT=(); _EVT_DRAFTED=()
+    _EVT_Q=(); _EVT_CHN=(); _EVT_CHH=()
     _EVT_NF=0; _EVT_LW=0
-    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c _evo_dr _evo_pr _evo_h; do
+    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c _evo_dr _evo_pr _evo_q _evo_cn _evo_ch _evo_h; do
         if [ -z "$_evo_label" ]; then _evo_label="$_evo_n"; continue; fi
         _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_LABF[$_EVT_NF]="${_evo_pr:-$_evo_l}"; _EVT_KIND[$_EVT_NF]="$_evo_k"
         _EVT_DRAFT[$_EVT_NF]="$_evo_dr"; _EVT_HINT[$_EVT_NF]="$_evo_h"; _EVT_DRAFTED[$_EVT_NF]=""
         _EVT_REQ[$_EVT_NF]="$_evo_r"; _EVT_DEF[$_EVT_NF]="$_evo_d"; _EVT_CH[$_EVT_NF]="$_evo_c"
+        # A choice asked with the arrows: its question, names and hints (|-separated).
+        _EVT_Q[$_EVT_NF]="$_evo_q"; _EVT_CHN[$_EVT_NF]="${_evo_cn//$'\x1f'/|}"; _EVT_CHH[$_EVT_NF]="${_evo_ch//$'\x1f'/|}"
         _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""; _EVT_FROM[$_EVT_NF]=""
         # What the command line already said is an answer, not a question.
         if [ "$_evo_k" = source-name ] && [ -n "$4" ]; then _EVT_VAL[$_EVT_NF]="$4"; _EVT_DONE[$_EVT_NF]=1; fi
@@ -2364,7 +2477,7 @@ print(" ".join(json.load(sys.stdin).get("missing") or []))' 2>/dev/null)"
     if [ "${UI_FANCY:-0}" = 1 ] && [ -t 1 ] && [ "$_etp_over" -gt 0 ]; then
         printf '\r\033[%dA\033[0J' "$_etp_over"
     fi
-    exakit_step_heading "Preparing the database"
+    exakit_step_heading "Enabling Federation"
     for _etp_l in java rust; do
         case " $_etp_missing " in *" $_etp_l "*) ;; *) continue ;; esac
         _EVT_PREPARED="$_EVT_PREPARED $_etp_l"
@@ -2602,10 +2715,8 @@ for w in p["warnings"]:
     _EVT_ON_SCREEN=0
     _exakit_vs_tui_footer
     _evt_lines=$(( _evt_lines + _EVT_FOOT_N ))
-    if ! _exakit_vs_tui_yes "$(if [ "$_EVT_COUNT" = 1 ]; then printf 'Connect it now?'; else printf 'Connect all %s now?' "$_EVT_COUNT"; fi)"; then
-        _exakit_vs_tui_table_done
-        info "Nothing was changed."; rm -rf "$_EVT_DIR"; return 5
-    fi
+    # No "Connect it now?": picking the sources and filling their forms was
+    # the answer, so the review table goes straight on to connect.
 
     # 4. the database first: a language container a source needs and the
     # database lacks is installed before the table runs, so no row fails for
@@ -2615,7 +2726,7 @@ for w in p["warnings"]:
     _exakit_vs_tui_prepare "$_evt_over" $_evt_need && _evt_over=0
 
     # 5. connect: the review table comes alive in place, over itself, its
-    # footer and the question - or under what the database was prepared with
+    # footer - or under what the database was prepared with
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_live "$_evt_state" "$_evt_over" $_evt_all
 
@@ -2823,20 +2934,35 @@ _exakit_vs_guide_raw() {
 }
 
 # _exakit_vs_guide_paint <raw-file> [width] — the guide's lines coloured: one
-# "<style>|<text>" per line, T title, H heading, D dimmed, A a command. With a
-# width, each line is cut to it first (the full-window reader's rows are one
-# screen row each).
+# "<style>|<text>" per line, T title, F the Federation title (bold, accented),
+# H heading, D dimmed, A a command. With a width (the full-window reader's rows
+# are one screen row each), a longer line is never cut: it goes on over as many
+# rows as it takes, so a command or a link is always there whole.
 _exakit_vs_guide_paint() {
     while IFS= read -r _evg_line || [ -n "$_evg_line" ]; do
         _evg_text="${_evg_line#?|}"
-        [ -n "${2:-}" ] && [ "${#_evg_text}" -gt "$2" ] && _evg_text="${_evg_text:0:$2}"
         case "$_evg_line" in
-            T\|*)      printf '%s%s%s\n' "${UI_BOLD:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            H\|*|D\|*) printf '%s%s%s\n' "${UI_DIM:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            A\|*)      printf '%s%s%s\n' "${UI_ACCENT:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            *)         printf '%s\n' "$_evg_text" ;;
+            T\|*)      _evg_on="${UI_BOLD:-}" ;;
+            F\|*)      _evg_on="${UI_BOLD:-}${UI_ACCENT:-}" ;;
+            H\|*|D\|*) _evg_on="${UI_DIM:-}" ;;
+            A\|*)      _evg_on="${UI_ACCENT:-}" ;;
+            *)         _evg_on="" ;;
         esac
+        _evg_off=""; [ -n "$_evg_on" ] && _evg_off="${UI_RESET:-}"
+        if [ -n "${2:-}" ] && [ "$2" -gt 0 ] 2>/dev/null; then
+            while [ "${#_evg_text}" -gt "$2" ]; do
+                printf '%s%s%s\n' "$_evg_on" "${_evg_text:0:$2}" "$_evg_off"
+                _evg_text="${_evg_text:$2}"
+            done
+        fi
+        printf '%s%s%s\n' "$_evg_on" "$_evg_text" "$_evg_off"
     done < "$1"
+}
+
+# _exakit_vs_guide_url <raw-file> — the guide's own page on GitHub, from its
+# "Guide on GitHub" (or the list's "Full guides") line; nothing without one.
+_exakit_vs_guide_url() {
+    sed -n 's/^D|Guide on GitHub  *//p; s/^D|  Full guides  *//p' "$1" 2>/dev/null | head -n 1
 }
 
 # _exakit_vs_guide_doc <connector-id> — the guide's own file on this computer,
@@ -2852,7 +2978,8 @@ _exakit_vs_guide_doc() {
 # _exakit_vs_guide_screen <connector-id> <footer> [keys] — one connector's
 # guide (guide.py, as `exakit connect <id> --help` prints it) in the
 # full-window reader (ui_pager): it disappears again, the screen under it as it
-# was. o opens the full guide's .md (ui_open_path), or says where it is. The
+# was. o opens the guide's .md on this computer (ui_open_path), g its page on
+# GitHub (ui_open_url); each says where it is when it cannot open it. The
 # key that closed it is in UI_PAGER_KEY. Returns 1 when it cannot be shown.
 # ⇄ twin: Show-ExakitVsGuideScreen.
 _exakit_vs_guide_screen() {
@@ -2862,8 +2989,9 @@ _exakit_vs_guide_screen() {
     case "$?" in 0) ;; *) rm -f "$_egs_raw"; return 1 ;; esac
     _exakit_vs_guide_paint "$_egs_raw" $(( _egs_cols - 1 )) > "$_egs_raw.lines"
     UI_PAGER_OPEN="$(_exakit_vs_guide_doc "$1" 2>/dev/null)"
+    UI_PAGER_URL="$(_exakit_vs_guide_url "$_egs_raw")"
     ui_pager "$_egs_raw.lines" "$2" "${3:-}"; _egs_rc=$?
-    UI_PAGER_OPEN=""
+    UI_PAGER_OPEN=""; UI_PAGER_URL=""
     rm -f "$_egs_raw" "$_egs_raw.lines"
     return "$_egs_rc"
 }
@@ -2872,7 +3000,7 @@ _exakit_vs_guide_screen() {
 # (? in the menu or in a source's panel): Enter, q or Esc go back to where ?
 # was pressed.
 _exakit_vs_guide_back() {
-    _exakit_vs_guide_screen "$1" "Enter/q back · o open full doc"
+    _exakit_vs_guide_screen "$1" "Enter/q back · o open offline guide · g open on GitHub"
 }
 
 # _exakit_vs_pick_help <row> — ? in the connector menu: the guide of the
@@ -2923,7 +3051,7 @@ exakit_vs_guide_picker() {
         _egp_name="$(_exakit_vs_guide_name "$_egp_id")"
         _egp_next="Enter next guide"; [ "$_egp_at" -eq "$#" ] && _egp_next="Enter done"
         _exakit_vs_guide_screen "$_egp_id" \
-            "$_egp_next · o open full doc · c connect $_egp_name now · q quit" c || continue
+            "$_egp_next · o offline guide · g GitHub · c connect $_egp_name now · q quit" c || continue
         case "$UI_PAGER_KEY" in
             c) EXAKIT_VS_GUIDE_CONNECT="$_egp_id"; return 0 ;;
             enter) ;;
@@ -3053,7 +3181,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
     # --json never asks: a terminal is as good as none.
     _cc_tty=""
     [ "$_cc_json" = 1 ] || _cc_tty="$(_exakit_prompt_tty)"
-    # A person at a terminal (asked "Connect now?" below, or gave --yes): what
+    # A person at a terminal (or --yes): what
     # the source needs first - a language container, a restart - is said, not
     # asked (_exakit_vs_interactive). Without one, the contract stands.
     _EXAKIT_VS_INTERACTIVE=0
@@ -3169,10 +3297,6 @@ EOF
         # Asked at a terminal (no by default); without one only --yes agrees.
         _exakit_vs_confirm "Re-point $_cc_name now?" \
             || { info "Nothing was changed. Confirm it with --yes."; exit 5; }
-    elif [ -n "$_cc_tty" ] && ! _exakit_vs_confirm "Connect now?"; then
-        # 5, as every command a person did not confirm: 0 would read as "done".
-        info "Nothing was changed."
-        exit 5
     fi
     # The labels of the combination's secrets (engine inputs): a lakehouse
     # source can have two, the second on --storage-secret-file or asked hidden.

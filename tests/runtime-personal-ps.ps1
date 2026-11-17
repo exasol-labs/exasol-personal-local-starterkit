@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0
 $script:FAIL = 0
+$script:SKIP = 0
 function Check($label, $expected, $actual) {
     if ("$expected" -eq "$actual") { $script:PASS++; Write-Host "  ok   $label = $actual" }
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected $expected, got $actual" }
@@ -169,6 +170,59 @@ Check "an open port that never completes a handshake does not answer" $false (Te
 $listener.Stop()
 Check "a closed port does not answer" $false (Test-PersonalTlsAnswers)
 $script:PersonalProbeTimeout = $savedProbeTimeout
+
+# THE SUCCESS CASE, against a real TLS server. The bash twin once read every
+# good handshake as "not answering" (an external tool's exit code under
+# pipefail), and only negative cases were pinned, so nothing noticed: the
+# installer then waited out its budget and redeployed over a running database.
+# A throwaway self-signed certificate, as Exasol's own is. Skipped, not failed,
+# where openssl is not on PATH (Windows runners may lack it) - except in CI on
+# Windows, where a missing openssl is a runner change that would silently drop
+# the only positive TLS case: there it fails.
+$openssl = Get-Command openssl -ErrorAction SilentlyContinue
+if (-not $openssl) {
+    if ($env:CI -eq "true" -and $env:OS -eq "Windows_NT") {
+        Check "a completed TLS handshake answers (openssl must be on PATH in CI on Windows)" "openssl" "missing"
+    } else {
+        $script:SKIP++
+        Write-Host "  skip a completed TLS handshake answers (openssl not on PATH)"
+    }
+} else {
+    $tlsDir = Join-Path $work "tls"
+    New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
+    $key = Join-Path $tlsDir "key.pem"
+    $crt = Join-Path $tlsDir "cert.pem"
+    $free = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $free.Start()
+    $tlsPort = ([System.Net.IPEndPoint]$free.LocalEndpoint).Port
+    $free.Stop()
+    $server = $null
+    try {
+        # A Continue window: openssl req writes its progress dots to stderr,
+        # and Windows PowerShell 5.1 under 'Stop' turns any native stderr
+        # line into a terminating NativeCommandError.
+        $eapSaved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & $openssl.Source req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" -keyout $key -out $crt 2>&1
+        } finally {
+            $ErrorActionPreference = $eapSaved
+        }
+        $emptyIn = Join-Path $tlsDir "stdin.txt"
+        Set-Content -Path $emptyIn -Value "" -Encoding Ascii
+        $server = Start-Process -FilePath $openssl.Source -PassThru -NoNewWindow `
+            -ArgumentList ('s_server -accept ' + $tlsPort + ' -www -cert "' + $crt + '" -key "' + $key + '"') `
+            -RedirectStandardInput $emptyIn `
+            -RedirectStandardOutput (Join-Path $tlsDir "out.log") -RedirectStandardError (Join-Path $tlsDir "err.log")
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while (-not (Test-ExakitPortInUse -Port $tlsPort) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200 }
+        Set-Content -Path (Join-Path $probeDir "deployment.json") -Value ('{"connection": {"host": "127.0.0.1", "dbPort": ' + $tlsPort + ', "username": "sys"}}')
+        $script:PersonalDeployDir = $probeDir
+        Check "a completed TLS handshake answers" $true (Test-PersonalTlsAnswers)
+    } finally {
+        if ($server -and -not $server.HasExited) { try { $server.Kill() } catch { } }
+    }
+}
 $script:PersonalDeployDir = Join-Path $work "absent"
 
 Write-Host "the launcher's word outranks the port, and ownership is proven before a database is adopted:"
@@ -446,8 +500,25 @@ Check "EXAKIT_REPLACE_DB=1 beside EXAKIT_REUSE_DB=0" $true ($xk -match '\$env:EX
 Check "...and --json claims repaired only when the runtime step completed" $true ($xk -match '\$repairCode -eq 0 -and \(Test-ExakitStepDone "runtime"\)')
 Reset-Machine
 Remove-Item Env:EXAKIT_PERSONAL_READY_TIMEOUT -ErrorAction SilentlyContinue
+# The real Invoke-ExakitBounded on a tiny real child (this PowerShell): the
+# outcome it records is what the teardown warning names.
+# The machine model above stubs it, so the real one is loaded again first.
+. (Join-Path $repo "setup/lib/exakit-common.ps1")
+Write-Host ""
+Write-Host "Invoke-ExakitBounded records why a call gave no answer"
+$selfExe = (Get-Process -Id $PID).Path
+[void](Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "exit 0") -TimeoutSeconds 30)
+Check "a clean exit -> ok" "ok" $script:ExakitBoundedOutcome
+$r = Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "exit 125") -TimeoutSeconds 30
+Check "a non-zero exit -> exit 125" "exit 125" $script:ExakitBoundedOutcome
+Check "  ...and no answer" $true ($null -eq $r)
+$r = Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "Start-Sleep -Seconds 20") -TimeoutSeconds 1
+Check "no answer in time -> timeout" "timeout" $script:ExakitBoundedOutcome
+Check "  ...and no answer" $true ($null -eq $r)
+$r = Invoke-ExakitBounded -FilePath (Join-Path $work "no-such-engine-here") -TimeoutSeconds 5
+Check "a program that cannot be run -> error" "error" $script:ExakitBoundedOutcome
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
-Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"
+Write-Host "passed: $($script:PASS), failed: $($script:FAIL), skipped: $($script:SKIP)"
 if ($script:FAIL -gt 0) { exit 1 }

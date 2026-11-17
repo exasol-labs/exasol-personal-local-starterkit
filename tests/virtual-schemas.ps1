@@ -179,15 +179,16 @@ Write-Host "== the query hint after connect: a quoted name, piped to exakit.cmd 
 # quotes of an argument it hands to a batch file: a quoted name needs \".
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result ([pscustomobject]@{ example = 'SELECT * FROM VS_X."actor" LIMIT 10'; tips = @("a tip") }) -Name "x"
-Check "the hint opens the list" 'INFO Query it like any schema:' $script:shown[0]
+# 8f7e44c9: shorter post-connect lines - "Query it:" and the sql line, no tips line.
+Check "the hint opens the list" 'INFO Query it:' $script:shown[0]
 Check "...a query with a double quote is piped to exakit sql, as PowerShell keeps its quotes in a pipe" '''SELECT * FROM VS_X."actor" LIMIT 10'' | exakit sql' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_X."actor" LIMIT 10')
 Check "...one without is an argument" 'exakit sql ''SELECT * FROM VS_SALES.ORDERS LIMIT 10''' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_SALES.ORDERS LIMIT 10')
 Check "...a single quote in it is doubled" 'exakit sql ''SELECT * FROM VS_X.IT''''S LIMIT 10''' (Format-ExakitVsSqlLine -Query "SELECT * FROM VS_X.IT'S LIMIT 10")
-Check "...the tips are exakit source show's" 'INFO Type and naming notes for it: exakit source show x' $script:shown[1]
+Check "...and says nothing else: the tips are exakit source show's" 1 @($script:shown).Count
 $connectResult = Show-ExakitVsLines -Lines $connectLines
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result $connectResult -Name "sales"
-Check "the real connect: the list, then where the notes are" 'INFO Query it like any schema:|INFO Type and naming notes for it: exakit source show sales' (@($script:shown) -join "|")
+Check "the real connect: the list, nothing after it" 'INFO Query it:' (@($script:shown) -join "|")
 Check "...and nothing says From PowerShell" $false ((@($script:shown) -join "|").Contains("From PowerShell"))
 
 Write-Host ""
@@ -741,11 +742,11 @@ $named = @{ Fields = @(
     @{ Name = "ca"; LabelFull = "CA certificate file"; Kind = "ca-file" },
     @{ Name = "tls"; LabelFull = "TLS"; Kind = "choice" },
     @{ Name = "uri"; LabelFull = "MongoDB URI"; Kind = "mongodb-uri" },
-    @{ Name = "user"; LabelFull = "Reader account"; Kind = "text" }) }
+    @{ Name = "user"; LabelFull = "Username"; Kind = "text" }) }
 Check "a refusal naming host goes to host" 1 (Find-ExakitVsTuiNamed -Form $named -Text "host is required (Host name or address)")
 Check "...one naming ca and tls opens the summary" -2 (Find-ExakitVsTuiNamed -Form $named -Text "ca is used to verify the server, so it needs tls=verify (not require)")
 Check "...Port is not in report or export" -1 (Find-ExakitVsTuiNamed -Form $named -Text "the report could not be exported")
-Check "...a label counts when no name does, as a whole word in any case" 6 (Find-ExakitVsTuiNamed -Form $named -Text "the reader account may not read this")
+Check "...a label counts when no name does, as a whole word in any case" 6 (Find-ExakitVsTuiNamed -Form $named -Text "the username may not read this")
 Check "...the source name is named as such, not by the bare word name" 0 (Find-ExakitVsTuiNamed -Form $named -Text "the source name must be lower case")
 Check "...so a value that is not a valid name names only its input" 2 (Find-ExakitVsTuiNamed -Form $named -Text "port='x y' is not a valid name")
 Check "...the MongoDB URI with user: names uri and user, not user alone" -2 (Find-ExakitVsTuiNamed -Form $named -Text "the MongoDB URI carries credentials (user:password@): give the user with --set user=...")
@@ -1512,9 +1513,8 @@ Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
-Check "the menu's first line is this computer's public IP, then its own, then the table" `
-    "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|INFO Tick one or more sources; the details for each are asked next.|MENU" `
-    ((@($script:shown) | Select-Object -First 3) -join "|")
+# 8f7e44c9: one "Whitelist IP" line, then the table - no "Tick one or more sources" line.
+Check "the menu's first line is this computer's public IP, then the table" "INFO Whitelist IP: 203.0.113.7|MENU" ((@($script:shown) | Select-Object -First 2) -join "|")
 Check "...the answer is kept for the rest of the command" "203.0.113.7" $env:_EXAKIT_VS_PUBLIC_IP
 $t = $script:menuTable
 Check "the table: the Source column alone, no Status column either" "Source||0" ("{0}|{1}{2}|{3}" -f $t.Col1, $t.Col2, $t.Col3, $t.StatMin)
@@ -1532,8 +1532,8 @@ Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
-Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line first" "INFO Tick one or more sources; the details for each are asked next.|MENU" `
-    ((@($script:shown) | Select-Object -First 2) -join "|")
+Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the table first" "MENU" `
+    ((@($script:shown) | Select-Object -First 1) -join "|")
 Remove-Item Env:\EXAKIT_PUBLIC_IP_URL, Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $catalogDoc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
 Check "no connector reports Beta: every tier is GA" "GA" ((@($catalogDoc.connectors | ForEach-Object { "" + $_.tier }) | Sort-Object -Unique) -join " ")
@@ -1582,7 +1582,9 @@ Check "...names the agent skill" $true ($g.Contains("exasol-vs-postgresql"))
 Check "...has the CA line" $true ($g.Contains("  The CA certificate (for"))
 Check "...gives one connection string to paste" $true ($g.Contains("postgres://exakit_reader@"))
 Check "...says on Windows to paste at the prompt, never --url with &" $true ($g.Contains("Windows: paste the connection string at the prompt; do not use --url with a") -and $g.Contains("contains &."))
-Check "...the connect command" $true ($g.Contains("Connect: exakit connect postgresql"))
+Check "...the connect command" $true ($g.Contains("  exakit connect postgresql"))
+Check "...titled as a Federation guide" $true ($g.Contains("PostgreSQL - Federation guide"))
+Check "...the guide on GitHub and offline" $true ($g.Contains("Guide on GitHub   https://github.com/exasol-labs/exasol-personal-local-starterkit/blob/main/docs/virtual-schemas/postgresql.md") -and $g.Contains("Guide offline     "))
 Check "...ASCII only" $true (-not ($g -match '[^\x00-\x7F]'))
 Check "help pg is the same guide (an alias)" $g (Guide @("help", "pg"))
 Check "help connect postgresql is the same guide" $g (Guide @("help", "connect", "postgresql"))

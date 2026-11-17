@@ -785,6 +785,7 @@ _as_sweep="$( (
     # not the point — that entries existed and none survived is.
     [ "$(ls "$EXAKIT_LAUNCHAGENT_DIR" | wc -l | tr -d ' ')" -gt 0 ] && printf 'before=some ' || printf 'before=none '
     personal_teardown() { :; }; exakit_mcp_operation() { :; }
+    _exakit_uninstall_mcp_processes() { :; }   # never the real process table
     exakit_uninstall_run 0 >/dev/null 2>&1
     printf 'after=%s' "$(ls "$EXAKIT_LAUNCHAGENT_DIR" 2>/dev/null | wc -l | tr -d ' ')"
 ) )"
@@ -809,7 +810,26 @@ lacks "and does not mention the Rust toolchain" "Rust" \
 # exercised against the Python add-on in test_marketplace_json_tables.py.
 check "the JSON Tables add-on is implemented in Python" "yes"     "$([ -f "$ROOT/marketplace/addons/json_tables.py" ] && echo yes || echo no)"
 
+# Earlier sections leave json-tables recorded as a kit install in this run's
+# manifest (the menu tests install it, stubbed): its version and its command.
+# The next two sections are about a machine where the kit never installed it -
+# a recorded command wins over EXAKIT_JSON_TABLES_BIN by design (owned_path).
+forget_json_tables() {
+    [ -f "$EXAKIT_MANIFEST" ] || return 0
+    python3 - "$EXAKIT_MANIFEST" <<'FORGETJTEOF'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+doc.get("components", {}).pop("json_tables", None)
+doc.get("components", {}).pop("json-tables", None)
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+FORGETJTEOF
+}
+
 echo "manual installs are never re-offered:"
+forget_json_tables
 # A tool the user installed themselves is "present": the marketplace must not
 # advertise it, and the kit must never manage or remove it. The launcher name
 # often differs from the add-on id, so this is keyed on EXAKIT_<ID>_BIN too --
@@ -912,6 +932,7 @@ has "...and the opt-out row only when nothing else is ticked" \
     'if ($defaults.Count -eq 0) { [void]$defaults.Add($script:ExakitTableRowSkip) }' "$_dl_ps1"
 
 echo "data-load routes JSON through the add-on:"
+forget_json_tables
 . "$ROOT/setup/lib/exapump.sh"
 check "file kinds are classified from the name" "csv parquet json json json csv unknown" "$(
     for _f in a.csv b.parquet c.json d.ndjson e.jsonl.gz f.CSV.gz g.xlsx; do
@@ -1536,13 +1557,13 @@ offer() { # offer <installed ids> — what exakit_marketplace_offer hands the me
     )
 }
 check "both missing: both installed, ticked, no question" \
-    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
+    "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
 check "one there: only the other"  "MENU ONLY=[json-tables] TICKED=[json-tables] AUTO=[1]" "$(offer dash-server | grep MENU)"
 check "both there: nothing at all" "" "$(offer "dash-server json-tables")"
 check "on a terminal, ONE table: every add-on, the two installing first, the rest waiting with nothing ticked" \
-    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[] FIRST=[dash-server,json-tables]" \
+    "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[] FIRST=[dash-server,json-tables]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "" | tr '\n' '|' | sed 's/|$//')"
-check "...also when the two are there already" "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+check "...also when the two are there already" "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "dash-server json-tables" | tr '\n' '|' | sed 's/|$//')"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
 _ps_auto="$(sed -n '/^function Install-ExakitAutoAddons/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"

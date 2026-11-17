@@ -180,7 +180,8 @@ try {
     $threw = ($out -split '~')[1]
     Check "a dataset and the file both fail: the step fails once" "True" ($threw.StartsWith("THREW"))
     Check "...naming the dataset" "True" ($threw.Contains("Dataset(s) tpch did not load"))
-    Check "...and the file" "True" ($threw.Contains("the file failed"))
+    # As the shell twin: the step fails for the dataset only - the reader's own file is the file, not the install.
+    Check "...but not the file" "False" ($threw.Contains("the file failed"))
     function Get-ExakitPendingDatasets { return @("amazon_sales", "fraud_transactions") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_; Description = "" } } }
     $out = Seq @{ EXAKIT_PERSONA_ACTIVE = "1"; EXAKIT_DATASETS_PRESELECT = "amazon_sales,fraud_transactions"; EXAKIT_DATA_FILE = $mine }
     Check "a persona's datasets and a file: the file is announced when it loads" "LOAD amazon_sales | LOAD fraud_transactions | INFO Loading a local file (EXAKIT_DATA_FILE). | FILE~" $out

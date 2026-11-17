@@ -9,7 +9,7 @@
 Exasol has one global preprocessor slot. The framework's PREPROC_RT.MASTER
 dispatcher takes it, and every later SQL transformation registers with MASTER
 as a module instead of fighting for the slot. This is the core task the
-installer's "Configure database features" step runs, and it runs on every
+installer's database features (Step 3, "Setup Utilities") run, and it runs on every
 installer pass: the manifest record only skips the install, never the check.
 
 All SQL goes through exapump and the kit's administrator profile. The profile

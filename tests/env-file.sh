@@ -62,7 +62,8 @@ printf '\n== the first install copies it, once ==\n'
 mkdir -p "$WORK/kit/setup" && cp "$ROOT/setup/exakit.env" "$WORK/kit/setup/"
 EXAKIT_HOME="$WORK/home" bash -c '. "$1"; exakit_env_file_install "$2"' _ "$ROOT/setup/lib/envfile.sh" "$WORK/kit"
 check "the template is in the kit home" "same" "$(cmp -s "$ROOT/setup/exakit.env" "$WORK/home/exakit.env" && echo same)"
-check "readable by its owner only" "600" "$(stat -f %Lp "$WORK/home/exakit.env" 2>/dev/null || stat -c %a "$WORK/home/exakit.env")"
+# GNU stat first: on Linux `stat -f` is the FILE SYSTEM status, and it succeeds.
+check "readable by its owner only" "600" "$(stat -c %a "$WORK/home/exakit.env" 2>/dev/null || stat -f %Lp "$WORK/home/exakit.env")"
 printf 'EXAKIT_DB_PORT=1\n' > "$WORK/home/exakit.env"
 EXAKIT_HOME="$WORK/home" bash -c '. "$1"; exakit_env_file_install "$2"' _ "$ROOT/setup/lib/envfile.sh" "$WORK/kit"
 check "the user's copy is never overwritten" "EXAKIT_DB_PORT=1" "$(cat "$WORK/home/exakit.env")"
@@ -98,7 +99,7 @@ catalog = json.load(open(f"{root}/marketplace/catalog.json"))
 read |= {"EXAKIT_" + a["id"].upper().replace("-", "_") + "_VERSION" for a in catalog["addons"]}
 read |= {f"EXAKIT_NOTEBOOK_{tool}_VERSION" for tool in ("JUPYTERLAB", "MARIMO")}
 template = set(re.findall(r"^# (EXAKIT_[A-Z0-9_]+)=", open(f"{root}/setup/exakit.env").read(), re.M))
-not_settings = {"EXAKIT_SCORING", "EXAKIT_UDF", "EXAKIT_SMOKE", "EXAKIT_PREPARED",   # schema names, not settings
+not_settings = {"EXAKIT_SCORING", "EXAKIT_UDF", "EXAKIT_SMOKE", "EXAKIT_PREPARED", "EXAKIT_TOTALS",   # schema names, not settings
                 "EXAKIT_HOME", "EXAKIT_ENV_FILE",                                     # where the file is
                 "EXAKIT_DBT_DSN",                       # handed to dbt by its launcher on every run, not set by anyone
                 "EXAKIT_SRC_"}                          # the CONNECTION name prefix of exakit connect (EXAKIT_SRC_<NAME>)

@@ -95,7 +95,7 @@ If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts
 
 ## Upgrade path for the starter kit
 
-To upgrade to 0.2.4, run `exakit update`. On Windows with Podman, WSL 2.7 or newer is recommended for Exasol Personal 2.4: if `exakit start` then fails with an nftables error, run `wsl --update`.
+To upgrade to 0.2.5, run `exakit update`. On Windows with Podman, WSL 2.7 or newer is recommended for Exasol Personal 2.4: if `exakit start` then fails with an nftables error, run `wsl --update`.
 
 To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On macOS `exakit update` does the same job.
 

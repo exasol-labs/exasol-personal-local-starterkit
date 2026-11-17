@@ -204,6 +204,23 @@ managed AI-client configs and skills. It keeps the user's work in
 them up. `EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too. Reused user-installed binaries and
 databases, shared exapump profiles and unknown shared installations are kept.
 Check ownership with `exakit version` before interpreting the removal plan.
+Kit 0.2.5 and later also remove the launcher download cache, empty
+`~/.exasol` folders, the kit's autostart entries (orphaned ones too), the
+`exasol/nano` image when no container uses it (on Linux/WSL/Windows with
+Docker or Podman; macOS runs the database in the launcher's VM), and the kit's
+own MCP server processes on macOS/Linux. Exit codes (kit 0.2.5 and later): `0`
+done, a dry run, or nothing to do; `1` something remains (the output names it
+and the command that removes it); `2` unknown add-on id, or an unknown option
+(macOS/Linux only); `5` only for `exakit uninstall <addon-id>` that was not
+confirmed (macOS/Linux; Windows answers `0` there). A full `exakit uninstall`
+that removes nothing (Skip, nothing selected, a cancelled `UNINSTALL` prompt,
+or no terminal, where Skip is the default) also answers `0`, and its last line
+says that nothing was uninstalled or that the uninstall was cancelled. Windows
+ignores an uninstall option it does not know: `exakit uninstall --dryrun --yes`
+runs the real uninstall, so spell `--dry-run` exactly. Exit 0 can
+come with a line naming something the kit could not check or remove (an engine
+that did not answer, or an exasol/nano image it kept): the database is gone, and
+the line names the command to finish by hand.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing
@@ -216,6 +233,11 @@ exakit uninstall --yes            # no prompts — only with explicit consent
   only way to see what would go.
 - **Never pass `--yes` on your own initiative.** The interactive flow has a
   confirmation summary and a typed gate for a reason; `--yes` removes both.
+- **Read the exit code and the output.** With `--yes`, `0` = removed. `1` =
+  something remains: the output names what, plus one command that removes it.
+  Never report `1` as done. The bare `exakit uninstall` also answers `0` when
+  it removed nothing (Skip, a cancelled prompt, or no terminal): read its last
+  line before you report anything as removed.
 - Removing one add-on is `exakit uninstall <addon-id>` — reach for that before
   anything wider when the user only wants one tool gone.
 - Uninstall does not remove `uv`/`uvx` (shared tools) and it does not edit the

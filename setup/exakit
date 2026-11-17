@@ -1476,7 +1476,7 @@ exakit_reset_dataset_flags() {
 data.datasets.${_rdf_id}.loaded=false
 "
     done <<EXAKIT_RDF
-$(exakit_bundled_datasets 2>/dev/null)
+$(exakit_bundled_datasets --all 2>/dev/null)
 EXAKIT_RDF
     [ -n "$_rdf_lines" ] && printf '%s' "$_rdf_lines" | manifest_set_many
     return 0
@@ -2064,26 +2064,23 @@ cmd_uninstall() {
 
     if [ "$_uni_yes" = 1 ]; then
         printf '\n'
-        warn "exakit uninstall --yes removes the FULL kit (all local database data included)."
-        # THE PLAN RUNS ON THIS PATH TOO, not only under --dry-run. --yes is
-        # what AGENTS.md documents for automation, so it is the path an agent
-        # takes when a user says "uninstall the starter kit" - and it used to
-        # print one warn line and then destroy, leaving no record anywhere of
-        # WHAT it destroyed. The kit has no data-export facility (see
-        # exakit_update_runtime's note), so the database's contents are gone
-        # with no recoverable copy; the least this can do is name them first,
-        # in the transcript the agent keeps and in the log.
-        info "About to remove:"
-        exakit_uninstall_run 1
+        warn "Removes the full kit, including all database data."
+        # NO PLAN LIST ON THIS PATH ANY MORE. It printed every area and path
+        # (thirty-odd lines) before a run that then printed its own record,
+        # which buried the one warning that matters. The record lines the run
+        # promotes (ok_step) still name every area it removed, in the agent's
+        # transcript; the itemised list is what --dry-run is for.
+        info "Your tables are not exported. To see every item first: exakit uninstall --dry-run"
+        if ! exakit_uninstall_run 0; then
+            # The run has just named what survived and the command that removes
+            # it. "Uninstall complete" here was the bug: exit 0 over a database
+            # still on disk, with the launcher that could remove it deleted.
+            printf '\n'
+            error "Uninstall did not finish: the database is still on this machine (see above)."
+            exit 1
+        fi
         printf '\n'
-        info "There is no export step: the kit cannot copy your tables out, and this does not stop to ask."
-        info "To keep anything, stop now (Ctrl-C) and copy it out first, one table at a time:"
-        info "  exapump sql -p $EXAKIT_EXAPUMP_PROFILE -f csv 'SELECT * FROM <SCHEMA>.<TABLE>' > <TABLE>.csv"
-        info "  ...which exakit data-load <TABLE>.csv loads back into a new install (the file name becomes the table name)."
-        printf '\n'
-        exakit_uninstall_run 0
-        printf '\n'
-        ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
+        ok "Uninstall complete."
         exakit_uninstall_leftovers
         exit 0
     fi
@@ -2387,7 +2384,43 @@ cmd_mcp_remove() {
     exakit_mcp_operation uninstall "$@" || die "Could not remove the MCP entries"
 }
 
+# _mcp_doctor_failed_record_but_answers - 0 when the launcher records this
+# deployment as deployment_failed, yet its database answers the probe AND
+# every listener on the port is provably this deployment's own runner
+# (_personal_port_held_by_own_runner). personal_deployment_running rightly
+# calls that "not running" - the launcher's word outranks the port - but the
+# MCP checks run against the database itself, which is up. Twin of
+# Test-ExakitMcpDoctorFailedRecordAnswers in setup/exakit.ps1.
+_mcp_doctor_failed_record_but_answers() {
+    [ "$(exakit_installation_runtime_type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_launcher_state >/dev/null 2>&1 || return 1
+    command -v _personal_port_held_by_own_runner >/dev/null 2>&1 || return 1
+    [ "$(personal_launcher_state 2>/dev/null || true)" = deployment_failed ] || return 1
+    personal_db_answers >/dev/null 2>&1 || return 1
+    _personal_port_held_by_own_runner
+}
+
+# _mcp_doctor_db_reachable - whether mcp-doctor has a database to check
+# against: running, or the failed record above, which is named in one warning
+# so the user can repair the record.
+#
+# The failed record also sets the remedy a --json report carries (remedy
+# "exakit start" with a remedy_hint), through EXAKIT_MCP_RESULT_REMEDY and
+# EXAKIT_MCP_RESULT_REMEDY_HINT, which the MCP result stamp honours.
+_mcp_doctor_db_reachable() {
+    exakit_runtime_is_running && return 0
+    _mcp_doctor_failed_record_but_answers || return 1
+    warn "Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)."
+    EXAKIT_MCP_RESULT_REMEDY="exakit start"
+    EXAKIT_MCP_RESULT_REMEDY_HINT="the launcher still records this deployment as failed although its database answers; exakit start restarts the database (data kept) and clears the record"
+    export EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
+    return 0
+}
+
 cmd_mcp_doctor() {
+    # The remedy override is this run's own (_mcp_doctor_db_reachable); one
+    # inherited from the caller's environment must never answer for it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # Parse BEFORE the install check: the check's own answer has to honour
     # --json, and it has to exit 4 rather than 1. Reversing these two lines is
     # what made `mcp-doctor --json` print nothing on a machine with no install.
@@ -2416,7 +2449,7 @@ cmd_mcp_doctor() {
         exit 3
     fi
     exakit_init_logging
-    if ! exakit_runtime_is_running; then
+    if ! _mcp_doctor_db_reachable; then
         if [ "$_cmd_json" -eq 1 ]; then
             # Same three keys as every other --json answer from a state query
             # (installed / status / remedy), so one parser handles all of them.
@@ -2520,6 +2553,8 @@ cmd_mcp_doctor() {
 }
 
 cmd_mcp_status() {
+    # No inherited remedy override: the MCP result stamp honours it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # --json is read BEFORE the install check, so the check answers in the shape
     # the caller asked for. The other order printed no JSON at all on a machine
     # with nothing installed - the one state a parser most needs an answer for.

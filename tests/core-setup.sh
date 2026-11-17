@@ -378,9 +378,9 @@ _json="$( ( EXAKIT_HOME="$U/home"; EXAKIT_MANIFEST="$U/home/manifest.json"; . "$
 check "this kit's reader takes a five-field row" "failed wsl --update" \
     "$(printf '%s' "$_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["failed"][0]["remedy"])')"
 
-printf '\n== the installer: seven steps, the database step fourth ==\n'
+printf '\n== the installer: six steps, the database features inside Setup Utilities (third) ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do
-    check "$_s delegates steps 3-7" "1" "$(grep -c 'kit_shared_steps 3 7 ' "$ROOT/$_s")"
+    check "$_s delegates steps 3-6" "1" "$(grep -c 'kit_shared_steps 3 6 ' "$ROOT/$_s")"
     check "$_s loads core-setup.sh" "1" "$(grep -c 'LIB_DIR/core-setup.sh' "$ROOT/$_s" | awk '{print ($1 > 0)}')"
     # EVERY offer, not the first one grep finds: the persona close and the
     # plain close each make one.
@@ -391,11 +391,12 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
         sed -n "${_from},${_ln}p" "$ROOT/$_s" | grep -q 'exakit_core_rerun_active' && _guarded=$((_guarded + 1))
     done
     check "$_s keeps every marketplace offer out of an update rerun" "$_offers" "$_guarded"
-    lacks "$_s has no step counted out of six" "/6  " "$(cat "$ROOT/$_s")"
+    lacks "$_s has no step counted out of seven" "/7  " "$(cat "$ROOT/$_s")"
 done
 _win="$(cat "$ROOT/setup/setup-windows.ps1")"
-has "Windows has the same fourth step" '"Step 4/7  Configure database features"' "$_win"
-lacks "Windows has no step counted out of six" "/6  " "$_win"
+has "Windows has the same third step" '"Step 3/6  Setup Utilities"' "$_win"
+has "...with the database features as its second item" 'Invoke-ExakitCoreDatabaseStep -Label "Database features"' "$_win"
+lacks "Windows has no step counted out of seven" "/7  " "$_win"
 has "the exakit command loads core-setup.sh" 'core-setup.sh' "$(cat "$ROOT/setup/exakit")"
 
 K="$WORK/kss"
@@ -422,18 +423,25 @@ _kss() {
       ensure_path_hint() { :; }
       # With persona.sh loaded the data follows the persona question instead.
       [ "${KSS_PERSONA:-0}" = 1 ] && exakit_persona_flow() { :; }
-      kit_shared_steps 3 7 "$ROOT/setup" "$ROOT"
+      kit_shared_steps 3 6 "$ROOT/setup" "$ROOT"
       # The exakit helper is the last step, after the persona's data.
-      kit_helper_step 7 7 "$ROOT/setup" "$ROOT"
+      kit_helper_step 6 6 "$ROOT/setup" "$ROOT"
       printf 'COMPLETED=%s\n' "$(manifest_get core_tasks.completed 2>/dev/null | tr -d ' \n')" )
 }
 rm -rf "$K/home" "$K/order"
 _o="$(_kss 2>&1)"
 check "order: exapump, the database step, the data load, the AI bridge" \
     "exapump-step|preprocessor-task|data-load-offer|mcp-step|mcp-offer|skills-offer|" "$(tr '\n' '|' < "$K/order")"
-for _lbl in "Step 3/7  exapump" "Step 4/7  Configure database features" "Step 5/7  AI bridge" "Step 7/7  exakit helper"; do
+for _lbl in "Step 3/6  Setup Utilities" "Step 4/6  Setting up AI bridge" "Step 6/6  exakit helper"; do
     has "the screen counts $_lbl" "$_lbl" "$_o"
 done
+# Setup Utilities: exapump and the database features as two items under one
+# heading, each a tick line and a dim detail line; the old two headings are gone.
+has "the framework is an item of Setup Utilities" "SQL preprocessor framework" "$_o"
+has "...whose detail is what it reported" "fake framework ready" "$_o"
+lacks "exapump has no heading of its own any more" "exapump (data loading CLI)" "$_o"
+lacks "...nor the database features" "Configure database features" "$_o"
+check "one heading for the two" "1" "$(printf '%s\n' "$_o" | grep -c 'Setup Utilities')"
 has "the task is recorded after its step passed" 'COMPLETED=["preprocessor"]' "$_o"
 check "the kit copy carries setup/core" "yes" "$([ -f "$K/home/kit/setup/core/tasks.json" ] && echo yes || echo no)"
 check "...and setup/preprocessor" "yes" "$([ -f "$K/home/kit/setup/preprocessor/manage.py" ] && echo yes || echo no)"

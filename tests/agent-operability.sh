@@ -1691,12 +1691,12 @@ done
 _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
-check "...guarding all five of them (exapump, database features, data, AI bridge, pyexasol)" "5"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
+check "...guarding all four of them (Setup Utilities: exapump and database features, data, AI bridge, pyexasol)" "4"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
 # The helper is the install's last step (kit_helper_step), after the persona's
 # data: it still installs then, and both setup scripts run it after the persona.
 has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 for _p2os in macos linux; do
-    check "...last, after the persona's data ($_p2os)" "yes" "$(awk '/exakit_persona_flow "\$KIT_ROOT"/{p=1} p&&/^kit_helper_step 7 7/{print "yes"; exit}' "$ROOT/setup/setup-$_p2os.sh")"
+    check "...last, after the persona's data ($_p2os)" "yes" "$(awk '/exakit_persona_flow "\$KIT_ROOT"/{p=1} p&&/^kit_helper_step 6 6/{print "yes"; exit}' "$ROOT/setup/setup-$_p2os.sh")"
 done
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
@@ -1709,7 +1709,8 @@ has "...leaving the same kind of reason"     'Set-ExakitFailureReason "Podman is
 has "...and the windows step records it"     'Register-ExakitSoftFailure -Component "runtime"' "$_p2winsu"
 check "...on both arms, like the sh side" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'Register-ExakitSoftFailure -Component "runtime"')"
 has "...and the db-dependent steps skip in one line"     "they all need the database, which is not installed" "$_p2winsu"
-check "...guarding all four of them too" "4"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
+check "...guarding the rest too: the AI bridge, its client offers and pyexasol" "3"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
+check "...and Setup Utilities (exapump, database features) as one block" "1"     "$(printf '%s' "$_p2winsu" | grep -c '^    if (\$dbReady) {')"
 
 # THE REPAIR IS THE INSTALLER. `exakit update` only moves components with a
 # newer advertised version, so a deployment that never happened is "already
@@ -2283,10 +2284,12 @@ check "...an unknown target still exits 2"         "2" "$(_dc_run not-a-thing)"
 
 # LIF-05: --yes is what AGENTS.md documents for automation, so it is the path
 # an agent takes when a user says "uninstall the kit" - and it printed one warn
-# line and destroyed, leaving no record of WHAT went.
+# line and destroyed, leaving no record of WHAT went. The record is now the
+# run's own per-area lines (ok_step, checked in status-soft-components.sh); the
+# itemised plan moved to --dry-run, which this path names.
 _dc_yes="$(sed -n '/if \[ "\$_uni_yes" = 1 \]; then/,/^    fi/p' "$ROOT/setup/exakit")"
-has "a --yes uninstall prints the plan first" 'exakit_uninstall_run 1' "$_dc_yes"
-has "...and says there is no export step"     'no export step' "$_dc_yes"
+has "a --yes uninstall warns that the database data goes" 'including all database data' "$_dc_yes"
+has "...says nothing is exported, and names the full list" 'not exported. To see every item first: exakit uninstall --dry-run' "$_dc_yes"
 has "...and still performs the removal"       'exakit_uninstall_run 0' "$_dc_yes"
 
 # LIF-12: the rescue line printed before repair-runtime named `exakit sql

@@ -751,5 +751,120 @@ _out="$(wsl401 "Error: some other deploy failure" heal)"
 contains "any other deploy failure: the old message"   "did not come up" "$_out"
 lacks    "  never blamed on the WSL kernel"            "cannot create the deployment network" "$_out"
 
+echo "mcp-doctor: deployment_failed while the database answers and the runner is ours:"
+# The real cmd_mcp_doctor and its two helpers from setup/exakit, against stubs:
+# the launcher's record, the probe, the runner proof and the MCP subsystem.
+# personal_deployment_running is left alone - it still says "not running".
+doctor() { # doctor <state> <answers 0|1> <own 0|1> [--json] -> output, then rc=N
+    _dst="$1" _dans="$2" _down="$3"; shift 3
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_remedy() { printf 'exakit start\n'; }
+        personal_deployment_running() { return 1; }
+        personal_launcher_state() { printf '%s' "$_dst"; }
+        personal_db_answers() { [ "$_dans" = 1 ]; }
+        _personal_port_held_by_own_runner() { [ "$_down" = 1 ]; }
+        exakit_mcp_operation() { printf 'MCP %s\n' "$*"; return 0; }
+        warn() { printf 'WARN %s\n' "$*"; }; info() { :; }
+        cmd_mcp_doctor "$@"
+    ) 2>&1
+    printf '\nrc=%s' "$?"
+}
+_out="$(doctor deployment_failed 1 1)"
+contains "failed record, database answers, own runner: the checks run" "MCP doctor" "$_out"
+check "  ...with exactly one warning" 1 "$(printf '%s\n' "$_out" | grep -c '^WARN ')"
+contains "  ...naming the repair" "WARN Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)." "$_out"
+check "  ...exit 0" "rc=0" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor deployment_failed 1 0)"
+lacks "not the own runner: no checks" "MCP doctor" "$_out"
+check "  ...exit 3 (not running)" "rc=3" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor deployment_failed 0 1)"
+lacks "database silent: no checks" "MCP doctor" "$_out"
+check "  ...exit 3" "rc=3" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor stopped 1 1)"
+lacks "launcher says stopped: no checks" "MCP doctor" "$_out"
+lacks "  ...and no stale-record warning" "marked this database as failed" "$_out"
+# --json: stdout is one JSON document carrying remedy "exakit start" and its
+# hint; the warning goes to stderr. The MCP subsystem is stubbed, the stamp
+# that adds the remedy is the real Python from common.sh.
+sed -n "/<<'EXAKIT_MCP_STAMP_PY'/,/^EXAKIT_MCP_STAMP_PY\$/p" "$ROOT/setup/lib/common.sh" | sed '1d;$d' > "$TMP/stamp.py"
+doctor_json() { # doctor_json <state> <answers> <own> -> stdout to $TMP/dj.out, stderr to $TMP/dj.err, rc echoed
+    _dst="$1" _dans="$2" _down="$3"
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_remedy() { printf 'exakit start\n'; }
+        exakit_runtime_is_running() { return 1; }
+        personal_launcher_state() { printf '%s' "$_dst"; }
+        personal_db_answers() { [ "$_dans" = 1 ]; }
+        _personal_port_held_by_own_runner() { [ "$_down" = 1 ]; }
+        exakit_mcp_operation() {
+            printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.result"
+            python3 "$TMP/stamp.py" "$TMP/dj.result"
+        }
+        warn() { printf 'WARN %s\n' "$*" >&2; }; info() { printf 'INFO %s\n' "$*" >&2; }
+        cmd_mcp_doctor --json
+    ) > "$TMP/dj.out" 2> "$TMP/dj.err"
+    echo "$?"
+}
+_rc="$(doctor_json deployment_failed 1 1)"
+check "--json, failed record but answers: exit 0" 0 "$_rc"
+check "  ...stdout is one valid JSON object" ok "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("ok" if isinstance(d, dict) else "no")' "$TMP/dj.out" 2>&1)"
+check "  ...remedy is exakit start" "exakit start" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy"))' "$TMP/dj.out" 2>&1)"
+contains "  ...remedy_hint names the stale record" "the launcher still records this deployment as failed although its database answers; exakit start restarts the database (data kept) and clears the record" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy_hint"))' "$TMP/dj.out" 2>&1)"
+contains "  ...the warning is on stderr" "WARN Exasol marked this database as failed" "$(cat "$TMP/dj.err")"
+lacks "  ...and not on stdout" "WARN" "$(cat "$TMP/dj.out")"
+_rc="$(doctor_json running_unused 1 1 2>/dev/null)"
+check "--json, launcher not failed: exit 3" 3 "$_rc"
+lacks "  ...no stale-record remedy hint" "remedy_hint" "$(cat "$TMP/dj.out")"
+# A client remedy the doctor found itself wins over the stale-record remedy
+# (AGK-R3-03); the stale-record one fills in only when there is none.
+printf '{"operation": "doctor", "findings": [{"severity": "error", "recommended_action": "exakit mcp-setup codex", "scope": {"path": "/x/config.toml"}}]}' > "$TMP/dj.own"
+_own="$(EXAKIT_MCP_RESULT_REMEDY="exakit start" EXAKIT_MCP_RESULT_REMEDY_HINT="stale record" python3 "$TMP/stamp.py" "$TMP/dj.own")"
+check "a doctor's own client remedy is kept over the override" "exakit mcp-setup codex" "$(printf '%s' "$_own" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("remedy"))')"
+lacks "  ...and the override's hint is not attached to it" "stale record" "$_own"
+printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.none"
+check "no remedy of its own: the override fills in" "exakit start" "$(EXAKIT_MCP_RESULT_REMEDY="exakit start" python3 "$TMP/stamp.py" "$TMP/dj.none" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("remedy"))')"
+# An override inherited from the caller's environment is cleared: a healthy
+# run's JSON carries no stale-record remedy (MAC-R3-02).
+_dj_healthy() {
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_is_running() { return 0; }
+        exakit_mcp_operation() {
+            printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.result"
+            python3 "$TMP/stamp.py" "$TMP/dj.result"
+        }
+        warn() { printf 'WARN %s\n' "$*" >&2; }; info() { :; }
+        EXAKIT_MCP_RESULT_REMEDY="exakit start"; EXAKIT_MCP_RESULT_REMEDY_HINT="inherited hint"
+        export EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
+        cmd_mcp_doctor --json
+    ) > "$TMP/dj.out" 2> "$TMP/dj.err"
+    echo "$?"
+}
+_rc="$(_dj_healthy)"
+check "--json, healthy run with an inherited override: exit 0" 0 "$_rc"
+check "  ...the inherited remedy is not used" "None" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy"))' "$TMP/dj.out" 2>&1)"
+lacks "  ...nor the inherited hint" "inherited hint" "$(cat "$TMP/dj.out")"
+check "mcp-status clears an inherited override too" 1 "$(sed -n '/^cmd_mcp_status()/,/^}/p' "$ROOT/setup/exakit" | grep -c 'unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT')"
+check "personal_deployment_running still never consults the runner" 0 "$(sed -n '/^personal_deployment_running()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '_personal_port_held_by_own_runner')"
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

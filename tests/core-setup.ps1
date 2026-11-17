@@ -147,6 +147,23 @@ Invoke-ExakitCoreDatabaseStep -Label "Step 4/7  Configure database features" -Ki
 Has "the step announces itself" "STEP Step 4/7  Configure database features" ($script:events -join "|")
 Check "a passing handler records the task" "preprocessor" (Get-Completed)
 
+# Under "Setup Utilities" (a grouped step) the task is one item: begun with its
+# name and pinned version, ended with its verdict and a short detail line.
+function Start-ExakitStepItem([string]$Title) { Note "ITEM $Title" }
+function Complete-ExakitStepItem { param([bool]$Ok, [string]$Title = "", [string]$Detail = "") Note "ITEMEND $Ok|$Detail" }
+function Test-ExakitItemHeld([string]$Pattern) { return $false }
+$script:ExakitItemHeld = New-Object System.Collections.ArrayList
+[void]$script:ExakitItemHeld.Add("OK fake framework ready")
+$script:ExakitStepGroup = $true
+New-Manifest
+$script:events.Clear()
+Invoke-ExakitCoreDatabaseStep -Label "Database features" -KitRoot $repo
+$script:ExakitStepGroup = $false
+$script:ExakitItemHeld = $null
+Has "as an item of Setup Utilities: begun with its name" "ITEM SQL preprocessor framework" ($script:events -join "|")
+Has "...ended as done, with what it said last as the detail" "ITEMEND True|fake framework ready" ($script:events -join "|")
+Check "...and recorded the same way" "preprocessor" (Get-Completed)
+
 Write-Host ""
 Write-Host "== exakit update: the pending-task check =="
 $kit = Join-Path $script:ExakitHome "kit"
@@ -357,7 +374,8 @@ Remove-Item -Force -LiteralPath $swapCalls -ErrorAction SilentlyContinue
 # A Continue window: on 5.1 a native call with redirected stderr under Stop
 # is a terminating error before its output is read.
 $eapSwap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-$swapOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>$null) -join "`n"
+$swapOut = (@(& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>&1) |
+    Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
 $ErrorActionPreference = $eapSwap
 $swapJson = $null
 try { $swapJson = $swapOut | ConvertFrom-Json } catch { }
@@ -425,7 +443,11 @@ $env:EXAKIT_HOME = $hoHome
 # A Continue window: on 5.1 a native call with redirected stderr under Stop
 # is a terminating error before its output is read.
 $eapHo = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-$hoOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>$null) -join "`n"
+# 2>&1, then the stderr records dropped: on 5.1 a `2>$null` native call still
+# surfaces the child's stderr as a NativeCommandError on this run's own stderr,
+# which the CI step's powershell (ErrorAction Stop) turns into a failed step.
+$hoOut = (@(& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>&1) |
+    Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
 $hoCode = $LASTEXITCODE
 $ErrorActionPreference = $eapHo
 $hoJson = $null
@@ -445,7 +467,10 @@ Remove-Item -Force -LiteralPath $hoRows -ErrorAction SilentlyContinue
 $env:EXAKIT_UPDATE_HANDOVER = "1"
 $env:EXAKIT_UPDATE_RESULTS_FILE = $hoRows
 Remove-Item Env:\EXAKIT_UPDATE_ROW_FIELDS -ErrorAction SilentlyContinue
+# A Continue window: this run fails, and on 5.1 its stderr under Stop is a terminating error.
+$eapRows = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File (Join-Path $hoSetup "exakit.ps1") update all *> $null
+$ErrorActionPreference = $eapRows
 $env:EXAKIT_UPDATE_HANDOVER = $null
 $env:EXAKIT_UPDATE_RESULTS_FILE = $null
 $env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields

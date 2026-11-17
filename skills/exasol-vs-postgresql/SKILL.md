@@ -29,7 +29,7 @@ e.g. `sales`): the tables appear as `VS_SALES`.
 | `port` | no | 5432 | the same page (RDS: Port) |
 | `database` | yes | | RDS: Configuration > DB name (often `postgres`); `psql -c '\l'` lists them |
 | `schema` | no | `public` | `psql -c '\dn'`; PostgreSQL folds an unquoted name to lower case |
-| `user` | yes | | the reader account (section 4) |
+| `user` | yes | | the read-only user (section 4) |
 | `password` | yes | | its password - only through `--password-file` or `--password-stdin` |
 | `tls` | no | `verify` | `verify`, `require` or `disable` (section 6) |
 | `ca` | no | | a PEM file or bundle - required in practice with `verify` (section 6) |

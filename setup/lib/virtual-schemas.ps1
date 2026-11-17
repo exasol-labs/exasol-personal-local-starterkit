@@ -93,23 +93,48 @@ function Get-ExakitVsGuideRaw {
 }
 
 # Format-ExakitVsGuideLine -Line [-Width] - one guide line coloured: "<style>|<text>",
-# T title, H heading, D dimmed, A a command. With -Width the text is cut to it
-# first (the full-window reader's rows are one console row each). Twin of
-# _exakit_vs_guide_paint.
+# T title, F the Federation title (bold, accented), H heading, D dimmed, A a
+# command. With -Width (the full-window reader's rows are one console row
+# each) a longer line is never cut: it goes on over as many rows as it takes,
+# returned as several strings. Twin of _exakit_vs_guide_paint.
 function Format-ExakitVsGuideLine {
     param([string]$Line, [int]$Width = 0)
     $line = "" + $Line
     $style = ""
     $text = $line
     if ($line.Length -ge 2 -and $line[1] -eq '|') { $style = $line.Substring(0, 1); $text = $line.Substring(2) }
-    if ($Width -gt 0 -and $text.Length -gt $Width) { $text = $text.Substring(0, $Width) }
+    $on = ""
     switch ($style) {
-        "T" { return ("{0}{1}{2}" -f $script:UiBold, $text, $script:UiReset) }
-        "H" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-        "D" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-        "A" { return ("{0}{1}{2}" -f $script:UiAccent, $text, $script:UiReset) }
+        "T" { $on = $script:UiBold }
+        "F" { $on = $script:UiBold + $script:UiAccent }
+        "H" { $on = $script:UiDim }
+        "D" { $on = $script:UiDim }
+        "A" { $on = $script:UiAccent }
     }
-    return $text
+    $off = ""
+    if ($on) { $off = $script:UiReset }
+    $rows = @()
+    if ($Width -gt 0) {
+        while ($text.Length -gt $Width) {
+            $rows += ("{0}{1}{2}" -f $on, $text.Substring(0, $Width), $off)
+            $text = $text.Substring($Width)
+        }
+    }
+    $rows += ("{0}{1}{2}" -f $on, $text, $off)
+    if ($rows.Count -eq 1) { return $rows[0] }
+    return $rows
+}
+
+# Get-ExakitVsGuideUrl -Lines - the guide's own page on GitHub, from its
+# "Guide on GitHub" (or the list's "Full guides") line; "" without one.
+# Twin of _exakit_vs_guide_url.
+function Get-ExakitVsGuideUrl {
+    param([string[]]$Lines = @())
+    foreach ($l in @($Lines)) {
+        $m = [regex]::Match(("" + $l), '^D\|(Guide on GitHub|  Full guides) +(https://\S+)')
+        if ($m.Success) { return $m.Groups[2].Value }
+    }
+    return ""
 }
 
 # Get-ExakitVsGuideDoc -Connector - the guide's own file on this computer,
@@ -130,8 +155,9 @@ function Get-ExakitVsGuideDoc {
 # Show-ExakitVsGuideScreen -Connector -Footer [-Keys] - one connector's guide
 # (guide.py, as `exakit connect <id> --help` prints it) in the full-window
 # reader (Show-ExakitPager): it disappears again, the screen under it as it
-# was. o opens the full guide's .md, or says where it is. Returns the key that
-# closed it, "" when it cannot be shown. Twin of _exakit_vs_guide_screen.
+# was. o opens the guide's .md on this computer, g its page on GitHub; each
+# says where it is when it cannot open it. Returns the key that closed it, ""
+# when it cannot be shown. Twin of _exakit_vs_guide_screen.
 function Show-ExakitVsGuideScreen {
     param([string]$Connector, [string]$Footer, [string]$Keys = "")
     $cols = 80; try { if ([Console]::WindowWidth -gt 0) { $cols = [Console]::WindowWidth } } catch { }
@@ -139,8 +165,8 @@ function Show-ExakitVsGuideScreen {
     $raw = Get-ExakitVsGuideRaw -Connector $Connector -Width $cols
     if ($raw.Code -ne 0) { return "" }
     $lines = @()
-    foreach ($line in @($raw.Lines)) { $lines += (Format-ExakitVsGuideLine -Line $line -Width ($cols - 1)) }
-    return (Show-ExakitPager -Lines $lines -Footer $Footer -Keys $Keys -OpenPath (Get-ExakitVsGuideDoc -Connector $Connector))
+    foreach ($line in @($raw.Lines)) { $lines += @(Format-ExakitVsGuideLine -Line $line -Width ($cols - 1)) }
+    return (Show-ExakitPager -Lines $lines -Footer $Footer -Keys $Keys -OpenPath (Get-ExakitVsGuideDoc -Connector $Connector) -OpenUrl (Get-ExakitVsGuideUrl -Lines @($raw.Lines)))
 }
 
 # Show-ExakitVsGuideBack -Connector - the guide from inside exakit connect (? in
@@ -148,7 +174,7 @@ function Show-ExakitVsGuideScreen {
 # pressed. Twin of _exakit_vs_guide_back.
 function Show-ExakitVsGuideBack {
     param([string]$Connector)
-    [void](Show-ExakitVsGuideScreen -Connector $Connector -Footer ("Enter/q back {0} o open full doc" -f $script:UiMidDot))
+    [void](Show-ExakitVsGuideScreen -Connector $Connector -Footer ("Enter/q back {0} o open offline guide {0} g open on GitHub" -f $script:UiMidDot))
 }
 
 # Get-ExakitVsGuideName -Connector - its name in the catalog (PostgreSQL), the
@@ -192,7 +218,7 @@ function Invoke-ExakitVsGuidePicker {
         $next = "Enter next guide"
         if ($i -eq $count - 1) { $next = "Enter done" }
         $d = $script:UiMidDot
-        $foot = "{0} {1} o open full doc {1} c connect {2} now {1} q quit" -f $next, $d, (Get-ExakitVsGuideName -Connector $id)
+        $foot = "{0} {1} o offline guide {1} g GitHub {1} c connect {2} now {1} q quit" -f $next, $d, (Get-ExakitVsGuideName -Connector $id)
         $key = Show-ExakitVsGuideScreen -Connector $id -Footer $foot -Keys "c"
         if ($key -eq "") { continue }
         if ($key -eq "c") { return $id }
@@ -963,7 +989,7 @@ function Add-ExakitVsRust {
 # Test-ExakitVsPrepareSaid - is the database prepared without a question? A
 # person connecting at a console (picking the source was the permission) or
 # --yes. Then each step is one spinner line that its tick replaces, under the
-# "Preparing the database" header its caller printed. Twin of
+# "Enabling Federation" header its caller printed. Twin of
 # _exakit_vs_prepare_said.
 function Test-ExakitVsPrepareSaid {
     return ((Test-ExakitVsInteractive) -or [bool]$script:ExakitVsAssumeYes)
@@ -986,6 +1012,8 @@ function Invoke-ExakitVsPrepStep {
     $previousQuiet = $script:ExakitQuietDetail
     # The spinner is ui.ps1's; a copy without it runs the step unanimated.
     $spin = [bool](Get-Command Start-ExakitSpinner -ErrorAction SilentlyContinue)
+    # The spinner sits where its tick line will: under the heading, not at the margin.
+    $script:UiSpinIndent = '      '
     if ($spin) { Start-ExakitSpinner $Doing }
     $fine = $false
     try {
@@ -994,6 +1022,7 @@ function Invoke-ExakitVsPrepStep {
     } finally {
         $script:ExakitQuietDetail = $previousQuiet
         if ($spin) { Stop-ExakitSpinner }
+        $script:UiSpinIndent = '  '
     }
     if ($fine) { Ok $Done }
     return $fine
@@ -1122,7 +1151,7 @@ function Invoke-ExakitVsRun {
                 foreach ($l in @($run.Lines | Where-Object { $_ -like "FAIL *" })) { Write-ExakitLog "INFO" $l.Substring(5) }
             }
             $script:ExakitVsResult = Show-ExakitVsLines -Lines @($run.Lines | Where-Object { $_ -notlike "FAIL *" })
-            Write-ExakitVsStepHeading "Preparing the database"
+            Write-ExakitVsStepHeading "Enabling Federation"
         }
         else { $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines }
         if ($try -eq 2) { break }
@@ -2205,6 +2234,81 @@ function Read-ExakitVsLinePaste {
     }
 }
 
+# Read-ExakitVsTuiRadio -Question -Default -Values -Names -Hints [-Guide] - a
+# choice answered with the arrows instead of typed: the question, one
+# "(*) Name   hint" row per value, the default selected first; Enter takes the
+# selected one, and the whole block is then erased, so nothing of it stays on
+# the screen - the answer shows where answers show (the panel). With -Guide, ?
+# returns Code 3 (the caller opens the guide and asks again). Returns
+# @{ Code; Value }: 0 chosen, 1 end of input, 2 nothing drawn without a fancy
+# console (the caller asks the typed question instead). The stored values are
+# the ones the typed question takes. Twin of _exakit_vs_tui_radio.
+function Read-ExakitVsTuiRadio {
+    param([string]$Question, [string]$Default = "", [string[]]$Values = @(), [string[]]$Names = @(),
+          [string[]]$Hints = @(), [switch]$Guide)
+    $n = @($Values).Count
+    if ($n -eq 0 -or -not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return @{ Code = 2; Value = "" } }
+    $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    if ($cols -lt 20) { $cols = 80 }
+    $fit = {
+        param([string]$Text, [int]$Chrome)
+        if (($Text.Length + $Chrome) -gt $cols) {
+            $keep = $cols - $Chrome - 1; if ($keep -lt 1) { $keep = 1 }
+            return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+        }
+        return $Text
+    }
+    $rowNames = @(); $rowHints = @(); $w = 0
+    for ($i = 0; $i -lt $n; $i++) {
+        $nm = ""; if ($i -lt @($Names).Count) { $nm = "" + @($Names)[$i] }
+        if (-not $nm) { $nm = "" + @($Values)[$i] }
+        $h = ""; if ($i -lt @($Hints).Count) { $h = "" + @($Hints)[$i] }
+        $rowNames += $nm; $rowHints += $h
+        if ($nm.Length -gt $w) { $w = $nm.Length }
+    }
+    $cur = 0
+    for ($i = 0; $i -lt $n; $i++) { if (("" + @($Values)[$i]) -eq $Default) { $cur = $i } }
+    $keys = [string][char]0x2191 + "/" + [string][char]0x2193 + " choose " + $script:UiMidDot + " Enter confirm"
+    if ($Guide) { $keys += " " + $script:UiMidDot + " ? guide" }
+    $e = $script:UiEsc
+    $drawn = 0; $code = 0; $value = ""
+    while ($true) {
+        $lines = New-Object System.Collections.Generic.List[string]
+        [void]$lines.Add("  " + $script:UiAsk + "?" + $script:UiReset + " " + $script:UiBold + (& $fit $Question 4) + $script:UiReset)
+        for ($i = 0; $i -lt $n; $i++) {
+            $row = & $fit ($rowNames[$i] + (" " * ($w - $rowNames[$i].Length + 4)) + $rowHints[$i]) 9
+            $nm = $row.Substring(0, [Math]::Min($rowNames[$i].Length, $row.Length)); $h = $row.Substring($nm.Length)
+            if ($i -eq $cur) {
+                [void]$lines.Add("    " + $script:UiAccent + "(" + $script:UiBullet + ")" + $script:UiReset + " " + $script:UiBold + $nm + $script:UiReset + $script:UiDim + $h + $script:UiReset)
+            } else {
+                [void]$lines.Add("    ( ) " + $nm + $script:UiDim + $h + $script:UiReset)
+            }
+        }
+        [void]$lines.Add("    " + $script:UiDim + (& $fit $keys 4) + $script:UiReset)
+        $frame = ($lines.ToArray() -join "`r`n") + "`r`n"
+        if ($drawn -gt 0) { [Console]::Write("`r$($e)[${drawn}A$($e)[0J" + $frame) } else { [Console]::Write("`r" + $frame) }
+        $drawn = $lines.Count
+        $key = Read-ExakitMenuKey
+        if ($null -eq $key) { $code = 1; break }
+        if ($key.Name -eq 'Enter') { $value = "" + @($Values)[$cur]; break }
+        if ($key.Name -eq 'Up') { $cur-- }
+        elseif ($key.Name -eq 'Down') { $cur++ }
+        elseif ($key.Name -eq 'Char') {
+            # Ctrl-D: the end of the input, as at a typed question.
+            if ($key.Char -eq [string][char]4) { $code = 1; break }
+            if ($Guide -and $key.Char -eq '?') { $code = 3; break }
+            if ($key.Char -match '^[kK]$') { $cur-- }
+            if ($key.Char -match '^[jJ]$') { $cur++ }
+        }
+        if ($cur -lt 0) { $cur = $n - 1 }
+        if ($cur -ge $n) { $cur = 0 }
+    }
+    # Answered: the question and its rows go - nothing of them stays printed.
+    [Console]::Write("`r$($e)[${drawn}A$($e)[0J")
+    return @{ Code = $code; Value = $value }
+}
+
 # Read-ExakitVsTuiField - field $Index asked under the panel (with why it is
 # asked again, when there is a reason): its label, a red * when it is required,
 # its notes and its default. Enter takes the default; an optional one with none is
@@ -2251,8 +2355,19 @@ function Read-ExakitVsTuiField {
             $f.Val = "" + $a; $a = $null
             break
         }
-        $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
-        if ($null -eq $a) { return $false }
+        $radio = @{ Code = 2; Value = "" }
+        if ($f.Kind -eq "choice") {
+            # The arrows on a fancy console; the typed question everywhere else.
+            $q = $f.Question; if (-not $q) { $q = "Which " + $f.LabelFull + "?" }
+            $radio = Read-ExakitVsTuiRadio -Question $q -Default $def -Values @($f.Choices) -Names @($f.ChoiceNames) -Hints @($f.ChoiceHints) -Guide
+            if ($radio.Code -eq 1) { return $false }
+            $a = $radio.Value
+            if ($radio.Code -eq 3) { $a = "?" }
+        }
+        if ($radio.Code -eq 2) {
+            $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
+            if ($null -eq $a) { return $false }
+        }
         # ? alone (then Enter): this source's guide, then the same question
         # again, every answer kept. ? with anything else is text. Never in a
         # hidden prompt (a credential, a connection string): ? can be part of
@@ -2583,10 +2698,28 @@ function Read-ExakitVsTuiSettings {
         if ($null -eq $open) { return ,$Sets }
         $words = @(); $labels = @($open.choice_labels)
         for ($c = 0; $c -lt @($open.choices).Count; $c++) { $words += ("{0}: {1}" -f @($open.choices)[$c], $labels[$c]) }
-        Write-Host ("  " + $script:UiDim + ($words -join "; ") + $script:UiReset)
         $default = ""; if ($open.PSObject.Properties["default"] -and $open.default) { $default = "" + $open.default }
-        $value = Read-ExakitPrompt ("{0} ({1})" -f $open.label, (@($open.choices) -join ", ")) $default
-        if ($null -eq $value) { return $null }
+        # The arrows on a fancy console (nothing of the question stays on the
+        # screen); the typed question everywhere else. A label with a hint
+        # beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+        $hints = @(); if ($open.PSObject.Properties["choice_hints"]) { $hints = @($open.choice_hints) }
+        $names = @()
+        for ($c = 0; $c -lt $labels.Count; $c++) {
+            $nm = "" + $labels[$c]
+            if ($c -lt $hints.Count -and $hints[$c]) { $nm = $nm.Split(@(" ("), [StringSplitOptions]::None)[0] }
+            $names += $nm
+        }
+        $q = ""; if ($open.PSObject.Properties["question"] -and $open.question) { $q = "" + $open.question }
+        if (-not $q) { $q = "Which " + $open.label + "?" }
+        $radio = Read-ExakitVsTuiRadio -Question $q -Default $default -Values @($open.choices) -Names $names -Hints $hints -Guide
+        if ($radio.Code -eq 1) { return $null }
+        if ($radio.Code -eq 3) { Show-ExakitVsGuideBack -Connector $Connector; continue }
+        if ($radio.Code -eq 0) { $value = $radio.Value }
+        else {
+            Write-Host ("  " + $script:UiDim + ($words -join "; ") + $script:UiReset)
+            $value = Read-ExakitPrompt ("{0} ({1})" -f $open.label, (@($open.choices) -join ", ")) $default
+            if ($null -eq $value) { return $null }
+        }
         if (@($open.choices) -contains $value) { $Sets = @($Sets) + @("--set", "$($open.name)=$value") }
         else { Write-Host ("  {0} {1} must be one of: {2}" -f $script:UiCross, $open.label, (@($open.choices) -join ", ")) -ForegroundColor Red }
     }
@@ -2630,7 +2763,19 @@ function Invoke-ExakitVsTuiForm {
         if ($spec.PSObject.Properties["prompt"] -and $spec.prompt) { $full = "" + $spec.prompt }
         $f = @{ Name = "" + $spec.name; Label = $label; LabelFull = $full; Kind = "" + $spec.kind; Req = [bool]$spec.required
                 Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false; From = $false
-                Hint = @(); Draft = ""; Drafted = "" }
+                Hint = @(); Draft = ""; Drafted = ""; Question = ""; ChoiceNames = @(); ChoiceHints = @() }
+        # A choice asked with the arrows: its question, names and hints.
+        if ($spec.PSObject.Properties["question"] -and $spec.question) { $f.Question = "" + $spec.question }
+        if ($spec.PSObject.Properties["choice_hints"]) { $f.ChoiceHints = @($spec.choice_hints) }
+        if ($spec.PSObject.Properties["choice_labels"]) {
+            # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+            $cl = @($spec.choice_labels)
+            for ($c = 0; $c -lt $cl.Count; $c++) {
+                $nm = "" + $cl[$c]
+                if ($c -lt @($f.ChoiceHints).Count -and @($f.ChoiceHints)[$c]) { $nm = $nm.Split(@(" ("), [StringSplitOptions]::None)[0] }
+                $f.ChoiceNames += $nm
+            }
+        }
         if ($spec.PSObject.Properties["hint"]) { $f.Hint = @($spec.hint | Where-Object { $_ }) }
         if ($spec.PSObject.Properties["draft"] -and $spec.draft) { $f.Draft = "" + $spec.draft }
         if ($f.Kind -eq "source-name" -and $GivenName) { $f.Val = $GivenName; $f.Done = $true }
@@ -2828,7 +2973,7 @@ function Invoke-ExakitVsTuiPrepare {
     if ($script:UiFancy -and $OnScreen -gt 0) {
         try { [Console]::Write(("`r{0}[{1}A{0}[0J" -f $script:UiEsc, $OnScreen)) } catch { }
     }
-    Write-ExakitVsStepHeading "Preparing the database"
+    Write-ExakitVsStepHeading "Enabling Federation"
     foreach ($lang in @("java", "rust")) {
         if ($missing -notcontains $lang) { continue }
         $script:EvtPrepared += $lang
@@ -3028,9 +3173,8 @@ function Invoke-ExakitVsTuiFlow {
     Show-ExakitTable -Table $t -Cursor 0
     $lines = [int]$t.Lines + (Write-ExakitVsTuiFooter)
     $script:EvtOnScreen = 0
-    $question = "Connect all $($sources.Count) now?"
-    if ($sources.Count -eq 1) { $question = "Connect it now?" }
-    if (-not (Confirm-ExakitVsTui $question)) { Info "Nothing was changed."; return 5 }
+    # No "Connect it now?": picking the sources and filling their forms was
+    # the answer, so the review table goes straight on to connect.
     # 4. the database first: a language container a source needs and the
     # database lacks is installed before the table runs, so no row fails for
     # one. Picking the sources was the permission: nothing is asked.
@@ -3038,7 +3182,7 @@ function Invoke-ExakitVsTuiFlow {
     $script:EvtPrepared = @()
     if (Invoke-ExakitVsTuiPrepare -OnScreen $over -Need $need) { $over = 0 }
     # 5. connect: the review table comes alive in place, over itself, its
-    # footer and the question - or under what the database was prepared with
+    # footer - or under what the database was prepared with
     $script:EvtLive = $false
     Invoke-ExakitVsTuiRun -Table $t -Sources $sources -OnScreen $over
     # A language container (a download and a restart), or the restart Docker's

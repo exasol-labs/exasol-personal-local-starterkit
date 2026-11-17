@@ -321,6 +321,14 @@ _UI_SPIN_NESTED=0
 # server took to start. BASH_SUBSHELL (bash 3.0+, unlike BASHPID) is what tells
 # them apart; it is read inline, since a $( ) to compute it is a subshell too.
 _UI_SPIN_OWNER=''
+# ONE ITEM OF A GROUPED STEP. A step that shows several items under one heading
+# (the installer's "Setup Utilities": exapump, then the database features) draws
+# each item's spinner one level in, at the item column, and names the item ahead
+# of what it is doing right now: "exapump  downloading (3s)". The caller sets
+# both for the length of the item and clears them after; empty, the spinner is
+# drawn exactly as before. ⇄ twins: UiSpinIndent / UiSpinPrefix in ui.ps1.
+_UI_SPIN_INDENT='  '
+_UI_SPIN_PREFIX=''
 
 # ui_spin_begin <label> — start ONLY the animated spinner (prints no line of
 # its own). No-op unless we are on an interactive fancy terminal *right now*:
@@ -341,6 +349,16 @@ ui_spin_begin() {
     [ -t 1 ] || return 0
     _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     _UI_STEP_LABEL="$1"
+    # An item's spinner says the item first. A label that already starts with
+    # it (the item's own name, or a label ui_spin_resume hands back) is used as
+    # it is, so a pause and resume never names the item twice.
+    if [ -n "${_UI_SPIN_PREFIX:-}" ]; then
+        case "$1" in
+            "$_UI_SPIN_PREFIX"*) ;;
+            '') _UI_STEP_LABEL="$_UI_SPIN_PREFIX" ;;
+            *)  _UI_STEP_LABEL="$_UI_SPIN_PREFIX  $(printf '%s' "${1%"${1#?}"}" | tr '[:upper:]' '[:lower:]')${1#?}" ;;
+        esac
+    fi
     # $2 is an ORIGINAL start time, passed only by ui_spin_resume: a spinner that
     # was paused so a line could be printed under it has to carry on counting
     # from where it was, not restart at (0s) every time something prints.
@@ -354,10 +372,10 @@ ui_spin_begin() {
             _el=$((_now - _UI_STEP_T0))
             if [ -z "$_UI_STEP_LABEL" ]; then
                 # No label: the spinner alone (the heading above says what is coming).
-                printf '\r  %s%s%s\033[K' "$UI_ACCENT" "$_f" "$UI_RESET"
+                printf '\r%s%s%s%s\033[K' "$_UI_SPIN_INDENT" "$UI_ACCENT" "$_f" "$UI_RESET"
             else
-                printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
-                    "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
+                printf '\r%s%s%s%s %s %s(%ss)%s\033[K' \
+                    "$_UI_SPIN_INDENT" "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
                     "$UI_DIM" "$_el" "$UI_RESET"
             fi
             _i=$(((_i + 1) % 10))
@@ -409,6 +427,21 @@ ui_spin_resume() {
     [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
     _UI_SPIN_PAUSED=0
     ui_spin_begin "$_UI_SPIN_PAUSE_LABEL" "$_UI_SPIN_PAUSE_T0"
+}
+
+# ui_spin_relabel <label> — the same spinner line, now saying what it does next.
+#
+# A long job that narrates itself on ONE line (the uninstall) still has phases,
+# and "Removing the kit (40s)" over all of them hides which one is slow. The
+# animator is a subshell that copied its label when it started, so the label
+# changes the way a pause does: stop, then start again with the new words and a
+# fresh counter. No spinner of our own (not a TTY, or a nested caller): nothing.
+# ⇄ twin: Set-ExakitSpinnerLabel in ui.ps1.
+ui_spin_relabel() {
+    ui_spin_pause
+    [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
+    _UI_SPIN_PAUSED=0
+    ui_spin_begin "$1"
 }
 
 # ui_step_start <label> — begin a visible step: an animated spinner in fancy
@@ -2422,6 +2455,22 @@ ui_open_path() {
     return 0
 }
 
+# ui_open_url <url> — a web page in this computer's browser: open on macOS,
+# xdg-open on Linux (in the background, so the caller never waits). 1 when
+# there is no opener or it failed; the caller then says the address.
+# ⇄ twin: Open-ExakitUrl in ui.ps1.
+ui_open_url() {
+    case "${1:-}" in https://*) ;; *) return 1 ;; esac
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        command -v open >/dev/null 2>&1 || return 1
+        open "$1" >/dev/null 2>&1 < /dev/null && return 0
+        return 1
+    fi
+    command -v xdg-open >/dev/null 2>&1 || return 1
+    ( xdg-open "$1" >/dev/null 2>&1 < /dev/null & ) 2>/dev/null
+    return 0
+}
+
 # _ui_pager_leave — the reader's screen gone: the alternate screen left (the
 # screen before it comes back as it was), or, without one, the window cleared
 # for the caller to redraw; the cursor shown again.
@@ -2448,7 +2497,8 @@ _ui_pager_interrupted() {
 # keys and where in the text the window is. Enter, q and Esc return; so does
 # each letter in [keys] (lower case). With UI_PAGER_OPEN set to a file, o opens
 # it in place (ui_open_path) and the line above the footer says it was opened -
-# or where it is. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
+# or where it is. With UI_PAGER_URL set to a web page, g opens it in the browser
+# (ui_open_url) the same way; without one, g goes to the top. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
 # the letter. EXAKIT_NO_ALTSCREEN=1 (or a terminal without one: TERM linux,
 # vt100...) clears the window instead, and clears it again on the way out for
 # the caller to redraw. Returns 1, with nothing drawn, without a fancy terminal.
@@ -2525,7 +2575,13 @@ ui_pager() {
             j|J) _upg_top=$(( _upg_top + 1 )) ;;
             k|K) _upg_top=$(( _upg_top - 1 )) ;;
             b|B) _upg_top=$(( _upg_top - _upg_view )) ;;
-            g) _upg_top=0 ;;
+            g)
+                if [ -n "${UI_PAGER_URL:-}" ]; then
+                    if ui_open_url "$UI_PAGER_URL"; then _upg_note="Opened $UI_PAGER_URL"
+                    else _upg_note="On GitHub: $UI_PAGER_URL"; fi
+                else
+                    _upg_top=0
+                fi ;;
             G) _upg_top="$_upg_last" ;;
             o|O)
                 if [ -n "${UI_PAGER_OPEN:-}" ]; then

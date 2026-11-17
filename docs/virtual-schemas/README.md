@@ -1,24 +1,34 @@
-# Connect a source: virtual-schema guides
+# Federation: query your other data from Exasol
 
-`exakit connect <connector>` makes another database, warehouse or bucket
-queryable from your local Exasol database. The data stays at the source; each
-query fetches what it needs, and the tables appear as `VS_<NAME>`.
-
-Each guide below tells you where to find every value `exakit connect` asks for.
+**Federation** makes another database, warehouse or bucket queryable from your
+local Exasol, without copying the data. `exakit connect <connector>` creates a
+virtual schema, `VS_<NAME>`, for the source. The data stays at the source;
+each query fetches only what it needs.
 
 | Connector | Guide | What you need | CA file needed? |
 |---|---|---|---|
-| `postgresql` | [PostgreSQL](postgresql.md) | host, database, a reader account and its password | Yes, for `tls=verify` |
-| `mysql` | [MySQL](mysql.md) | host, database, a reader account and its password | Yes, for `tls=verify` |
+| `postgresql` | [PostgreSQL](postgresql.md) | host, database, a read-only user and its password | Yes, for `tls=verify` |
+| `mysql` | [MySQL](mysql.md) | host, database, a read-only user and its password | Yes, for `tls=verify` |
 | `sqlserver` | [SQL Server](sqlserver.md) | host, database, schema, a SQL login and its password | Yes, for `tls=verify` (root plus intermediates) |
-| `oracle` | [Oracle](oracle.md) | host, TCPS port, service name, schema, a reader account | Yes, for `tls=verify` |
+| `oracle` | [Oracle](oracle.md) | host, TCPS port, service name, schema, a read-only user | Yes, for `tls=verify` |
 | `snowflake` | [Snowflake](snowflake.md) | account identifier, database, warehouse, a user and its programmatic access token | No |
 | `bigquery` | [BigQuery](bigquery.md) | project ID, dataset, a service-account key file (JSON) | No |
-| `s3` | [Amazon S3 files](s3.md) | bucket, region, an EDML mapping, an IAM access key | No |
-| `azure-blob` | [Azure Blob files](azure-blob.md) | storage account, container, an EDML mapping, a SAS token | No |
+| `s3` | [Amazon S3](s3.md) | bucket, region, an EDML mapping, an IAM access key | No |
+| `azure-blob` | [Azure Blob Storage](azure-blob.md) | storage account, container, an EDML mapping, a SAS token | No |
 | `databricks` | [Databricks (SQL warehouse)](databricks.md) | workspace host, warehouse HTTP path, catalog, schema, a personal access token | No |
 | `lakehouse` | [Lakehouse (Iceberg / Delta)](lakehouse.md) | a catalog (Iceberg REST, Unity Catalog, AWS Glue, or none for a Parquet folder), the files (vended, S3 or Azure ADLS) and their logins | No |
-| `mongodb` | [MongoDB](mongodb.md) | URI, database, collection, a reader account and its password | No |
+| `mongodb` | [MongoDB](mongodb.md) | URI, database, collection, a read-only user and its password | No |
+
+## How it works: three steps
+
+1. **Prepare the source.** Make a read-only user, let your computer's IP in,
+   and get a CA file where the table above says so. Each guide shows where to
+   find every value.
+2. **Connect.** Run `exakit connect` and pick the source, or
+   `exakit connect <connector>`. The first connect enables **Federation** in
+   the database: it installs Java there (one restart).
+3. **Query.** `exakit sql "SELECT * FROM VS_SALES.ORDERS LIMIT 10"`. Your AI
+   clients read these schemas too, through the kit's read-only MCP user.
 
 ## Before you start
 
@@ -43,24 +53,22 @@ Each guide below tells you where to find every value `exakit connect` asks for.
 
 You only need to remember `exakit connect`; every guide is reachable from it.
 
-- `exakit connect --help` opens a picker of the connectors: the same menu as
-  `exakit connect`, titled "Connector guides". Tick one or more with Space and
-  press Enter; each guide is shown in turn, full screen. Up/Down, PgUp/PgDn and
-  Space scroll a long one. Enter shows the next guide, `o` opens the guide's
-  `.md` file on your computer (or prints its path), `c` connects that source
-  now (the same as `exakit connect <connector>`), `q` quits.
-- In the `exakit connect` menu, `?` shows the highlighted connector's guide.
-- In a source's panel, type `?` alone and press Enter at any question (or at
-  the summary) to see that source's guide. Your answers are kept and the same
-  question comes back. A hidden prompt (the password, the connection string)
-  never treats `?` as the guide key: it can be part of a password or a URL.
+| Where you are | What to do |
+|---|---|
+| Any shell | `exakit connect --help` opens the "Connector guides" picker. Tick one or more with Space, press Enter, and each guide shows full screen. |
+| Inside a guide | Up/Down, PgUp/PgDn and Space scroll. Enter shows the next guide. `o` opens the guide's `.md` file on your computer (or prints its path). `c` connects that source now. `q` quits. |
+| The `exakit connect` menu | `?` shows the highlighted connector's guide. |
+| A source's form | Type `?` alone and press Enter at any question (or at the summary). Your answers are kept and the same question comes back. |
 
-The guide disappears when you leave it: the screen you were on comes back as
-it was. Piped, with `--json` or in CI, `exakit connect --help` prints the list
-of connectors as before, and `exakit connect <connector> --help` always prints
-that connector's guide.
+- A hidden prompt (the password, the connection string) never treats `?` as
+  the guide key: it can be part of a password or a URL.
+- The guide disappears when you leave it: the screen you were on comes back as
+  it was.
+- Piped, with `--json` or in CI, `exakit connect --help` prints the list of
+  connectors, and `exakit connect <connector> --help` always prints that
+  connector's guide.
 
-## After you connect
+## After you connect: manage your sources
 
 ```bash
 exakit source list                 # every source and its state
@@ -75,5 +83,6 @@ exakit source remove <name> --dry-run
 
 Each connector has a skill, `exasol-vs-<connector>` (for example
 `exasol-vs-postgresql`), installed with the kit. Ask your agent "connect my
-Postgres to Exasol" and it collects the values, prepares a reader and runs the
-connect with you.
+Postgres to Exasol" and it collects the values, prepares a read-only user and
+runs the connect with you. The shared rules for every source are in the skill
+`exasol-virtual-schemas`.

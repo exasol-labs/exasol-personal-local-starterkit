@@ -269,8 +269,10 @@ say "9/9 uninstall sweeps the add-on"
     # The full run dispatches each kit-managed add-on through Python hooks.
     _exakit_marketplace_load_modules
     # The database/MCP steps are stubbed: this sandbox never had either.
+    # The MCP process sweep too: it reads the real machine's process table.
     personal_teardown() { :; }
     exakit_mcp_operation() { :; }
+    _exakit_uninstall_mcp_processes() { :; }
     exakit_uninstall_run 0 >/dev/null 2>&1
     :
 )

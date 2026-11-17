@@ -171,6 +171,7 @@ function Get-ExapumpExpectedSha256 {
 function Get-ExapumpPinnedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
     switch ($AssetName) {
+        "exapump-0.14.0-windows-x86_64.exe" { return "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4" }
         "exapump-0.13.0-windows-x86_64.exe" { return "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838" }
         "exapump-0.11.2-windows-x86_64.exe" { return "8a2e8199a94f1b21782e4c68179948bfa43217c82c9b9b2a25eaec4532305237" }
         default { return $null }
@@ -2947,6 +2948,9 @@ function Invoke-ExakitSqlScript {
 # database-wide read (USE ANY SCHEMA + SELECT ANY TABLE), so it sees every
 # dataset schema with no per-schema grant.
 function Get-ExakitBundledDatasets {
+    # -IncludeHidden: the hidden ones too (twin of exakit_bundled_datasets --all):
+    # the legacy crossing's sample catalog and the flag reset, never an offer or a load.
+    param([switch]$IncludeHidden)
     # Every dataset (TPC-H included) is discovered from its dataset.conf;
     # nothing is hardcoded. A conf may set flag= to override the default
     # manifest key (TPC-H keeps the historical data.loaded) and schema= to name
@@ -2962,7 +2966,7 @@ function Get-ExakitBundledDatasets {
             if (-not $kv.id -or -not $kv.label) { continue }
             # Not part of this release (hidden=yes): its folder stays, but it is not
             # offered, listed or loaded. Twin of the same skip in exakit_bundled_datasets.
-            if (("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
+            if (-not $IncludeHidden -and ("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
             # A dataset that will be downloaded says how big the download is, in
             # every list that offers it ("... - 3.9 MB download").
             $label = $kv.label

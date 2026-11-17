@@ -52,7 +52,7 @@
     },
     {
       "name": "user",
-      "label": "Reader account",
+      "label": "Username",
       "kind": "text",
       "required": true
     },
@@ -65,6 +65,8 @@
     {
       "name": "tls",
       "label": "TLS",
+      "question": "How should the connection use TLS?",
+      "choice_hints": ["encrypted, the server's certificate checked", "not encrypted"],
       "kind": "choice",
       "default": "verify",
       "choices": [

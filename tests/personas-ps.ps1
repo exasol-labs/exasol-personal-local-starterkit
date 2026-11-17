@@ -7,9 +7,17 @@
 # (the installer's tables, taken without asking, on a console). Runs
 # under Windows PowerShell 5.1 and pwsh; a sandboxed kit home.
 $ErrorActionPreference = "Stop"
-$repo = Split-Path -Parent $PSScriptRoot
+$shipped = Split-Path -Parent $PSScriptRoot
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-persona-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
+# This release disables the Data Scientist (and the ML Engineer); what a persona does once offered is still the
+# kit's, so these checks run on a copy of the kit with the Data Scientist switched back on (tests/release_kit.py),
+# as tests/personas.sh does.
+$py = Get-Command python3 -ErrorAction SilentlyContinue
+if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+if (-not $py) { throw "FAIL: no python on PATH for tests/release_kit.py" }
+$repo = ("" + (& $py.Source -c "import sys; sys.path.insert(0, sys.argv[1] + '/tests'); from pathlib import Path; from release_kit import kit_with_hidden_parts_on; print(kit_with_hidden_parts_on(Path(sys.argv[2]), personas=('data-scientist',), addons=()))" $shipped (Join-Path $work "release-kit"))).Trim()
+if (-not $repo -or -not (Test-Path -LiteralPath (Join-Path $repo "setup"))) { throw "FAIL: tests/release_kit.py made no kit copy" }
 $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
@@ -45,7 +53,7 @@ try {
     $said = ""
     try { Set-ExakitPersonaEnv } catch { $said = "$_" }
     Check "ml-engineer: asking for it by name is refused, nothing answered" $true (($said -like "*Persona 'ml-engineer' is disabled*") -and -not $env:EXAKIT_DATASETS)
-    Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
+    Check "no persona: the kit's own samples (default=yes)" "retail_sales,bank_transaction" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
     Check "data-scientist: the Amazon and fraud datasets" "amazon_sales,fraud_transactions" (Get-ExakitPersonaValue "data-scientist" "datasets")
     Check "ml-engineer: the Amazon sales and fraud datasets" "amazon_sales,fraud_transactions" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Check "data-scientist: Dash Server, the notebook, JSON Tables, Semantic Views" "dash-server,notebook,json-tables,semantic-views" (Get-ExakitPersonaValue "data-scientist" "addons")
@@ -55,7 +63,7 @@ try {
     Check "a known list reads back in the kit's order" "data-scientist,general" (Get-ExakitPersona "general,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,general"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook,json-tables,semantic-views" (Answers)
+    Check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,retail_sales,bank_transaction|all|dash-server,notebook,json-tables,semantic-views" (Answers)
     Check "each dataset is named with the personas it is for (a hidden one is not named)" "Data Scientist" ((Get-ExakitPersonaDatasetHints)["amazon_sales"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)"; Description = "Orders, customers, parts" },
@@ -132,7 +140,8 @@ try {
     function Test-ExakitInteractive { return $false }
     function Invoke-ExakitPersonaData { param($KitRoot) }
     Invoke-ExakitPersonaFlow -KitRoot $repo
-    Check "no console, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)|$($env:EXAKIT_PERSONA)"
+    # aaabaca8: no persona named - General, quietly (twin of personas.sh).
+    Check "no persona named: General, quietly - its datasets, no add-ons" "retail_sales,bank_transaction||general" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)|$($env:EXAKIT_PERSONA)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     $env:EXAKIT_PERSONA = "data-scientist"
     Invoke-ExakitPersonaFlow -KitRoot $repo -Phase selected

@@ -278,6 +278,15 @@ $script:UiSpinNested = 0
 # has to exist before the table section is reached.
 $script:UiTableLive = $false
 
+# ONE ITEM OF A GROUPED STEP. A step that shows several items under one heading
+# (the installer's "Setup Utilities": exapump, then the database features) draws
+# each item's spinner one level in, at the item column, and names the item ahead
+# of what it is doing right now: "exapump  downloading (3s)". The caller sets
+# both for the length of the item and clears them after; empty, the spinner is
+# drawn exactly as before. Twins of _UI_SPIN_INDENT / _UI_SPIN_PREFIX in ui.sh.
+$script:UiSpinIndent = "  "
+$script:UiSpinPrefix = ""
+
 function Start-ExakitSpinner([string]$Label) {
     if (Get-Command Set-ExakitAddonActivity -ErrorAction SilentlyContinue) { Set-ExakitAddonActivity -Message $Label }
     # A live table is the same single slot: it is already redrawing these rows, so
@@ -286,8 +295,17 @@ function Start-ExakitSpinner([string]$Label) {
     # table, and its Stop would then tear the table down.
     if ($null -ne $script:UiSpinFlag -or $script:UiTableLive) { $script:UiSpinNested++; return }
     if (-not $script:UiFancy) { return }
+    # An item's spinner says the item first. A label that already starts with it
+    # (the item's own name, or one Resume-ExakitSpinner hands back) is used as it
+    # is, so a pause and resume never names the item twice.
+    if ($script:UiSpinPrefix) {
+        if (-not $Label) { $Label = $script:UiSpinPrefix }
+        elseif (-not $Label.StartsWith($script:UiSpinPrefix)) {
+            $Label = $script:UiSpinPrefix + "  " + $Label.Substring(0, 1).ToLowerInvariant() + $Label.Substring(1)
+        }
+    }
     try {
-        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date) })
+        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date); Indent = $script:UiSpinIndent })
         $rs = [runspacefactory]::CreateRunspace()
         $rs.Open()
         $rs.SessionStateProxy.SetVariable('flag', $script:UiSpinFlag)
@@ -300,8 +318,8 @@ function Start-ExakitSpinner([string]$Label) {
             while ($flag.Run) {
                 $el = [int]((Get-Date) - $flag.T0).TotalSeconds
                 # No label: the spinner alone (the heading above says what is coming). Twin of ui_spin_begin "".
-                if ($flag.Label) { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
-                else { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
+                if ($flag.Label) { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
                 $i = ($i + 1) % 10
                 Start-Sleep -Milliseconds 90
             }
@@ -359,6 +377,17 @@ function Resume-ExakitSpinner {
     if ($null -ne $script:UiSpinFlag -and $null -ne $script:UiSpinPausedT0) {
         try { $script:UiSpinFlag.T0 = $script:UiSpinPausedT0 } catch { }
     }
+}
+
+# Set-ExakitSpinnerLabel - the same spinner line, now saying what it does next,
+# with a fresh counter. The runspace reads Label and T0 from the synchronized
+# hashtable on every frame, so changing them is enough. Only the owner relabels;
+# no spinner of our own (plain mode, or a nested caller): nothing.
+# Twin of ui_spin_relabel in ui.sh.
+function Set-ExakitSpinnerLabel([string]$Label) {
+    if ($script:UiSpinNested -gt 0) { return }
+    if ($null -eq $script:UiSpinFlag) { return }
+    try { $script:UiSpinFlag.Label = $Label; $script:UiSpinFlag.T0 = (Get-Date) } catch { }
 }
 
 function Restore-ExakitCursor { Disable-ExakitMenuMouse; if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
@@ -2404,7 +2433,28 @@ function Open-ExakitPath {
     } catch { return $false }
 }
 
-# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] - a full-window reader, for
+# Open-ExakitUrl <url> - a web page in this computer's browser: Start-Process on
+# Windows, open on macOS, xdg-open on Linux. $false when there is no opener or
+# it failed; the caller then says the address. Never an error. Twin of
+# ui_open_url in ui.sh.
+function Open-ExakitUrl {
+    param([string]$Url)
+    if (-not $Url -or -not $Url.StartsWith("https://")) { return $false }
+    try {
+        $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+        if ($onWindows) { Start-Process -FilePath $Url -ErrorAction Stop | Out-Null; return $true }
+        if ($IsMacOS) {
+            if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+            & open $Url 2>$null | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        if (-not (Get-Command xdg-open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+        Start-Process -FilePath "xdg-open" -ArgumentList @($Url) -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] [-OpenUrl] - a full-window reader, for
 # a guide: the lines (one console row each, colour included - the caller cuts
 # them to the width) in the console's alternate screen, so the screen under it
 # comes back exactly as it was. Longer than the window, Up/Down (j/k),
@@ -2412,13 +2462,14 @@ function Open-ExakitPath {
 # row, says the keys and where in the text the window is. Enter, q and Esc
 # return; so does each letter in -Keys. With -OpenPath, o opens that file in
 # place (Open-ExakitPath) and the line above the footer says it was opened - or
-# where it is. Returns the key that closed it: enter, q, esc, or the letter;
+# where it is. With -OpenUrl, g opens that web page (Open-ExakitUrl) the same
+# way; without one, g goes to the top. Returns the key that closed it: enter, q, esc, or the letter;
 # "" with nothing drawn without a fancy console. A console without virtual
 # terminal sequences (old conhost), or EXAKIT_NO_ALTSCREEN=1, clears the window
 # instead, and clears it again on the way out for the caller to redraw. Ctrl-C
 # leaves it through the finally block. Twin of ui_pager in ui.sh.
 function Show-ExakitPager {
-    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "")
+    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "", [string]$OpenUrl = "")
     if (-not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return "" }
     $e = $script:UiEsc
     $rows = @($Lines)
@@ -2497,7 +2548,12 @@ function Show-ExakitPager {
                 "Char" {
                     $c = "" + $key.Char
                     if ($c -ceq "G") { $top = $last }
-                    elseif ($c -ceq "g") { $top = 0 }
+                    elseif ($c -ceq "g") {
+                        if ($OpenUrl) {
+                            if (Open-ExakitUrl -Url $OpenUrl) { $note = "Opened " + $OpenUrl }
+                            else { $note = "On GitHub: " + $OpenUrl }
+                        } else { $top = 0 }
+                    }
                     else {
                         $lc = $c.ToLowerInvariant()
                         if ($lc -eq "q") { $result = "q"; $stop = $true }

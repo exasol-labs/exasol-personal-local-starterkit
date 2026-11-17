@@ -61,7 +61,7 @@ manifest_get() {
     return 0
 }
 manifest_set() { return 0; }
-# connection_panel batches its six reads through manifest_get_many (one python
+# connection_panel batches its reads through manifest_get_many (one python
 # process instead of six), so stubbing manifest_get alone leaves it empty.
 # One line PER KEY, empty ones included: the panel reads the answers
 # positionally, so a missing key that emits nothing would shift every row after
@@ -147,7 +147,7 @@ COPIED="$(exakit_print_mcp_ready_panel permanent 2>&1)"
 has "on the clipboard, it is one line" "is on your clipboard" "$COPIED"
 lacks "and the panel is gone"          "First prompt to try"  "$COPIED"
 
-printf '\n== the closing panel is four rows, and exakit info is still complete ==\n'
+printf '\n== the closing panel is short, and exakit info is still complete ==\n'
 
 SHORT="$(connection_summary 2>&1)"
 has "the DSN and admin user" "127.0.0.1:8563   (admin sys, TLS self-signed)" "$SHORT"
@@ -157,6 +157,14 @@ has "and where everything is" "exakit info" "$SHORT"
 lacks "no manifest row"       "Manifest"    "$SHORT"
 lacks "no logs row"           "Logs:"       "$SHORT"
 lacks "no MCP backups row"    "MCP backups" "$SHORT"
+# The Federation row: only where a source can be connected from here (the
+# virtual-schemas module answers exakit_vs_available); not loaded here, so absent.
+lacks "no Federation row where connect cannot run" "Federation" "$SHORT"
+exakit_vs_available() { return 0; }
+FED_SHORT="$(connection_summary 2>&1)"
+has "the Federation row" "exakit connect  ·  exakit source" "$(printf '%s\n' "$FED_SHORT" | grep 'Federation')"
+check "...before Everything, which stays the last row" "Everything" "$(printf '%s\n' "$FED_SHORT" | grep -E 'Everything|Federation' | tail -1 | sed 's/^[^A-Za-z]*//; s/ .*//')"
+unset -f exakit_vs_available
 
 # The full panel is what `exakit info` prints. Collapsing the INSTALL must not
 # collapse the reference screen.
@@ -165,6 +173,20 @@ has "exakit info still has the runtime"  "Runtime:"     "$FULL"
 has "...the manifest"                    "Manifest:"    "$FULL"
 has "...the logs"                        "Logs:"        "$FULL"
 has "...and the MCP user"                "MCP user:"    "$FULL"
+# The TLS rows name the command that shows or makes the pin, read from the
+# manifest alone (the stub above records none).
+has "exakit info: unpinned TLS row" "enabled (self-signed certificate) · not pinned" "$FULL"
+has "...with the command that pins"  "pin it: exakit tls-pin --accept" "$FULL"
+eval "$(declare -f manifest_get | sed '1s/manifest_get/_brevity_manifest_get/')"
+manifest_get() {
+    [ "$1" = runtime.tls_fingerprint ] && { printf 'ab%062d\n' 0; return 0; }
+    _brevity_manifest_get "$@"
+}
+PINNED_PANEL="$(connection_panel 2>&1)"
+has "exakit info: pinned TLS row"    "enabled (self-signed certificate) · pinned" "$PINNED_PANEL"
+has "...with the command that shows it" "details: exakit tls-pin" "$PINNED_PANEL"
+lacks "...and no pin-it hint"         "pin it:" "$PINNED_PANEL"
+eval "$(declare -f _brevity_manifest_get | sed '1s/_brevity_manifest_get/manifest_get/')"
 check "the install panel is shorter than the reference one" "yes" \
     "$([ "$(printf '%s\n' "$SHORT" | grep -c .)" -lt "$(printf '%s\n' "$FULL" | grep -c .)" ] && echo yes || echo no)"
 
@@ -315,7 +337,7 @@ _exakit_autostart_register() { ok "dash-server: starts at login (~/Library/Launc
 manifest_get() { [ "$1" = "autostart.enabled" ] && printf 'true\n'; return 0; }
 
 : > "$EXAKIT_LOG_FILE"
-EXAKIT_ACTIVE_LABEL="Step 7/7  exakit helper"
+EXAKIT_ACTIVE_LABEL="Step 6/6  exakit helper"
 ADDON="$(_exakit_marketplace_install_one dash-server 2>&1)"
 check "the install succeeds" "0" "$?"
 
@@ -334,13 +356,13 @@ has "the version is in the log"   "Installing dash-server 0.1.0" "$LOGGED"
 has "the venv is in the log"      "dash-server-venv"             "$LOGGED"
 has "the autostart is in the log" "starts at login"              "$LOGGED"
 
-check "the label is handed back" "Step 7/7  exakit helper" "$EXAKIT_ACTIVE_LABEL"
+check "the label is handed back" "Step 6/6  exakit helper" "$EXAKIT_ACTIVE_LABEL"
 check "and so is the quiet flag" "0" "${EXAKIT_QUIET_DETAIL:-0}"
 
 # A failing install must hand both back too, or every later line goes silent.
 dash_server_install() { return 1; }
 _exakit_marketplace_install_one dash-server >/dev/null 2>&1
-check "a failed install restores the label" "Step 7/7  exakit helper" "$EXAKIT_ACTIVE_LABEL"
+check "a failed install restores the label" "Step 6/6  exakit helper" "$EXAKIT_ACTIVE_LABEL"
 check "...and the quiet flag" "0" "${EXAKIT_QUIET_DETAIL:-0}"
 LOUD="$(info "still speaking")"
 has "the screen is not left silent" "still speaking" "$LOUD"

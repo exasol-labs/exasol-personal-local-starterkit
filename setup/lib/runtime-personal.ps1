@@ -2623,8 +2623,20 @@ function Invoke-PersonalDestroy {
 # deliberately untouched: it is shared host-wide, the launcher never
 # reconfigures an existing one, and it stays running after destroy - this
 # module owns the deployment, nothing else. Twin of personal_teardown.
+#
+# THE END STATE IS CHECKED, NOT ASSUMED. A destroy that failed, exited 0 and
+# left the deployment behind, or never ran (Test-PersonalDeploymentExists asks
+# `exasol info`, which a "deployment_failed" deployment refuses) used to end
+# the same way as a clean one, and uninstall printed "Database removed" over a
+# database that was still there. What remains is left in
+# $script:PersonalTeardownLeftovers (one line per item, empty when clean) and
+# the command that removes it in $script:PersonalTeardownRemedy.
 function Remove-Personal {
-    if (Test-PersonalDeploymentExists) {
+    $script:PersonalTeardownLeftovers = @()
+    $script:PersonalTeardownRemedy = ""
+    # Read BEFORE the destroy, which deletes the state file that names it.
+    $deploymentId = "" + (Get-PersonalDeploymentId)
+    if ((Test-Path -LiteralPath $script:PersonalDeployDir) -or (Test-PersonalDeploymentExists)) {
         Warn2 "An Exasol Personal deployment keeps the database software and your data together - removing it deletes every table you loaded."
         # --auto-approve: the launcher's destroy prompts for confirmation by
         # itself; the caller (uninstall) has already asked its own question.
@@ -2632,7 +2644,146 @@ function Remove-Personal {
             Warn2 "The launcher could not fully remove the deployment (it said: $($script:PersonalDestroyError)). If its folder $($script:PersonalDeployDir) or a database process is still there, restart the computer and delete the folder."
         }
     }
+    Find-PersonalTeardownLeftovers -Id $deploymentId
+    if (@($script:PersonalTeardownLeftovers).Count -gt 0) { return }
     Set-ExakitManifestValue "runtime.status" "removed"
+}
+
+# Find-PersonalTeardownLeftovers -Id <deployment-id> - what of the deployment
+# is still on this machine after a destroy: a container carrying its id (Docker
+# or Podman, whichever answers) and its directory. Fills
+# $script:PersonalTeardownLeftovers and $script:PersonalTeardownRemedy. Twin of
+# personal_teardown_leftovers (which also checks the macOS runner on the port;
+# on Windows the port is held by the engine's relay, not by a kit process).
+function Find-PersonalTeardownLeftovers {
+    param([string]$Id = "")
+    $left = @()
+    $steps = @()
+    # An engine that hangs or refuses answers $null: a warning with the command
+    # to check by hand, never a leftover (it alone does not fail the run).
+    # Twin of EXAKIT_TEARDOWN_WARNINGS in personal_teardown_leftovers.
+    $warnings = @()
+    if ($Id) {
+        foreach ($engineName in @("docker", "podman")) {
+            $engineCmd = Get-Command $engineName -ErrorAction SilentlyContinue
+            if (-not $engineCmd) { continue }
+            $script:ExakitBoundedOutcome = ""
+            $names = Invoke-ExakitBounded -FilePath $engineCmd.Source -TimeoutSeconds 15 -Arguments @("ps", "-a", "--format", "{{.Names}}")
+            if ($null -eq $names) {
+                # Why, where Invoke-ExakitBounded says: a hang and a refusal
+                # are different things to check. Twin of _ptl_why.
+                $why = "$engineName did not answer within 15s, or refused"
+                $outcome = "" + $script:ExakitBoundedOutcome
+                if ($outcome -eq "timeout") { $why = "$engineName did not answer within 15s" }
+                elseif ($outcome -like "exit *") { $why = "$engineName refused: $outcome" }
+                elseif ($outcome -eq "error") { $why = "$engineName could not be run" }
+                $warnings += "Could not ask $engineName whether the database's container is gone ($why). Check by hand once $engineName answers: $engineName ps -a --filter name=$Id"
+                continue
+            }
+            foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {
+                $n = $line.Trim()
+                if (-not $n) { continue }
+                if (Test-PersonalNamesCarryId $n $Id) {
+                    $left += "the $engineName container $n"
+                    $steps += "$engineName rm -f $n"
+                }
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $script:PersonalDeployDir) {
+        $left += "the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)"
+        $steps += "Remove-Item -Recurse -Force '" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:PersonalDeployDir) + "'"
+    }
+    $script:PersonalTeardownLeftovers = $left
+    $script:PersonalTeardownRemedy = ($steps -join "; ")
+    $script:PersonalTeardownWarnings = $warnings
+}
+
+# Get-PersonalLauncherCacheDir - the launcher's download cache (the Nano image,
+# the runner, the presets; around 500 MB). The launcher is a Go binary and
+# keeps it at os.UserCacheDir()\.exasol, which on Windows is
+# %LOCALAPPDATA%\.exasol. Empty when LOCALAPPDATA is not set (Go fails there
+# too, so there is no cache to name). Twin of personal_launcher_cache_dir.
+function Get-PersonalLauncherCacheDir {
+    if (-not $env:LOCALAPPDATA) { return "" }
+    return (Join-Path $env:LOCALAPPDATA ".exasol")
+}
+
+# Get-PersonalOtherDeployments - every entry in the launcher's deployments
+# directory other than the kit's own deployment. Anything there keeps the
+# shared cache and the state directories in place. Twin of
+# personal_other_deployments.
+function Get-PersonalOtherDeployments {
+    # Both places a deployment can live: beside the configured deploy dir, and
+    # the launcher's default ~\.exasol\personal\deployments when the kit's
+    # deployment is elsewhere. The launcher cache is shared by all of them.
+    $self = [System.IO.Path]::GetFullPath($script:PersonalDeployDir).TrimEnd('\', '/')
+    $dirs = @()
+    $parent = Split-Path -Parent $script:PersonalDeployDir
+    if ($parent) { $dirs += [System.IO.Path]::GetFullPath($parent).TrimEnd('\', '/') }
+    $homeDir = Get-ExakitProfileHome
+    if ($homeDir) {
+        $default = [System.IO.Path]::GetFullPath((Join-Path $homeDir ".exasol\personal\deployments")).TrimEnd('\', '/')
+        if ($dirs -notcontains $default) { $dirs += $default }
+    }
+    $others = @()
+    foreach ($d in $dirs) {
+        if (-not (Test-Path -LiteralPath $d -PathType Container)) { continue }
+        foreach ($e in @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue)) {
+            if ($e.FullName.TrimEnd('\', '/') -ne $self) { $others += $e.FullName }
+        }
+    }
+    return $others
+}
+
+# Get-PersonalPrunableStateDirs - the launcher's state directories
+# (deployments, personal, .exasol, bottom-up) that are empty once the kit's
+# deployment is gone. The same answer before the destroy (what a dry run
+# lists) and after it (what is removed). Twin of personal_prunable_state_dirs.
+function Get-PersonalPrunableStateDirs {
+    $out = @()
+    $child = [System.IO.Path]::GetFullPath($script:PersonalDeployDir).TrimEnd('\', '/')
+    $dir = Split-Path -Parent $child
+    foreach ($name in @("deployments", "personal", ".exasol")) {
+        if (-not $dir -or (Split-Path -Leaf $dir) -ne $name) { break }
+        $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        if (-not $item -or -not $item.PSIsContainer) { break }
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { break }
+        $foreign = $false
+        foreach ($e in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+            if ($e.FullName.TrimEnd('\', '/') -ne $child) { $foreign = $true; break }
+        }
+        if ($foreign) { break }
+        $out += $dir
+        $child = $dir
+        $dir = Split-Path -Parent $dir
+    }
+    return $out
+}
+
+# Get-PersonalLauncherLeftovers - what a full uninstall removes beside the
+# deployment: the launcher's download cache (Cache, with its size in
+# CacheSize) and the state directories that are empty once the deployment is
+# gone (Dirs, bottom-up). Nothing at all while another deployment shares them.
+function Get-PersonalLauncherLeftovers {
+    $plan = [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() }
+    # No deployment folder known: nothing proves which deployment is the
+    # kit's, so the shared cache and folders stay.
+    if (-not $script:PersonalDeployDir) { return $plan }
+    if (@(Get-PersonalOtherDeployments).Count -gt 0) { return $plan }
+    $cache = Get-PersonalLauncherCacheDir
+    if ($cache) {
+        $item = Get-Item -LiteralPath $cache -Force -ErrorAction SilentlyContinue
+        if ($item -and $item.PSIsContainer -and -not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            $plan.Cache = $cache
+            $bytes = 0
+            foreach ($f in @(Get-ChildItem -LiteralPath $cache -Recurse -Force -File -ErrorAction SilentlyContinue)) { $bytes += $f.Length }
+            if ($bytes -ge 1GB) { $plan.CacheSize = "{0:N1} GB" -f ($bytes / 1GB) }
+            else { $plan.CacheSize = "{0:N0} MB" -f ($bytes / 1MB) }
+        }
+    }
+    $plan.Dirs = @(Get-PersonalPrunableStateDirs)
+    return $plan
 }
 
 # Update-Personal - bring the kit-managed launcher to the advertised version and
@@ -2726,4 +2877,14 @@ function Update-Personal {
         }
         Info "Its next 'exakit stop' followed by 'exakit start' moves the containers onto the launcher's own deployment network, once."
     }
+}
+
+# Test-PersonalPortHeldByOwnRunner - twin of _personal_port_held_by_own_runner
+# in runtime-personal.sh. On Windows the database port belongs to the
+# engine's relay, not to a kit runner process, so ownership of the listener
+# cannot be proven from here: the answer is always "not proven". mcp-doctor's
+# stale-record check (Test-ExakitMcpDoctorFailedRecordAnswers) therefore keeps
+# its plain behaviour on Windows, and `exakit start` remains the repair.
+function Test-PersonalPortHeldByOwnRunner {
+    return $false
 }

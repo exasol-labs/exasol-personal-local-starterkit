@@ -87,6 +87,10 @@ exapump_expected_sha256() {
 # against when the release API cannot supply a digest for the requested version.
 exapump_pinned_sha256() {
     case "$1" in
+        exapump-0.14.0-linux-aarch64)  echo "f0c72d2defd4820843e2f9ef3da70c294d4cbd31604457687ef74f0cdadaa7d1" ;;
+        exapump-0.14.0-linux-x86_64)   echo "56644fed9ab18631cf3163257c6f207deb03c5df76d7dc376ad8df3a6489e08b" ;;
+        exapump-0.14.0-macos-aarch64)  echo "36e9cfd328bf39b02d16226c1a277b97d41d90cc4367ec023758441e58018e40" ;;
+        exapump-0.14.0-macos-x86_64)   echo "d09f0b9cef7b81cfdf7ec87e14b5073d39ddb245d6a60c3ab339dad7bc90b785" ;;
         exapump-0.13.0-linux-aarch64)  echo "f23a955caf131f26833471dcac0e40e524b825e75277cdda68dfb157acb806bf" ;;
         exapump-0.13.0-linux-x86_64)   echo "69a5a9bc63aa07ff7b95d00b8786ec1c67c3dff6e7f3fbac5f09b110c8d288db" ;;
         exapump-0.13.0-macos-aarch64)  echo "819a3c0c7e024069c8e1ee76c931cf6ea3701e7335c72d97431b2e06d7234c71" ;;
@@ -3016,6 +3020,10 @@ _exakit_dataset_conf_get() {
 
 
 exakit_bundled_datasets() {
+    # --all: the hidden ones too. What the kit ever loaded is still the kit's
+    # data (an older install's TPC-H), so the legacy crossing's sample catalog
+    # and the flag reset ask with --all; every offer, list and load does not.
+    _bdr_all=0; [ "${1:-}" = --all ] && _bdr_all=1
     _bdr_root="$(exakit_repo_root 2>/dev/null)" || return 0
     for _bdr_conf in "$_bdr_root"/data/datasets/*/dataset.conf; do
         [ -f "$_bdr_conf" ] || continue
@@ -3028,7 +3036,7 @@ exakit_bundled_datasets() {
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
         # Not part of this release (hidden=yes): its folder stays, but it is not
         # offered, listed or loaded - asked for by name, it is an unknown id.
-        case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
+        [ "$_bdr_all" = 1 ] || case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         # A dataset that will be downloaded says how big the download is, in
         # every list that offers it ("... - 3.9 MB download").
         _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"

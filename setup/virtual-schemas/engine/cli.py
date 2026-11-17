@@ -424,6 +424,8 @@ def form_answer(args):
                            "secret": spec["kind"] in ("secret", "secret-file"),
                            # Said under the panel when it is asked; the question's own words; drafted when empty.
                            "hint": list(spec.get("hint", [])), "prompt": spec.get("prompt", ""),
+                           # A choice asked with the arrows: its question and a hint per choice.
+                           "question": spec.get("question", ""), "choice_hints": list(spec.get("choice_hints", [])),
                            "draft": connector.get("store", "bucket") if spec.get("draft") else ""})
             if spec.get("setting"):
                 fields[-1].update(setting=True, choice_labels=spec.get("choice_labels", []),

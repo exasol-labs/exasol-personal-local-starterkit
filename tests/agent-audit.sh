@@ -351,6 +351,11 @@ check "reports what it removed" "REMOVED 3" "$(exakit_remove_readonly_allowlist)
 check "the user's own rules and settings stay" "Bash(git status:*)|Bash(rm -rf:*)|dark" \
     "$(python3 -c 'import json; d=json.load(open("'"$HOME"'/.claude/settings.json")); print("|".join(d["permissions"]["allow"]+d["permissions"]["deny"]+[d["theme"]]))')"
 check "a second run removes nothing" "REMOVED 0" "$(exakit_remove_readonly_allowlist)"
+printf '%s\n' '{"permissions": {"allow": ["Bash(git status:*)", "Bash(exakit tls-pin --accept)"]}}' > "$HOME/.claude/settings.json"
+exakit_apply_readonly_allowlist >/dev/null
+exakit_remove_readonly_allowlist >/dev/null
+check "a round trip leaves only the user's own (tls-pin included)" "Bash(git status:*)|Bash(exakit tls-pin --accept)" \
+    "$(python3 -c 'import json; d=json.load(open("'"$HOME"'/.claude/settings.json")); print("|".join(d["permissions"]["allow"]+d["permissions"]["deny"]))')"
 has "the uninstall step calls it" "exakit_remove_readonly_allowlist" "$(sed -n '/^_exakit_remove_installed_skills()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 
 echo "R3-6. doctor repairs a repairable WARNING, and blames one file once:"

@@ -9,6 +9,22 @@
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# A harness that forgot to load or stub a function prints "command not found"
+# and carries on, so the suite passed while not running the code it names.
+# Run the suite once more as a child, keep its output, and fail on any such line.
+if [ -z "${EXAKIT_UNINSTALL_SH_INNER:-}" ]; then
+    _log="$(mktemp)"
+    EXAKIT_UNINSTALL_SH_INNER=1 bash "$0" "$@" 2>&1 | tee "$_log"
+    _rc="${PIPESTATUS[0]}"
+    if grep -q 'command not found' "$_log"; then
+        printf '  FAIL the suite printed "command not found" (a harness is missing a function):\n'
+        grep 'command not found' "$_log" | sed 's/^/    /'
+        rm -f "$_log"
+        exit 1
+    fi
+    rm -f "$_log"
+    exit "$_rc"
+fi
 PASS=0
 FAIL=0
 SANDBOX="$(mktemp -d)"
@@ -44,6 +60,17 @@ export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
 
 # --- stub the externals the engine calls ---------------------------------
 info(){ :; }; warn(){ :; }; ok(){ :; }; die(){ echo "die: $*" >&2; exit 1; }
+ok_step(){ :; }; info_step(){ :; }; ui_spin_end(){ :; }; _exakit_log_file(){ :; }
+ui_tilde(){ printf '%s' "$1"; }
+# The boot-entry sweep runs for real against sandbox folders; the service
+# managers it would call are stubbed, never the machine's.
+EXAKIT_LAUNCHAGENT_DIR="$HOME/Library/LaunchAgents"
+EXAKIT_SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+EXAKIT_AUTOSTART_PREFIX="com.exasol.exakit"
+launchctl(){ printf '%s\n' "$*" >> "$SANDBOX/marker_launchctl"; }
+systemctl(){ printf '%s\n' "$*" >> "$SANDBOX/marker_systemctl"; }
+exakit_service_ids(){ :; }
+_exakit_autostart_registered(){ return 1; }
 manifest_get(){
     case "$1" in
         runtime.type) echo personal ;;
@@ -67,6 +94,9 @@ exakit_marketplace_installed_addons(){ :; }
 # selectable uninstall menu).
 eval "$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 eval "$(awk '/^exakit_uninstall_run\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+for _fn in _exakit_uninstall_orphan_autostart _exakit_uninstall_teardown_warnings; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
 
 exakit_uninstall_run "$DRY"
 HARNESS
@@ -92,6 +122,10 @@ seed() { # (re)create the fake install artifacts
     : > "$SANDBOX/home/.exasol-starter-kit/manifest.json"
     # A bystander app must survive: exapump/kit removal must not touch it.
     : > "$SANDBOX/home/.local/bin/some-other-tool"
+    # A boot entry the kit owns that step 0a left behind, and one that is not.
+    mkdir -p "$SANDBOX/home/Library/LaunchAgents"
+    : > "$SANDBOX/home/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist"
+    : > "$SANDBOX/home/Library/LaunchAgents/com.example.other.plist"
     rm -f "$SANDBOX"/marker_*
 }
 
@@ -105,6 +139,7 @@ check "dry: kit home kept"        yes "$(exists "$H/.exasol-starter-kit")"
 check "dry: exasol bin kept"      yes "$(exists "$H/.local/bin/exasol")"
 check "dry: skill kept"           yes "$(exists "$H/.claude/skills/local-agent-ready-starter")"
 check "dry: no db teardown"       no  "$(exists "$SANDBOX/marker_personal")"
+check "dry: orphaned boot entry kept" yes "$(exists "$H/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist")"
 
 # --- real run: everything removed, teardown + mcp removal invoked ----------
 seed
@@ -139,6 +174,8 @@ check "real: skill B gone"        no  "$(exists "$H/.claude/skills/exasol-runtim
 # removes only what its own install recorded — never the whole folder.
 check "real: foreign skill kept"  yes "$(exists "$H/.claude/skills/somebody-elses-skill")"
 check "real: bystander kept"      yes "$(exists "$H/.local/bin/some-other-tool")"
+check "real: orphaned boot entry removed" no "$(exists "$H/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist")"
+check "real: another app's boot entry kept" yes "$(exists "$H/Library/LaunchAgents/com.example.other.plist")"
 
 # --- idempotent: a second real run on the now-empty tree must not error ----
 run_engine 0; check "idempotent second run" 0 "$?"
@@ -232,6 +269,278 @@ check "a directory of hidden files is refused" "REFUSE" "$(_guard "$G/hidden-onl
 check "a relative EXAKIT_HOME is refused"      "REFUSE" "$(_guard "relative/kit")"
 check "the filesystem root is refused"         "REFUSE" "$(_guard "/")"
 check "the home directory itself is refused"   "REFUSE" "$(_guard "$SANDBOX/guard-home")"
+
+# --- the permission rules: every one the kit ever wrote, and only those ----
+# THE BUG: --dry-run promised "the exakit permission rules" would go, and a
+# real run left Bash(exakit mcp-validate:*) in all three spellings behind:
+# the removal knew only the CURRENT rule set, and mcp-validate (merged into
+# mcp-doctor) was written by earlier kits.
+echo
+echo "uninstall removes every permission rule the kit wrote, and no other:"
+_rules() { # _rules -> the allow+deny lists after the removal, one per line
+    SANDBOX="$SANDBOX" ROOT="$ROOT" bash <<'RULES'
+set -u
+HOME="$SANDBOX/rules-home"; export HOME
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/settings.json" <<'JSON'
+{
+  "model": "keep-me",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(exakit mcp-validate:*)",
+      "Bash(~/.local/bin/exakit mcp-validate:*)",
+      "Bash($HOME/.local/bin/exakit mcp-validate:*)",
+      "Bash(exakit update-check:*)",
+      "Bash(exakit status:*)",
+      "Bash(~/.local/bin/exakit skills --json)",
+      "mcp__exasol",
+      "Bash(exakit-other mcp-validate:*)"
+    ],
+    "deny": ["Bash(rm -rf:*)", "Bash($HOME/.local/bin/exakit uninstall:*)"]
+  }
+}
+JSON
+exakit_can_run_python(){ return 0; }
+run_python(){ python3 "$@"; }
+eval "$(awk '/^exakit_remove_readonly_allowlist\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+exakit_remove_readonly_allowlist
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("model="+d["model"]); [print(r) for r in d["permissions"]["allow"]+d["permissions"]["deny"]]' "$HOME/.claude/settings.json"
+RULES
+}
+_r="$(_rules 2>&1)"
+check "the removal counts all eight kit rules" "1" "$(printf '%s\n' "$_r" | grep -cx 'REMOVED 8')"
+for _gone in "Bash(exakit mcp-validate:*)" "Bash(~/.local/bin/exakit mcp-validate:*)" \
+             "Bash(\$HOME/.local/bin/exakit mcp-validate:*)" "Bash(exakit update-check:*)"; do
+    check "legacy rule removed: $_gone" "0" "$(printf '%s\n' "$_r" | grep -cxF "$_gone")"
+done
+for _kept in "Bash(git status:*)" "Bash(rm -rf:*)" "Bash(exakit-other mcp-validate:*)" "model=keep-me"; do
+    check "user entry kept: $_kept" "1" "$(printf '%s\n' "$_r" | grep -cxF "$_kept")"
+done
+
+# --- MCP servers the open AI clients still run for the kit -----------------
+# THE BUG: Claude Desktop / Claude Code kept their exasol-mcp-server running,
+# pointed at the database uninstall had just deleted. Only a process PROVEN to
+# be the kit's may be stopped: its environment carries the kit's MCP user and
+# a loopback DSN. A second exasol-mcp-server (someone else's) must survive.
+# ps is a stub on PATH and the stop is recorded, never sent; the pids are above
+# the kernel's pid_max, so no real /proc entry can answer for them.
+echo
+echo "uninstall stops only the kit's own exasol-mcp-server processes:"
+mkdir -p "$SANDBOX/psbin"
+cat > "$SANDBOX/psbin/ps" <<'PS'
+#!/bin/sh
+case "$*" in
+    "-axww -o pid=,command=")
+        printf '%s\n' "  101 /Applications/Claude.app/Contents/MacOS/Claude" \
+            "4999991 /Users/u/.local/bin/uvx exasol-mcp-server@1.2.0" \
+            "4999992 /opt/other/uvx exasol-mcp-server@1.2.0" \
+            "4999993 grep exasol-mcp-server" \
+            "4999996 /tmp/uvx exasol-mcp-server EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563" \
+            "4999997 /tmp/uvx exasol-mcp-server@1.2.0" \
+            "4999998 /tmp/uvx exasol-mcp-server@1.2.0" \
+            "4999999 /tmp/uvx exasol-mcp-server@1.2.0" ;;
+    # The plain command line (`ps -o command=`): what `ps -E` prints first.
+    "-ww -o command= -p 4999991") printf '%s\n' "/Users/u/.local/bin/uvx exasol-mcp-server@1.2.0" ;;
+    "-ww -o command= -p 4999992") printf '%s\n' "/opt/other/uvx exasol-mcp-server@1.2.0" ;;
+    "-ww -o command= -p 4999993") printf '%s\n' "grep exasol-mcp-server" ;;
+    # The kit's MCP user, but another port (a second deployment) or a remote DSN.
+    "-ww -o command= -p 4999997"|"-ww -o command= -p 4999998"|"-ww -o command= -p 4999999") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0" ;;
+    *"-p 4999997") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:9563 EXA_USER=mcp_readonly" ;;
+    *"-p 4999998") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=db.example.com:8563 EXA_USER=mcp_readonly" ;;
+    # The right DSN, but another database user.
+    *"-p 4999999") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:8563 EXA_USER=sys" ;;
+    *"-p 4999991") printf '%s\n' "/Users/u/.local/bin/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:8563 EXA_USER=mcp_readonly EXA_PASSWORD=x" ;;
+    *"-p 4999992") printf '%s\n' "/opt/other/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=db.example.com:8563 EXA_USER=analyst" ;;
+    *"-p 4999993") printf '%s\n' "grep exasol-mcp-server PATH=/bin" ;;
+    # The kit's user and DSN in the ARGUMENTS, not in the environment.
+    "-E -ww -o command= -p 4999996") printf '%s\n' "/tmp/uvx exasol-mcp-server EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563 PATH=/bin" ;;
+    "-ww -o command= -p 4999996") printf '%s\n' "/tmp/uvx exasol-mcp-server EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563" ;;
+esac
+PS
+chmod +x "$SANDBOX/psbin/ps"
+_procs() { # _procs <dry> -> what the helper said, then the recorded stops
+    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" bash <<'PROCS'
+set -u
+PATH="$SANDBOX/psbin:$PATH"
+info(){ printf 'INFO %s\n' "$*"; }; ok_step(){ printf 'OK %s\n' "$*"; }
+for _fn in _exakit_kit_mcp_server_pids _exakit_stop_pid _exakit_uninstall_mcp_processes; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
+_exakit_stop_pid(){ printf 'KILL %s\n' "$1"; }
+_exakit_uninstall_mcp_processes "$DRY" "${PORT-8563}"
+PROCS
+}
+_p="$(_procs 1 2>&1)"
+check "dry run names the kit's one process" "1" "$(printf '%s\n' "$_p" | grep -cxF 'INFO   will stop: 1 exasol-mcp-server processes (pids 4999991)')"
+check "dry run stops nothing" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_p="$(_procs 0 2>&1)"
+check "real run stops the kit's process" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999991')"
+check "the kit's user and DSN in the arguments only: not matched" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999996')"
+check "the kit's user on another port: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999997')"
+check "the kit's user with a remote DSN: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999998')"
+check "the right DSN with another user: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999999')"
+check "and only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991')"
+# The Linux branch: /proc/<pid>/environ, NUL-separated, read from a fake proc
+# root. The arguments there carry nothing; only the environment counts, and a
+# process whose environ is the kit's is stopped even when ps -E would say no.
+mkdir -p "$SANDBOX/proc/4999992" "$SANDBOX/proc/4999996" "$SANDBOX/proc/4999991"
+printf 'PATH=/bin\0EXA_DSN=127.0.0.1:8563\0EXA_USER=mcp_readonly\0' > "$SANDBOX/proc/4999992/environ"
+printf 'PATH=/bin\0' > "$SANDBOX/proc/4999996/environ"
+printf 'PATH=/bin\0EXA_DSN=127.0.0.1:8563\0EXA_USER=analyst\0' > "$SANDBOX/proc/4999991/environ"
+_p="$(EXAKIT_PROC_ROOT="$SANDBOX/proc" _procs 0 2>&1)"
+check "/proc: the environ with the kit's user and DSN is stopped" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999992')"
+check "/proc: arguments only, environ without them: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999996')"
+check "/proc: environ wins over ps -E (another user there)" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999991')"
+check "/proc: only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+# And the real /proc on Linux: a real child carrying the kit's environment,
+# found by the real ps. The stop is still only recorded. Skipped elsewhere.
+if [ "$(uname -s)" = Linux ] && [ -r /proc/self/environ ]; then
+    printf '#!/bin/sh\nsleep 30\n' > "$SANDBOX/exasol-mcp-server"
+    chmod +x "$SANDBOX/exasol-mcp-server"
+    env EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563 "$SANDBOX/exasol-mcp-server" &
+    _real_pid=$!
+    sleep 0.5
+    _p="$(SANDBOX="$SANDBOX" ROOT="$ROOT" bash <<'REAL'
+set -u
+info(){ :; }; ok_step(){ :; }
+for _fn in _exakit_kit_mcp_server_pids _exakit_stop_pid _exakit_uninstall_mcp_processes; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
+_exakit_stop_pid(){ printf 'KILL %s\n' "$1"; }
+_exakit_uninstall_mcp_processes 0 8563
+REAL
+)"
+    check "real /proc: the child with the kit's environment is found" "1" "$(printf '%s\n' "$_p" | grep -cx "KILL $_real_pid")"
+    pkill -P "$_real_pid" 2>/dev/null; kill "$_real_pid" 2>/dev/null; wait "$_real_pid" 2>/dev/null
+else
+    echo "  (not Linux: the real /proc check is skipped)"
+fi
+_p="$(PORT=9999 _procs 0 2>&1)"
+check "another port than the deployment's: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_p="$(PORT= _procs 0 2>&1)"
+check "no known port: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+# QAT-R2-01: the port guard itself - empty and non-numeric match nothing.
+_p="$(PORT=85x3 _procs 0 2>&1)"
+check "a non-numeric port: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_kpids() { # _kpids <port> -> the pids _exakit_kit_mcp_server_pids prints
+    SANDBOX="$SANDBOX" ROOT="$ROOT" KP="$1" bash <<'KP'
+set -u
+PATH="$SANDBOX/psbin:$PATH"
+eval "$(awk '/^_exakit_kit_mcp_server_pids\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+_exakit_kit_mcp_server_pids "$KP"
+KP
+}
+check "the pid lookup with the deployment's port finds the kit's one" "4999991" "$(_kpids 8563 | tr '\n' ' ' | sed 's/ $//')"
+check "the pid lookup with an empty port: nothing" "" "$(_kpids "")"
+check "the pid lookup with port 85x3: nothing" "" "$(_kpids 85x3)"
+# MAC-R2-02: the port comes ONLY from deployment.json - no 8563 fallback.
+_rport() { # _rport <deploy-dir>
+    ROOT="$ROOT" D="$1" bash <<'RP'
+set -u
+eval "$(awk '/^_exakit_uninstall_recorded_db_port\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+_exakit_uninstall_recorded_db_port "$D"
+RP
+}
+mkdir -p "$SANDBOX/rp/none" "$SANDBOX/rp/num" "$SANDBOX/rp/bad"
+printf '{"deploymentId": "x", "dbPort": 9563}\n' > "$SANDBOX/rp/num/deployment.json"
+printf '{"deploymentId": "x", "dbPort": "auto"}\n' > "$SANDBOX/rp/bad/deployment.json"
+check "deploy dir with deployment.json: its dbPort" "9563" "$(_rport "$SANDBOX/rp/num")"
+check "deploy dir without deployment.json: no port (no stop)" "" "$(_rport "$SANDBOX/rp/none")"
+check "deployment.json without a numeric dbPort: no port" "" "$(_rport "$SANDBOX/rp/bad")"
+check "no deploy dir: no port" "" "$(_rport "")"
+_p="$(PORT="$(_rport "$SANDBOX/rp/none")" _procs 0 2>&1)"
+check "deploy dir without deployment.json: no MCP process stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+check "the engine takes the port only from deployment.json" "1" "$(grep -c '_un_mcp_port="$(_exakit_uninstall_recorded_db_port "$EXAKIT_PERSONAL_DEPLOY_DIR")"' "$ROOT/setup/lib/common.sh")"
+check "...never through personal_db_port's fallback" "0" "$(grep -c '_un_mcp_port="$(personal_db_port' "$ROOT/setup/lib/common.sh")"
+
+# --- the closing hints: restart the clients, and uv's cache ----------------
+echo
+echo "uninstall ends with the restart advice and the uv cache hint:"
+_hints() { # _hints <PATH> [dry]
+    SANDBOX="$SANDBOX" ROOT="$ROOT" P="$1" D="${2:-0}" bash <<'HINTS'
+set -u
+HOME="$SANDBOX/hint-home"; EXAKIT_BIN_DIR="$HOME/.local/bin"
+mkdir -p "$EXAKIT_BIN_DIR"; printf '#!/bin/sh\n' > "$EXAKIT_BIN_DIR/uv"; chmod +x "$EXAKIT_BIN_DIR/uv"
+info(){ printf 'INFO %s\n' "$*"; }
+eval "$(awk '/^_exakit_uninstall_closing_hints\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+PATH="$P"
+_exakit_uninstall_closing_hints "$D"
+HINTS
+}
+_h="$(_hints "/usr/bin:/bin" 2>&1)"
+check "the restart advice is printed" "1" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI client that was open')"
+check "uv not on PATH: the kit's uv is named" "1" "$(printf '%s\n' "$_h" | grep -cF "$SANDBOX/hint-home/.local/bin/uv cache clean exasol-mcp-server")"
+mkdir -p "$SANDBOX/uvbin"; printf '#!/bin/sh\n' > "$SANDBOX/uvbin/uv"; chmod +x "$SANDBOX/uvbin/uv"
+_h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 2>&1)"
+check "uv on PATH: the bare command" "1" "$(printf '%s\n' "$_h" | grep -cF 'with: uv cache clean exasol-mcp-server')"
+# A dry run says nothing: --yes runs the plan first, so hints there printed twice.
+_h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 1 2>&1)"
+check "dry run: no hints" "0" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI client\|cache clean exasol-mcp-server')"
+# Wired into the engine, after the spinner, on both sides.
+check "the engine prints the hints (dry-aware)" "1" "$(grep -c '_exakit_uninstall_closing_hints "\$_dry"$' "$ROOT/setup/lib/common.sh")"
+check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry" "\$_un_mcp_port"$' "$ROOT/setup/lib/common.sh")"
+check "...only when the run found a deployment" "1" "$(grep -c 'if \[ "\$_un_had_deploy" = 1 \] && command -v _exakit_uninstall_mcp_processes' "$ROOT/setup/lib/common.sh")"
+
+# --- the leftover remedy survives a quote in the path ----------------------
+echo
+echo "the rm -rf remedy quotes a path that holds a single quote:"
+_qdir="$SANDBOX/it's deploy"
+mkdir -p "$_qdir/sub"
+_r="$(SANDBOX="$SANDBOX" ROOT="$ROOT" Q="$_qdir" bash <<'QUOTE'
+set -u
+HOME="$SANDBOX/q-home"; EXAKIT_BIN_DIR="$HOME/.local/bin"; EXAKIT_HOME="$HOME/.exasol-starter-kit"
+info(){ :; }; warn(){ :; }; error(){ :; }; ok(){ :; }; die(){ exit 1; }
+manifest_get(){ :; }; manifest_set(){ :; }; manifest_del(){ :; }
+detect_os(){ printf macos; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$Q"
+source "$ROOT/setup/lib/runtime-personal.sh"
+lsof(){ return 0; }
+personal_teardown_leftovers "" 1 || :
+printf '%s' "$EXAKIT_TEARDOWN_REMEDY"
+QUOTE
+)"
+check "remedy escapes the quote" "rm -rf '$SANDBOX/it'\\''s deploy'" "$_r"
+eval "$_r"
+check "and pasted, it removes exactly that directory" "0" "$([ -e "$_qdir" ] && echo 1 || echo 0)"
+# The no-runtime branch in the engine builds the same remedy the same way.
+check "engine no-runtime remedy escapes quotes too" "1" "$(grep -c "EXAKIT_TEARDOWN_REMEDY=\"rm -rf '\$(printf '%s' \"\$_un_dd\" | sed \"s/'/'\\\\\\\\\\\\\\\\''/g\")'\"" "$ROOT/setup/lib/common.sh")"
+
+# --- an add-on's removed paths never reach the terminal --------------------
+# The add-on modules answer with the paths they removed, one per line on
+# stdout. Passed straight through, a real `exakit uninstall` printed them as
+# bare absolute paths: in the plan and again spliced into the spinner line.
+echo
+echo "an add-on uninstall keeps its paths off the screen (real run) and lists them (dry run):"
+_addon_paths() { # _addon_paths <dry 0|1> <rc>
+    SANDBOX="$SANDBOX" ROOT="$ROOT" D="$1" RC="$2" bash <<'ADDON'
+set -u
+HOME="$SANDBOX/addon-home"; export HOME
+EXAKIT_HOME="$HOME/.exasol-starter-kit"; EXAKIT_BIN_DIR="$HOME/.local/bin"
+export EXAKIT_HOME EXAKIT_BIN_DIR
+mkdir -p "$EXAKIT_HOME/logs"
+. "$ROOT/setup/lib/common.sh"
+EXAKIT_LOG_FILE="$EXAKIT_HOME/logs/addon.log"
+_exakit_marketplace_root() { printf '%s\n' "$ROOT"; }
+_exakit_marketplace_run_python() {
+    printf '%s\n' "$EXAKIT_HOME/dash-server-venv" "$EXAKIT_BIN_DIR/dash-server"
+    return "$RC"
+}
+_exakit_marketplace_python dash-server uninstall "$D"
+echo "RC=$?"
+echo "LOG:$(cat "$EXAKIT_LOG_FILE" 2>/dev/null | tr '\n' '|')"
+ADDON
+}
+_o="$(_addon_paths 0 0 2>&1)"
+check "real: no bare path line on screen" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
+check "real: the paths go to the log" "1" "$(printf '%s\n' "$_o" | grep '^LOG:' | grep -c 'dash-server-venv')"
+check "real: the module's answer is kept" "RC=0" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 0 3 2>&1)"
+check "real: a failing module still answers its code" "RC=3" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 1 0 2>&1)"
+check "dry: each path is a plan line" "1" "$(printf '%s\n' "$_o" | grep -v '^LOG:' | grep -c 'will remove: ~/.exasol-starter-kit/dash-server-venv')"
+check "dry: no bare path line" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

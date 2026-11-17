@@ -28,6 +28,14 @@
     "From 0.2.2, run exakit update twice; then once is usually enough.",
     "exakit connect: query PostgreSQL, MySQL, SQL Server, Oracle live."
   ],
+  "0.2.5": [
+    "macOS: install works with stock LibreSSL and recovers a failed boot.",
+    "Uninstall also removes the kit's cache, empty folders, autostart,",
+    "the kit's Docker/Podman image and old permission rules.",
+    "Uninstall now says plainly when something stays, and why.",
+    "Windows: mcp-doctor and mcp-setup work from AI agent shells.",
+    "Windows: leftover launchers clean themselves up after uninstall."
+  ],
   "0.2.4": [
     "Exasol Personal 2.4: Linux/Windows installs use Docker if running.",
     "Podman on WSL or Windows: if exakit start fails, run wsl --update",

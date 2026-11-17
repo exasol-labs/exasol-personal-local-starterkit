@@ -268,6 +268,7 @@ un_out="$(common_sh '
 manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; runtime.ownership) printf "kit\n" ;; *) return 1 ;; esac; }
 personal_teardown() { return 0; }
 exakit_mcp_operation() { return 0; }
+_exakit_uninstall_mcp_processes() { return 0; }   # never the real process table
 : > "$EXAKIT_BIN_DIR/exakit"
 EXAKIT_QUIET_DETAIL=1
 exakit_uninstall_run 0
@@ -283,7 +284,7 @@ done <<'EOF'
 the database it removed|Database removed
 the kit home it removed|Kit home removed
 the AI clients it edited|MCP entry removed
-that the lines on screen are the only record|whole record of this uninstall
+the commands it removed|Commands removed
 EOF
 
 # The PowerShell twin carries the identical fault, and carried the identical

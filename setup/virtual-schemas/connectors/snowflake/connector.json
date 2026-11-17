@@ -61,7 +61,7 @@
     },
     {
       "name": "user",
-      "label": "Reader account",
+      "label": "Username",
       "kind": "text",
       "required": true
     },

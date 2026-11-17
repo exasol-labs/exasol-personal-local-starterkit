@@ -1,6 +1,6 @@
 ---
 name: exasol-vs-mongodb
-description: Connect one MongoDB collection (Atlas or self-hosted) to local Exasol as tables with exakit connect mongodb. Covers the inputs to collect (a URI without the password, database, collection, a reader account) and where each is in Atlas, a read-only database user, the Atlas project IP access list that must hold this computer's public IP, the unattended connect line, how documents become a root table and child tables, quoting MongoDB's names in the bash and PowerShell forms, and the MongoDB-specific failures. Connector id mongodb, aliases mongo, atlas and mongodb-atlas, tier GA. Triggers — "connect MongoDB", "query a MongoDB collection from Exasol", "MongoDB Atlas", "connect Atlas to Exasol", "exakit connect mongodb", "error while reading collection metadata".
+description: Connect one MongoDB collection (Atlas or self-hosted) to local Exasol as tables with exakit connect mongodb. Covers the inputs to collect (a URI without the password, database, collection, a read-only username) and where each is in Atlas, a read-only database user, the Atlas project IP access list that must hold this computer's public IP, the unattended connect line, how documents become a root table and child tables, quoting MongoDB's names in the bash and PowerShell forms, and the MongoDB-specific failures. Connector id mongodb, aliases mongo, atlas and mongodb-atlas, tier GA. Triggers — "connect MongoDB", "query a MongoDB collection from Exasol", "MongoDB Atlas", "connect Atlas to Exasol", "exakit connect mongodb", "error while reading collection metadata".
 ---
 
 # MongoDB → local Exasol
@@ -26,7 +26,7 @@ container. Tier GA.
 | `uri` | yes | | Atlas > Database > Clusters > Connect > Drivers: the `mongodb+srv://` string (a `user:password@` in it is taken out: user and password); self-hosted `mongodb://host:27017/?...` |
 | `database` | yes | | Atlas > Database > Browse Collections, or `listDatabases` below |
 | `collection` | yes | | the same view: the one collection to expose |
-| `user` | yes | | Atlas > Security > Database Access: the reader account |
+| `user` | yes | | Atlas > Security > Database Access: the read-only user |
 | `password` | yes | | its password - only through `--password-file` or a closed stdin pipe |
 
 The first question, "Name (alias) for this connection", is the source name

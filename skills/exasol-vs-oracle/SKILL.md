@@ -1,6 +1,6 @@
 ---
 name: exasol-vs-oracle
-description: Connect an Oracle database to local Exasol as a virtual schema with exakit connect oracle. Covers the inputs (service name, schema owner) and where each is in the AWS console or SQLcl, the connection-string forms, a read-only reader account, allowing this computer's public IP, TCPS on port 2484 and the CA PEM that tls=verify always needs on Exasol Personal 2.4, SIDs and TNS descriptors, the unattended connect line, and the ORA- errors that matter. Connector id oracle, aliases oracle-db and ora, tier GA. Triggers — "connect Oracle to Exasol", "query Oracle from Exasol", "query RDS Oracle from Exasol", "Oracle TCPS from exakit", "Oracle service name for exakit", "exakit connect oracle", "ORA-01017 from exakit".
+description: Connect an Oracle database to local Exasol as a virtual schema with exakit connect oracle. Covers the inputs (service name, schema owner) and where each is in the AWS console or SQLcl, the connection-string forms, a read-only user, allowing this computer's public IP, TCPS on port 2484 and the CA PEM that tls=verify always needs on Exasol Personal 2.4, SIDs and TNS descriptors, the unattended connect line, and the ORA- errors that matter. Connector id oracle, aliases oracle-db and ora, tier GA. Triggers — "connect Oracle to Exasol", "query Oracle from Exasol", "query RDS Oracle from Exasol", "Oracle TCPS from exakit", "Oracle service name for exakit", "exakit connect oracle", "ORA-01017 from exakit".
 ---
 
 # Oracle → local Exasol
@@ -28,7 +28,7 @@ e.g. `hr`): the tables appear as `VS_HR`.
 | `port` | no | 1521 | the listener port; TCPS is often 2484 (RDS: the SSL option in the instance's option group) |
 | `service` | yes | | the service name, not a SID: `SELECT sys_context('USERENV','SERVICE_NAME') FROM dual` (RDS: Configuration > DB name) |
 | `schema` | yes | | the owner whose tables to expose, as Oracle stores it (upper case): `SELECT username FROM all_users` |
-| `user` | yes | | the reader account (section 4) |
+| `user` | yes | | the read-only user (section 4) |
 | `password` | yes | | its password - only through `--password-file` or `--password-stdin` |
 | `tls` | no | `verify` | `verify` (TCPS, certificate and host name checked) or `disable` (plain TCP); there is no `require` |
 | `ca` | no | | a PEM file or bundle of the CA that signs the listener - required in practice with `verify` (section 6) |

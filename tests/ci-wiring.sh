@@ -27,7 +27,7 @@ for path in "$ROOT"/tests/test_*.py "$ROOT"/tests/*.sh "$ROOT"/tests/*.ps1; do
 done
 if [ -n "$missing" ]; then
     echo "Tests no workflow runs:$missing"
-    echo "Add each to .github/workflows (versions.yml lists the suites by shard)."
+    echo "Add each to .github/workflows (versions.yml lists the suites by group)."
     exit 1
 fi
 echo "ci-wiring.sh: every test in tests/ is run by a workflow"

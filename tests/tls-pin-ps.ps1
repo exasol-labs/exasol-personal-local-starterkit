@@ -91,6 +91,11 @@ try {
     Check "the live fingerprint is the certificate's" $fp1 (Get-ExakitTlsLiveFingerprint -DbHost "127.0.0.1" -Port "$port1" -TimeoutSeconds 5)
     Check "a port that does not answer TLS gives nothing" "" (Get-ExakitTlsLiveFingerprint -DbHost "127.0.0.1" -Port "$closed" -TimeoutSeconds 2)
 
+    # The connection panel (exakit info, the end of the install) names the
+    # command that shows or makes the pin, from the manifest alone.
+    $panelText = (Show-ExakitConnectionPanel 6>&1 | Out-String)
+    Has "unpinned: the panel says so" "enabled (self-signed certificate) $($script:UiMidDot) not pinned" $panelText
+    Has "...and how to pin" "pin it: exakit tls-pin --accept" $panelText
     New-ExapumpProfile *> $null
     $toml = Get-Content $script:ExapumpConfigPath -Raw
     Lacks "an unpinned exapump profile has no certificate_fingerprint" "certificate_fingerprint" $toml
@@ -98,6 +103,18 @@ try {
 
     Check "first use records the live certificate" $true (Register-ExakitTlsPin)
     Check "...the recorded value" $fp1 (Get-ExakitManifestValue "runtime.tls_fingerprint")
+    $panelText = (Show-ExakitConnectionPanel 6>&1 | Out-String)
+    Has "pinned: the panel says so" "enabled (self-signed certificate) $($script:UiMidDot) pinned" $panelText
+    Has "...and where the details are" "details: exakit tls-pin" $panelText
+    Lacks "...not the pin-it hint" "pin it:" $panelText
+    # The install's closing box: a Federation row where connect can run, before
+    # Everything, which stays the last row.
+    function Test-ExakitVsAvailable { return $true }
+    $summaryText = (Show-ExakitConnectionSummary 6>&1 | Out-String)
+    Has "closing box: the Federation row" "Federation    exakit connect  |  exakit source" $summaryText
+    Check "...before Everything, which stays the last row" $true (($summaryText.IndexOf("Federation") -ge 0) -and ($summaryText.IndexOf("Federation") -lt $summaryText.IndexOf("Everything")))
+    function Test-ExakitVsAvailable { return $false }
+    Lacks "...and none where connect cannot run" "Federation" (Show-ExakitConnectionSummary 6>&1 | Out-String)
     Check "...and when, as UTC ISO 8601 on 5.1 and pwsh alike" $true ((Get-ExakitTlsPinnedAt) -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
     Check "pinned: the DSN carries the pin (pyexasol form)" "127.0.0.1/${fp1}:$port1" (Get-ExakitPinnedDsn)
     Check "...for any DSN handed in" "127.0.0.1/${fp1}:9" (Get-ExakitPinnedDsn "127.0.0.1:9")
@@ -233,7 +250,8 @@ exit $script:PendingExitCode
     $j = Get-JsonPart (Invoke-Driver "tls-pin-json")
     Check "tls-pin --json: status, matches, both values, changed" "pinned True $fp1 $fp1 False" "$($j.status) $($j.matches) $($j.fingerprint) $($j.live) $($j.changed)"
     # Read off the raw text: this test's own ConvertFrom-Json (pwsh 7) would turn the timestamp into a [datetime].
-    Has "...recorded_at as written (UTC ISO 8601)" '"recorded_at": "2026-01-01T00:00:00Z"' $script:OUT
+    # Windows PowerShell 5.1's ConvertTo-Json puts two spaces after the colon; the value is what counts.
+    Check "...recorded_at as written (UTC ISO 8601)" "True" ([bool]($script:OUT -match '"recorded_at":\s+"2026-01-01T00:00:00Z"'))
     Write-ManifestDoc $port2 $fp1
     $o = Invoke-Driver "tls-pin"
     Check "tls-pin: a changed certificate exits 6" 6 $script:CODE
