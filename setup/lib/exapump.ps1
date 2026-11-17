@@ -4329,6 +4329,12 @@ function Show-ExakitDataLoadMenu {
         Info "Data loading cancelled."
         return
     }
+    # The check the menu did not wait for (exakit data-load): before any load.
+    # Twin of the same block in exakit_data_load_menu.
+    if ($script:ExakitRuntimeCheckDeferred) {
+        $script:ExakitRuntimeCheckDeferred = $false
+        Confirm-ExakitRuntimeRunning -Deploy
+    }
     # The table's order: the datasets, your own file, then the external source.
     # The file and the source are questions asked after the table, and the
     # shell twin (exakit_data_load_menu) asks them in this order too.

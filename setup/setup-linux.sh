@@ -171,6 +171,13 @@ kit_shared_steps 3 4 "$SCRIPT_DIR" "$KIT_ROOT"
 # EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
 EXAKIT_MARKETPLACE_PYTHON_APPLY=1
 export EXAKIT_MARKETPLACE_PYTHON_APPLY
+# Dash Server and JSON Tables start installing now, in the background, while the
+# data questions are on screen (exakit_addons_early_begin). Never in a rerun an
+# update started, which installs nothing new.
+if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; } && \
+   command -v exakit_addons_early_begin >/dev/null 2>&1; then
+    exakit_addons_early_begin || true
+fi
 # Not asked again by an installer an update started to finish new setup: the
 # personas and the data were the first install's question, and its answer stands.
 if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then

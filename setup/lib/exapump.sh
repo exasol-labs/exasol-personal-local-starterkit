@@ -3024,9 +3024,20 @@ exakit_bundled_datasets() {
     # data (an older install's TPC-H), so the legacy crossing's sample catalog
     # and the flag reset ask with --all; every offer, list and load does not.
     _bdr_all=0; [ "${1:-}" = --all ] && _bdr_all=1
+    # Read once per run where the caller kept the answer (exakit data-load): the
+    # confs do not change under a running command.
+    if [ "$_bdr_all" = 0 ] && [ -n "${EXAKIT_BUNDLED_DATASETS_MEMO:-}" ]; then
+        printf '%s\n' "$EXAKIT_BUNDLED_DATASETS_MEMO"
+        return 0
+    fi
     _bdr_root="$(exakit_repo_root 2>/dev/null)" || return 0
     for _bdr_conf in "$_bdr_root"/data/datasets/*/dataset.conf; do
         [ -f "$_bdr_conf" ] || continue
+        # Not part of this release (hidden=yes): its folder stays, but it is not
+        # offered, listed or loaded - asked for by name, it is an unknown id.
+        # Asked FIRST: five of seven are hidden, and reading six more fields of
+        # each was most of what this function cost.
+        [ "$_bdr_all" = 1 ] || case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         _bdr_id="$(_exakit_dataset_conf_get id "$_bdr_conf")"
         _bdr_label="$(_exakit_dataset_conf_get label "$_bdr_conf")"
         _bdr_markers="$(_exakit_dataset_conf_get markers "$_bdr_conf")"
@@ -3034,9 +3045,6 @@ exakit_bundled_datasets() {
         _bdr_order="$(_exakit_dataset_conf_get order "$_bdr_conf")"
         _bdr_schema="$(_exakit_dataset_conf_get schema "$_bdr_conf")"
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
-        # Not part of this release (hidden=yes): its folder stays, but it is not
-        # offered, listed or loaded - asked for by name, it is an unknown id.
-        [ "$_bdr_all" = 1 ] || case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         # A dataset that will be downloaded says how big the download is, in
         # every list that offers it ("... - 3.9 MB download").
         _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"
@@ -4390,6 +4398,11 @@ exakit_data_load_menu() {
     if [ "$EXAKIT_DATA_LOAD_SELECTION" = "none" ]; then
         info "Data loading cancelled."
         return 0
+    fi
+    # The check the menu did not wait for (exakit data-load): before any load.
+    if [ "${EXAKIT_RUNTIME_CHECK_DEFERRED:-0}" = 1 ]; then
+        EXAKIT_RUNTIME_CHECK_DEFERRED=0
+        exakit_ensure_runtime_running deploy
     fi
     # The same table the selection was made in now becomes the progress display:
     # the rows do not move, so nobody has to map one screen onto another. It
