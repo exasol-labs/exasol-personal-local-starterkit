@@ -1,7 +1,20 @@
-# Snowflake
+# Snowflake · Federation guide
+
+> **Federation** lets your local Exasol query Snowflake data in place, without copying it.
+> `exakit connect snowflake` makes it a virtual schema, `VS_<NAME>`, that you query with SQL.
 
 One schema of a Snowflake database, read with a programmatic access token
 (PAT). TLS is always on and needs no CA file.
+
+## At a glance
+
+| You need | Where to find it |
+|---|---|
+| Account identifier (`orgname-account`) | Snowsight account details ([step 1](#1-account-identifier)) |
+| Database, schema, warehouse | `SHOW DATABASES`, `SHOW WAREHOUSES` ([step 2](#2-database-schema-and-warehouse)) |
+| A read-only service user and role | SQL you run as SECURITYADMIN ([step 3](#3-a-read-only-user-and-role)) |
+| A network policy on that user | Required for a PAT sign-in ([step 4](#4-open-the-network-required-for-a-pat)) |
+| A programmatic access token, in a file | `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN` ([step 5](#5-the-programmatic-access-token)) |
 
 ## The simplest way: ask your AI agent
 
@@ -27,14 +40,14 @@ users, roles and network policies (SECURITYADMIN or higher).
 
 ### Required
 
-| Field | Example | Where it comes from |
-|---|---|---|
-| Name (alias) for this connection | `sf_sales` | You choose it. `sf_sales` gives the schema `VS_SF_SALES`. |
-| Account identifier (orgname-account) | `myorg-myaccount` | Snowsight account details ([step 1](#1-account-identifier)). |
-| Database | `SALES` | `SHOW DATABASES` ([step 2](#2-database-schema-and-warehouse)). |
-| Warehouse | `COMPUTE_WH` | `SHOW WAREHOUSES` ([step 2](#2-database-schema-and-warehouse)). |
-| Username | `EXAKIT_READER` | The service user you make ([step 3](#3-a-read-only-user-and-role)). |
-| Programmatic access token | (hidden) | The token you make for that user ([step 5](#5-the-programmatic-access-token)). |
+| Field | Example |
+|---|---|
+| Name (alias) for this connection | `sf_sales` (gives the schema `VS_SF_SALES`) |
+| Account identifier (orgname-account) | `myorg-myaccount` |
+| Database | `SALES` |
+| Warehouse | `COMPUTE_WH` |
+| Username | `EXAKIT_READER` |
+| Programmatic access token | (hidden) |
 
 ### Optional
 
@@ -45,46 +58,9 @@ users, roles and network policies (SECURITYADMIN or higher).
 
 The kit upper-cases database, schema and warehouse.
 
-## Connection string you can paste
-
-```text
-https://myorg-myaccount.snowflakecomputing.com
-jdbc:snowflake://myorg-myaccount.snowflakecomputing.com/?db=SALES&warehouse=COMPUTE_WH&schema=PUBLIC&role=EXAKIT_READER&user=EXAKIT_READER
-myorg-myaccount.snowflakecomputing.com
-```
-
-| String | Fills |
-|---|---|
-| `https://<account>.snowflakecomputing.com` | account |
-| `jdbc:snowflake://<account>.snowflakecomputing.com/?db=...&warehouse=...` | account, and database, schema, warehouse, role and user when given |
-| `<account>.snowflakecomputing.com` | account |
-
-The kit reads `db` (or `database`), `warehouse`, `schema`, `role` and `user`.
-A `token=` (or else `password=`) in the string is the programmatic access
-token: taken out of the string and not asked again.
-
-### Where to find the connection string
-
-You do not build it: copy the address Snowsight shows.
-
-- **Snowsight:** user menu → Connect a tool to Snowflake. The Account Details
-  dialog opens. Its **Connectors/Drivers** tab shows a connection string for
-  the driver you pick: pick JDBC.
-- **The account URL alone** (`https://<orgname>-<account>.snowflakecomputing.com`)
-  fills the account; type the rest at the field prompts.
-
-Leave the token out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
-
-### Where to find each part of the string
-
-| Part of the string | Where to find it |
-|---|---|
-| account (the host before `.snowflakecomputing.com`) | Snowsight account details, or `SELECT CURRENT_ORGANIZATION_NAME() \|\| '-' \|\| CURRENT_ACCOUNT_NAME();` ([step 1](#1-account-identifier)). |
-| `db`, `schema` | `SHOW DATABASES`, `SHOW SCHEMAS IN DATABASE <db>` ([step 2](#2-database-schema-and-warehouse)). |
-| `warehouse` | `SHOW WAREHOUSES` ([step 2](#2-database-schema-and-warehouse)). |
-| `role`, `user` | The read-only role and service user you make ([step 3](#3-a-read-only-user-and-role)). |
-
 ## Where to find each value
+
+Prepare the source in this order. Every step is a one-time setup.
 
 ### 1. Account identifier
 
@@ -134,10 +110,11 @@ CREATE NETWORK POLICY EXAKIT_READER_NP ALLOWED_IP_LIST = ('<your-ip>');
 ALTER USER EXAKIT_READER SET NETWORK_POLICY = EXAKIT_READER_NP;
 ```
 
-Snowsight: Admin → Security → Network Policies. If your account also has an
-account-level policy (`SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT`), it
-must allow your IP too. When your IP changes:
-`ALTER NETWORK POLICY EXAKIT_READER_NP SET ALLOWED_IP_LIST = ('<new-ip>');`
+- Snowsight: Admin → Security → Network Policies.
+- An account-level policy (`SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT`)
+  must allow your IP too.
+- When your IP changes:
+  `ALTER NETWORK POLICY EXAKIT_READER_NP SET ALLOWED_IP_LIST = ('<new-ip>');`
 
 ### 5. The programmatic access token
 
@@ -159,10 +136,14 @@ token.
 exakit connect snowflake
 ```
 
-The kit prints your public IP, asks for a connection string (hidden; press
-Enter on an empty line to type the fields instead), then each field above. It
-shows a plan and asks once. The first connect installs Java in the database
-(one restart). Your tables appear as `VS_SF_SALES`.
+1. The kit prints your public IP.
+2. It asks for a connection string (hidden). Press Enter on an empty line to
+   type the fields instead.
+3. It shows a plan, then connects.
+4. The first connect enables Federation: it installs Java in the database
+   (one restart).
+
+Your tables appear as `VS_SF_SALES`.
 
 Without prompts:
 
@@ -170,7 +151,6 @@ Without prompts:
 exakit connect snowflake --name sf_sales --set account=myorg-myaccount --set database=SALES \
   --set schema=PUBLIC --set warehouse=COMPUTE_WH --set role=EXAKIT_READER --set user=EXAKIT_READER \
   --password-file ~/.config/exakit/sf_sales.pat --yes
-exakit sql "SELECT * FROM VS_SF_SALES.CUSTOMER LIMIT 10"
 ```
 
 Add `--dry-run` to see the plan first.
@@ -180,12 +160,76 @@ a string that contains `&`. For a quoted name in `exakit sql`, pipe the
 statement in (`'SELECT "x" FROM VS_SF_SALES.T' | exakit sql`) or use
 `exakit sql --file query.sql`.
 
-## Common problems
+## Query
 
-| Symptom or error text | Fix |
+```bash
+exakit sql "SELECT * FROM VS_SF_SALES.CUSTOMER LIMIT 10"
+```
+
+```powershell
+'SELECT C_NAME FROM VS_SF_SALES.CUSTOMER LIMIT 10' | exakit sql
+```
+
+- Names arrive in upper case (`CUSTOMER`, `C_NAME`): no quotes needed.
+- `NUMBER(38,0)`, Snowflake's default for integer columns, is wider than
+  Exasol's `DECIMAL(36)`. Such a column reads as the text
+  "Number precision not supported": give the reader a view that casts it to
+  `NUMBER(36,0)`.
+
+## Troubleshooting
+
+| Error you see | Why | Fix |
+|---|---|---|
+| The sign-in is refused for this address | Your public IP is not in the network policy. | Add it to the user's policy (step 4), and to the account policy if there is one. |
+| "Programmatic access token is invalid", "token has expired" | The token is wrong or expired. | Make a new token (step 5), then `exakit source reauth sf_sales`. |
+| "Insufficient privileges to operate on", "does not exist or not authorized" | The role lacks USAGE or SELECT. | Run the grants in step 3. |
+| A column reads "Number precision not supported" | `NUMBER(38,0)` is wider than Exasol allows. | Give the reader a view that casts it to `NUMBER(36,0)`. |
+| Sign-in fails right after the computer slept | The database clock is behind. | `exakit stop`, then `exakit start`. |
+
+## Connection string you can paste
+
+Reference. The string is optional: at the prompt, press Enter alone and
+`exakit connect` asks for the fields one by one.
+
+```text
+https://myorg-myaccount.snowflakecomputing.com
+jdbc:snowflake://myorg-myaccount.snowflakecomputing.com/?db=SALES&warehouse=COMPUTE_WH&schema=PUBLIC&role=EXAKIT_READER&user=EXAKIT_READER
+myorg-myaccount.snowflakecomputing.com
+```
+
+| String | Fills |
 |---|---|
-| The sign-in is refused for this address | Add your public IP to the user's network policy (step 4), and to the account policy if there is one. |
-| "Programmatic access token is invalid", "token has expired" | Make a new token (step 5), then `exakit source reauth sf_sales`. |
-| "Insufficient privileges to operate on", "does not exist or not authorized" | The role lacks USAGE or SELECT: run the grants in step 3. |
-| A column reads "Number precision not supported" | `NUMBER(38,0)` is wider than Exasol allows: give the reader a view that casts it to `NUMBER(36,0)`. |
-| Sign-in fails right after the computer slept | The database clock is behind: `exakit stop`, then `exakit start`. |
+| `https://<account>.snowflakecomputing.com` | account |
+| `jdbc:snowflake://<account>.snowflakecomputing.com/?db=...&warehouse=...` | account, and database, schema, warehouse, role and user when given |
+| `<account>.snowflakecomputing.com` | account |
+
+The kit reads `db` (or `database`), `warehouse`, `schema`, `role` and `user`.
+A `token=` (or else `password=`) in the string is the programmatic access
+token: the kit takes it out of the string and does not ask again.
+
+Leave the token out of the string. The kit asks for it at a hidden prompt, or
+reads it from `--password-file`.
+
+### Where to find the connection string
+
+You do not build it: copy the address Snowsight shows.
+
+- **Snowsight:** user menu → Connect a tool to Snowflake. The Account Details
+  dialog opens. Its **Connectors/Drivers** tab shows a connection string for
+  the driver you pick: pick JDBC.
+- **The account URL alone** (`https://<orgname>-<account>.snowflakecomputing.com`)
+  fills the account; type the rest at the field prompts.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| account (the host before `.snowflakecomputing.com`) | Snowsight account details, or `SELECT CURRENT_ORGANIZATION_NAME() \|\| '-' \|\| CURRENT_ACCOUNT_NAME();` ([step 1](#1-account-identifier)). |
+| `db`, `schema` | `SHOW DATABASES`, `SHOW SCHEMAS IN DATABASE <db>` ([step 2](#2-database-schema-and-warehouse)). |
+| `warehouse` | `SHOW WAREHOUSES` ([step 2](#2-database-schema-and-warehouse)). |
+| `role`, `user` | The read-only role and service user you make ([step 3](#3-a-read-only-user-and-role)). |
+
+### `--set` keys
+
+`account`, `database`, `schema`, `warehouse`, `role`, `user`. Give the token
+with `--password-file` (or `--password-stdin`), never on the command line.

@@ -1,7 +1,19 @@
-# Google BigQuery
+# Google BigQuery · Federation guide
+
+> **Federation** lets your local Exasol query BigQuery data in place, without copying it.
+> `exakit connect bigquery` makes it a virtual schema, `VS_<NAME>`, that you query with SQL.
 
 One BigQuery dataset, read with a service-account key file. Meant for small
 results: rows come back through the adapter itself.
+
+## At a glance
+
+| You need | Where to find it |
+|---|---|
+| Project ID and dataset | The console's project picker; BigQuery → Studio → Explorer ([step 1](#1-project-id-and-dataset)) |
+| A read-only service account | IAM & Admin → Service Accounts ([step 2](#2-a-read-only-service-account)) |
+| Its key file (JSON), owner-only | Service account → Keys → Create new key ([step 3](#3-the-key-file)) |
+| Network | Nothing to open, unless a VPC Service Controls perimeter ([step 4](#4-network)) |
 
 ## The simplest way: ask your AI agent
 
@@ -27,12 +39,12 @@ who may create service accounts and grant roles.
 
 ### Required
 
-| Field | Example | Where it comes from |
-|---|---|---|
-| Name (alias) for this connection | `bq` | You choose it. `bq` gives the schema `VS_BQ`. |
-| Project ID | `my-project-123` | The console's project picker (the ID, not the name) ([step 1](#1-project-id-and-dataset)). |
-| Dataset | `sales` | BigQuery → Studio → Explorer ([step 1](#1-project-id-and-dataset)). |
-| Service-account key file (JSON) | `~/.config/exakit/bq-key.json` | The key of the service account you make ([step 3](#3-the-key-file)). |
+| Field | Example |
+|---|---|
+| Name (alias) for this connection | `bq` (gives the schema `VS_BQ`) |
+| Project ID | `my-project-123` (the ID, not the name) |
+| Dataset | `sales` |
+| Service-account key file (JSON) | `~/.config/exakit/bq-key.json` |
 
 ### Optional
 
@@ -40,40 +52,9 @@ who may create service accounts and grant roles.
 |---|---|---|
 | (none) | Every field is required. | |
 
-## Connection string you can paste
-
-```text
-jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project-123;DefaultDataset=sales
-jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;OAuthType=0;ProjectId=my-project-123;DefaultDataset=sales
-```
-
-| String | Fills |
-|---|---|
-| `jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=...;DefaultDataset=...` | project and dataset |
-
-The endpoint before the first `;` is not read, and `OAuthType` is dropped. The
-key file is still given separately.
-
-### Where to find the connection string
-
-There is none to copy: the Google Cloud console shows no connection string
-for BigQuery. You have two choices:
-
-- Press Enter alone at the prompt and type the project ID and the dataset.
-  This is the simpler way.
-- Or write the string from those two values:
-  `jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=<project-id>;DefaultDataset=<dataset>`.
-
-The key file is never part of the string. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
-
-### Where to find each part of the string
-
-| Part of the string | Where to find it |
-|---|---|
-| `ProjectId` | The console's project picker: the project **ID**, or `gcloud config get-value project` ([step 1](#1-project-id-and-dataset)). |
-| `DefaultDataset` | BigQuery → Studio → Explorer → `<project>`, or `bq ls --project_id <project>` ([step 1](#1-project-id-and-dataset)). |
-
 ## Where to find each value
+
+Prepare the source in this order. Every step is a one-time setup.
 
 ### 1. Project ID and dataset
 
@@ -92,11 +73,12 @@ The key file is never part of the string. The string is optional. At the prompt,
 It needs **BigQuery Job User** on the project and **BigQuery Data Viewer** on
 the dataset, nothing more.
 
-- **Console:** IAM & Admin → Service Accounts → Create service account
-  (`exakit-reader`). Then IAM & Admin → IAM → Grant access → the service
-  account → role BigQuery Job User. Then BigQuery → `<dataset>` → Share →
-  Manage permissions → Add principal → the service account → role BigQuery
-  Data Viewer.
+- **Console:**
+  1. IAM & Admin → Service Accounts → Create service account (`exakit-reader`).
+  2. IAM & Admin → IAM → Grant access → the service account → role BigQuery
+     Job User.
+  3. BigQuery → `<dataset>` → Share → Manage permissions → Add principal → the
+     service account → role BigQuery Data Viewer.
 - **CLI:**
   ```bash
   gcloud iam service-accounts create exakit-reader --project=<project>
@@ -138,31 +120,89 @@ create scripts can read it; on a fresh kit that is nobody but SYS, and
 exakit connect bigquery
 ```
 
-The kit asks for a connection string (hidden; press Enter on an empty line to
-type the fields instead), then each field above. It shows a plan and asks
-once. The first connect installs Java in the database (one restart). Your
-tables appear as `VS_BQ`.
+1. The kit asks for a connection string (hidden). Press Enter on an empty line
+   to type the fields instead.
+2. It shows a plan, then connects.
+3. The first connect enables Federation: it installs Java in the database
+   (one restart).
+
+Your tables appear as `VS_BQ`.
 
 Without prompts:
 
 ```bash
 exakit connect bigquery --name bq --set project=my-project-123 --set dataset=sales \
   --password-file ~/.config/exakit/bq-key.json --yes
-exakit sql 'SELECT "customer_id" FROM VS_BQ."orders" LIMIT 10'
 ```
 
-Names keep BigQuery's spelling: quote them. Add `--dry-run` to see the plan first.
+Add `--dry-run` to see the plan first.
 
 **Windows:** paste the connection string at the prompt rather than `--url`.
 Quoted names do not survive PowerShell 5.1 arguments: pipe the statement in
 (`'SELECT "customer_id" FROM VS_BQ."orders"' | exakit sql`) or use
 `exakit sql --file query.sql`.
 
-## Common problems
+## Query
 
-| Symptom or error text | Fix |
+Names keep BigQuery's spelling: quote them.
+
+```bash
+exakit sql 'SELECT "customer_id" FROM VS_BQ."orders" LIMIT 10'
+```
+
+```powershell
+'SELECT "customer_id" FROM VS_BQ."orders" LIMIT 10' | exakit sql
+```
+
+- `INT64` arrives as `DECIMAL(19,0)` and `FLOAT64` as `DOUBLE`.
+- An `ARRAY` or `STRUCT` column arrives as BigQuery's raw JSON text
+  (`{"v": ...}`).
+- Keep results small: the adapter returns the rows itself (upstream warns at a
+  few thousand rows).
+
+## Troubleshooting
+
+| Error you see | Why | Fix |
+|---|---|---|
+| "Error getting access token for service account: 400 Bad Request" | The sign-in is dated by the database clock, or the key was deleted or disabled. | If `exakit status` shows the clock behind: `exakit stop`, then `exakit start`. Otherwise make a new key (step 3). |
+| "PERMISSION_DENIED: Access Denied" | The service account lacks a role. | Grant Job User on the project and Data Viewer on the dataset (step 2). |
+| "the credential must be the service-account key file (JSON)" | `--password-file` names another file. | Name the JSON key file. |
+| "the key file is not a service-account key" | It is an OAuth client file. | Use the file from Keys → Create new key → JSON. |
+
+## Connection string you can paste
+
+Reference. The string is optional: at the prompt, press Enter alone and
+`exakit connect` asks for the fields one by one.
+
+```text
+jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project-123;DefaultDataset=sales
+jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;OAuthType=0;ProjectId=my-project-123;DefaultDataset=sales
+```
+
+| String | Fills |
 |---|---|
-| "Error getting access token for service account: 400 Bad Request" | The sign-in is dated by the database clock. If `exakit status` shows it behind: `exakit stop`, then `exakit start`. Otherwise the key was deleted or disabled. |
-| "PERMISSION_DENIED: Access Denied" | Grant Job User on the project and Data Viewer on the dataset (step 2). |
-| "the credential must be the service-account key file (JSON)" | `--password-file` must name the JSON key file. |
-| "the key file is not a service-account key" | Use the file from Keys → Create new key → JSON, not an OAuth client file. |
+| `jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=...;DefaultDataset=...` | project and dataset |
+
+The endpoint before the first `;` is not read, and `OAuthType` is dropped. The
+key file is never part of the string: give it separately.
+
+### Where to find the connection string
+
+There is none to copy: the Google Cloud console shows no connection string
+for BigQuery. You have two choices:
+
+- Press Enter alone at the prompt and type the project ID and the dataset.
+  This is the simpler way.
+- Or write the string from those two values:
+  `jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=<project-id>;DefaultDataset=<dataset>`.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| `ProjectId` | The console's project picker: the project **ID**, or `gcloud config get-value project` ([step 1](#1-project-id-and-dataset)). |
+| `DefaultDataset` | BigQuery → Studio → Explorer → `<project>`, or `bq ls --project_id <project>` ([step 1](#1-project-id-and-dataset)). |
+
+### `--set` keys
+
+`project`, `dataset`. Give the key file with `--password-file`.
