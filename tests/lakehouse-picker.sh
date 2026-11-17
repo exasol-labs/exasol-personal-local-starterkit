@@ -250,11 +250,11 @@ check "Enter on Skip picks nothing" "PICKED= CATALOG= FILES= RC=5" "$PICK"
 
 pick 'k'
 SCREEN="$(printf '%s\n' "$PICK_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
-check "the menu has 11 sources" "11" "$(printf '%s\n' "$SCREEN" | grep -cE '^  │ \[ \] [├└]─ ')"
+check "the menu has 11 sources" "11" "$(printf '%s\n' "$SCREEN" | grep -cE '^  │ \[ \] (├|└)─ ')"
 PICKER_OLD_CATALOG=1 pick 'k'
 SCREEN="$(printf '%s\n' "$PICK_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
 check "...also while the catalog still lists iceberg-rest and unity: the one Lakehouse row folds them" \
-    "11" "$(printf '%s\n' "$SCREEN" | grep -cE '^  │ \[ \] [├└]─ ')"
+    "11" "$(printf '%s\n' "$SCREEN" | grep -cE '^  │ \[ \] (├|└)─ ')"
 lacks "...no Unity row of its own" "Unity Catalog (lakehouse engine)" "$SCREEN"
 
 printf '\n== the connector guides: exakit connect --help and the ? key ==\n'
