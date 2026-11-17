@@ -7373,6 +7373,12 @@ function Show-ExakitMarketplaceMenu {
     # The fallback table shows selectable and covered add-ons together.
     $selectable = @($rows | Where-Object { $_.Id })
     $covered = @($rows | Where-Object { -not $_.Id })
+    # THE INSTALL'S TABLE: the offer's one table, whether or not the two still
+    # have to install - flat, no hint, the two on top. Twin of _mm_install_table
+    # in exakit_marketplace_menu.
+    $installTable = [bool](($env:EXAKIT_MARKETPLACE_INSTALL_TABLE -eq "1" -or $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -and $env:UI_TABLE_AUTO -ne "1")
+    # The spinner stops before anything is printed, whichever way the menu goes.
+    if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
     Write-Host ""
 
     if ($selectable.Count -eq 0) {
@@ -7421,17 +7427,35 @@ function Show-ExakitMarketplaceMenu {
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. Twin of the same
     # line in exakit_marketplace_menu.
-    if ($env:UI_TABLE_AUTO -ne "1" -and -not $env:EXAKIT_MARKETPLACE_AUTO_FIRST) { Info "Details on any add-on: exakit help <id>" }
+    if ($env:UI_TABLE_AUTO -ne "1" -and -not $installTable) { Info "Details on any add-on: exakit help <id>" }
+    # The two that install on their own and are in already: on top, drawn as
+    # settled rows ("installed"), not at the bottom as covered ones.
+    $coveredTop = @()
+    if ($installTable) {
+        $coveredTop = @($covered | Where-Object { $script:ExakitAutoAddons -contains ("" + $_.Label) })
+        $covered = @($covered | Where-Object { $script:ExakitAutoAddons -notcontains ("" + $_.Label) })
+    }
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
     # The install's table (EXAKIT_MARKETPLACE_AUTO_FIRST): no "Select All" row and
     # no tree - two rows install on their own and the rest are single picks.
     # Twin of EXAKIT_ADDON_TABLE_NO_GROUP in _exakit_addon_table_build.
-    $flat = [bool]($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1")
+    $flat = $installTable
     if (-not $flat) {
         [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
         [void]$addonIds.Add("")
+    }
+    $topRows = @()
+    foreach ($c in $coveredTop) {
+        $at = Add-ExakitTableRow -Kind "plain" -Label (Get-ExakitMarketplaceAddonLabel $c.Label) `
+            -Col2 ("" + $c.Version) -Col3 ("" + $c.Why) -Table $script:ExakitAddonTable
+        $tr = $script:ExakitAddonTable.Rows[$at - 1]
+        $tr.State = "done"
+        $tr.Tick = $false
+        $tr.Final = "installed"
+        [void]$addonIds.Add("")
+        $topRows += $at
     }
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
@@ -7488,7 +7512,7 @@ function Show-ExakitMarketplaceMenu {
     }
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
-    $rowSkip = $addonCount + $kidCount + $coveredCount + 2
+    $rowSkip = $addonCount + $kidCount + $coveredCount + 2 + $topRows.Count
     if ($flat) { $rowSkip = $rowSkip - 1 }
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
@@ -7536,6 +7560,13 @@ function Show-ExakitMarketplaceMenu {
             $defaults = @($rowSkip)
         }
     }
+    if ($installTable -and -not $autoDone) {
+        # Nothing installs on its own: the same table, no Description, the two
+        # that are in already without a checkbox. Twin of the shell's.
+        $script:ExakitAddonTable.Col3 = ""
+        if ($topRows.Count -gt 0) { $script:UiTableNoBox = $topRows }
+        Write-Host ""
+    }
     $groupParent = 1
     $groupFirst = 2
     $groupLast = $addonCount + $kidCount + 1
@@ -7546,12 +7577,14 @@ function Show-ExakitMarketplaceMenu {
             -GroupFirst $groupFirst -GroupLast $groupLast -GroupMode "all" -OnScreen $onScreen)
     } finally {
         # The two keep no checkbox while the rest install in the same table.
-        if (-not $autoDone) { $script:UiTableNoBox = @() }
+        if (-not $autoDone -and -not $installTable) { $script:UiTableNoBox = @() }
     }
     if ($autoDone) {
         # What the two installs had to say: the table's rows already say it, so the
         # log keeps the lines (a warning still shows). Twin of the shell's.
         foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Write-ExakitLog "OK" $note.Text } else { Warn2 $note.Text } }
+    }
+    if ($installTable) {
         # Skip, or nothing more ticked: the two are in, and that is the whole answer.
         if ($selection.Count -eq 0 -or $selection -contains $rowSkip) { Reset-ExakitAddonTable; return }
     }
@@ -8186,13 +8219,14 @@ function Request-ExakitMarketplaceOffer {
         $env:EXAKIT_MARKETPLACE_PRESELECT = "none"
         $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
         $env:EXAKIT_MARKETPLACE_AUTO_FIRST = ($ids -join ',')
+        $env:EXAKIT_MARKETPLACE_INSTALL_TABLE = "1"
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
         # A spinner until the table is up: the rows are read first. Twin of the shell's.
         Start-ExakitSpinner ""
         $script:ExakitMarketplaceSpinning = $true
         try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
             if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
-            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST")) {
+            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST", "EXAKIT_MARKETPLACE_INSTALL_TABLE")) {
                 Remove-Item "env:$name" -ErrorAction SilentlyContinue
             }
         }
