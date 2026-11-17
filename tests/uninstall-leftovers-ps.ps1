@@ -99,6 +99,9 @@ function InfoStep($m) { Info $m }
 function Warn2($m) { $script:out += "WARN $m"; Write-Host "WARN $m" }
 function Fail($m) { throw $m }
 function Write-ExakitLog { param($Level, $Message) }
+# ui.ps1 shortens paths under the home to ~ on screen; identity here, so
+# the assertions read the paths the run removed.
+function Get-ExakitTilde([string]$Path) { $Path }
 function Initialize-ExakitLogging { }
 function Show-ExakitHomeNotice { }
 function Get-ExakitManifestValue { param([string]$Path) return "" }

@@ -454,8 +454,7 @@ done
 APPLY_PY="$(cat "$ROOT/marketplace/apply.py")"
 has "the hook is resolved by name"   'callable(getattr(module, "summary", None))' "$APPLY_PY"
 has "and only used when it exists"   'invoke(ctx.root, addon_id, "summary", ctx=ctx)' "$APPLY_PY"
-# The elapsed time is the install's own clock (elapsed()), which also counts a
-# parallel-safe add-on's turn waiting beside the others.
+# The elapsed time is elapsed() since 01bb5f6b (each add-on its own activity line).
 has "the result line carries it"     'emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(elapsed())))' "$APPLY_PY"
 # "Browse again: exakit marketplace · how to use one: exakit help <add-on>"
 # stood here. The table above has just said what was installed and what each

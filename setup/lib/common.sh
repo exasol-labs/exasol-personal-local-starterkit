@@ -15784,7 +15784,12 @@ EXAKIT_PRESERVED_PATHS_EOF
     _un_protected_bins=""
     _un_exasol_path="$(manifest_get components.personal.ownership_path 2>/dev/null || true)"
     _un_exapump_path="$(manifest_get components.exapump.ownership_path 2>/dev/null || true)"
-    for _un_bin in exasol exapump $(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1); do
+    # Read the add-on ids once, here: the registry is marketplace/catalog.json
+    # under the kit copy, which step 5 removes with the kit home, so asked again
+    # at step 6 it answered nothing and the add-on launchers were not swept.
+    # Twin of $uninstallAddonIds in exakit.ps1.
+    _un_addon_ids="$(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+    for _un_bin in exasol exapump $_un_addon_ids; do
         if ! exakit_component_is_managed "$_un_bin"; then
             _un_protected_bins="$_un_protected_bins $_un_bin "
         fi
@@ -16063,10 +16068,7 @@ EXAKIT_PRESERVED_PATHS_EOF
     #    until the process exits). Marketplace add-on launchers are swept by
     #    registry id — a new add-on needs no edit here, and a machine without
     #    one simply has no file to remove.
-    _bins="exasol exakit exapump"
-    if command -v exakit_marketplace_addons >/dev/null 2>&1; then
-        _bins="$_bins $(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ')"
-    fi
+    _bins="exasol exakit exapump $_un_addon_ids"
     _un_bins_gone=""
     for _bin in $_bins; do
         # Named only when there is something there to keep: the registry lists

@@ -131,6 +131,9 @@ function Get-ExakitSkillRoots {
     @((Join-Path $HOME ".claude\skills"), (Join-Path $HOME ".agents\skills"))
 }
 function Write-ExakitLog { param($Level, $Message) }
+# ui.ps1 shortens paths under the home to ~ on screen; identity here, so
+# the assertions read the paths the run removed.
+function Get-ExakitTilde([string]$Path) { $Path }
 # The allowlist removal lives in exakit-common.ps1, which this harness does not
 # load; the uninstall run calls it beside the skills step.
 function Remove-ExakitReadonlyAllowlist { return "REMOVED 0" }
@@ -220,6 +223,28 @@ Check "real: exakit.cmd.new gone" "no" (Ex (Join-Path $script:BinDir "exakit.cmd
 Check "real: add-on launcher gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd"))
 Check "real: add-on .cmd.new gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
 Check "real: bystander .cmd.new kept" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
+
+# --- the add-on registry is read from the kit copy, which step 5 removes ---
+# The real Get-ExakitMarketplaceAddons reads marketplace/catalog.json under the
+# kit home; asked again at step 6 (the CLI binary sweep) it threw "Cannot find
+# path ...\.exasol-starter-kit\kit" and the uninstall stopped with exakit.cmd,
+# exapump.exe and exasol.exe still in the bin dir (found live on Windows). The
+# stub above never noticed the kit home was gone; this one does.
+Seed
+function Get-ExakitMarketplaceAddons {
+    if (-not (Test-Path -LiteralPath $script:ExakitHome)) {
+        throw "Cannot find path '$($script:ExakitHome)\kit' because it does not exist."
+    }
+    @([pscustomobject]@{ Id = "dash-server" })
+}
+$registryThrew = ""
+try { Invoke-ExakitUninstallRun } catch { $registryThrew = "$_" }
+Check "registry gone: the uninstall does not stop" "" $registryThrew
+Check "registry gone: kit home gone" "no" (Ex $script:ExakitHome)
+Check "registry gone: exakit.cmd still removed" "no" (Ex (Join-Path $script:BinDir "exakit.cmd"))
+Check "registry gone: exasol.exe still removed" "no" (Ex (Join-Path $script:BinDir "exasol.exe"))
+Check "registry gone: add-on launcher still swept" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd"))
+function Get-ExakitMarketplaceAddons { @([pscustomobject]@{ Id = "dash-server" }) }
 
 # --- the user's work stays: notebooks, MLflow runs, dashboards (audit DAY-01) ---
 Seed

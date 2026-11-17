@@ -1077,7 +1077,13 @@ function Invoke-StdinChild {
     $psi.Arguments = (@($all | ForEach-Object { '"' + $_ + '"' }) -join " ")
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
+    # .NET Framework (Windows PowerShell 5.1) builds Process.StandardInput from
+    # [Console]::InputEncoding with AutoFlush: under code page 65001 the child
+    # would get EF BB BF before the bytes written here. A BOM-less UTF-8 input
+    # encoding while the process starts leaves the stream raw.
+    $prevIn = $null
+    try { $prevIn = [Console]::InputEncoding; [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+    try { $p = [System.Diagnostics.Process]::Start($psi) } finally { if ($prevIn) { try { [Console]::InputEncoding = $prevIn } catch { } } }
     $errTask = $p.StandardError.ReadToEndAsync()
     $in = $p.StandardInput.BaseStream
     if ($Bytes.Length -gt 0) { $in.Write($Bytes, 0, $Bytes.Length) }
@@ -1102,6 +1108,9 @@ Check "...the non-ASCII credential, its newline dropped, is the CONNECTION's" $p
 Check "...and in neither stream" $false (($jsonText + $stdinErr).Contains($pwEnc))
 $one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinps16") + $pgSet + @("--password-stdin", "--json")) $encFiles["utf16"]
 Check "--password-stdin in UTF-16 LE with its BOM: exit 0, the same credential" ("0 " + $pwEnc) ("$jsonCode " + (Get-StateSecret "EXAKIT_SRC_STDINPS16"))
+# A .NET Framework caller under code page 65001 puts EF BB BF in front of the UTF-16 bytes: the secret is still read.
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinps8bom16") + $pgSet + @("--password-stdin", "--json")) ([byte[]](@(0xEF, 0xBB, 0xBF) + @($encFiles["utf16"])))
+Check "...and with a UTF-8 BOM in front of it: exit 0, the same credential" ("0 " + $pwEnc) ("$jsonCode " + (Get-StateSecret "EXAKIT_SRC_STDINPS8BOM16"))
 $keyJson = "{`n  `"type`": `"service_account`",`n  `"private_key`": `"-----BEGIN PRIVATE KEY-----\nMIIx\n-----END PRIVATE KEY-----\n`"`n}"
 $one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinkey") + $pgSet + @("--password-stdin", "--json")) $utf8.GetBytes($keyJson + "`r`n")
 Check "a JSON key on stdin: its line breaks kept, the trailing CRLF dropped" ("0 " + $keyJson) ("$jsonCode " + (Get-StateSecret "EXAKIT_SRC_STDINKEY"))
@@ -1275,14 +1284,16 @@ $ErrorActionPreference = "Stop"
 $text = (@($out) | ForEach-Object { "$_" }) -join "`n"
 Check "a refusal the engine never logged (an unknown connector): no log line" "2 False" ("$childCode " + $text.Contains("Log (every SQL"))
 # --json: stdout stays the one object; the path goes to stderr.
-$jsonErr = Join-Path $work "json-err.txt"
 $ErrorActionPreference = "Continue"
-$o = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name psjson @pgSet --password-file $wrongPw --json 2>$jsonErr
-$childCode = $LASTEXITCODE
+# Through Invoke-StdinChild's raw stderr pipe: Windows PowerShell 5.1 writes a
+# native command's stderr to a 2> file as NativeCommandError records wrapped at
+# the console width, which splits the log's long path across lines.
+[void](Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "psjson") + $pgSet + @("--password-file", $wrongPw, "--json")))
+$childCode = $script:jsonCode
 $ErrorActionPreference = "Stop"
-$jsonText = (@($o) | ForEach-Object { "$_" }) -join "`n"
-$doc = $null; try { $doc = $jsonText | ConvertFrom-Json } catch { }
-$errText = (@(Get-Content -LiteralPath $jsonErr -ErrorAction SilentlyContinue) | ForEach-Object { "$_" }) -join "`n"
+$jsonText = $script:jsonText
+$doc = $script:jsonDoc
+$errText = "" + $script:stdinErr
 Check "connect --json that fails: exit 1, one object, kind auth" "1 auth" ("$childCode " + $(if ($doc) { $doc.kind } else { "NOT-ONE-OBJECT" }))
 Check "...the path once on stderr" 1 ([regex]::Matches($errText, [regex]::Escape($logLine)).Count)
 Check "...and not on stdout" $false ($jsonText.Contains("Log (every SQL"))

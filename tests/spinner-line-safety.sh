@@ -226,5 +226,99 @@ case "$(python3 "$WORK/ptyrun.py" "$WORK/subshell.sh" 2>&1 | tr '\r' '\n')" in
     *)                fail "the subshell scenario did not report" ;;
 esac
 
+# A MENU STOPS THE SPINNER. The install's add-on offer starts a spinner until
+# its table is up; on a re-run with nothing to auto-install nothing stopped it,
+# so its frames prefixed the menu's rows, kept going while it waited for a key,
+# and ran on into the closing box. The menu must take the line, as
+# ui_table_begin does.
+cat > "$WORK/menu.sh" <<EOF
+cd "$ROOT"
+export HOME="$WORK/home"; mkdir -p "\$HOME"
+. setup/lib/ui.sh
+. setup/lib/common.sh 2>/dev/null
+ui_detect >/dev/null 2>&1
+UI_FANCY=1
+printf 'alpha|Alpha||\nskip|Skip||\n' > "$WORK/menu-table"
+UI_TABLE_TITLE="Marketplace add-ons"
+ui_spin_begin ""
+sleep 0.6
+printf '\nMENU-START\n'
+ui_table_menu "$WORK/menu-table"
+echo "AFTER-MENU pid=[\${_UI_SPIN_PID}]"
+sleep 0.6
+EOF
+# The driver for the two scenarios below: keys typed at 2s (Space, Enter),
+# and a hard deadline, so a spinner that never stops cannot hang the test.
+cat > "$WORK/ptykeys.py" <<'PY'
+import os, pty, sys, select, time, signal
+env = dict(os.environ); env['TERM'] = 'xterm-256color'; env['LC_ALL'] = 'en_US.UTF-8'
+env.pop('NO_COLOR', None); env.pop('EXAKIT_NO_FANCY', None)
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvpe('/bin/bash', ['/bin/bash', sys.argv[1]], env); os._exit(1)
+buf = b''; t0 = time.time(); sent = False; deadline = float(sys.argv[2])
+while time.time() - t0 < deadline:
+    if not sent and time.time() - t0 > 2.0:
+        os.write(fd, b' '); time.sleep(0.3); os.write(fd, b'\r'); sent = True
+    try:
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if r:
+            d = os.read(fd, 65536)
+            if not d: break
+            buf += d
+    except OSError:
+        break
+try: os.kill(pid, signal.SIGKILL)
+except Exception: pass
+sys.stdout.buffer.write(buf)
+PY
+cat > "$WORK/frames.py" <<'PY'
+import sys
+raw = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+start = raw.find(sys.argv[2]); stop = raw.find(sys.argv[3]) if len(sys.argv) > 3 else -1
+seg = raw[start:stop if stop > 0 else None] if start >= 0 else ''
+print('found' if start >= 0 else 'missing', sum(seg.count(c) for c in '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'))
+PY
+python3 "$WORK/ptykeys.py" "$WORK/menu.sh" 7 > "$WORK/menu.raw" 2>&1
+case "$(python3 "$WORK/frames.py" "$WORK/menu.raw" MENU-START AFTER-MENU)" in
+    "found 0") pass "no spinner frame while the menu is on screen" ;;
+    *)         fail "the spinner kept drawing over the menu: $(python3 "$WORK/frames.py" "$WORK/menu.raw" MENU-START AFTER-MENU)" ;;
+esac
+case "$(python3 "$WORK/frames.py" "$WORK/menu.raw" AFTER-MENU)" in
+    "found 0") pass "no spinner frame after the menu returns" ;;
+    *)         fail "the spinner outlived the menu: $(python3 "$WORK/frames.py" "$WORK/menu.raw" AFTER-MENU)" ;;
+esac
+grep -q 'AFTER-MENU pid=\[\]' "$WORK/menu.raw" && pass "the menu released the spinner slot" \
+    || fail "the spinner slot still holds a pid after the menu"
+
+# CTRL-C NEVER LEAVES AN ANIMATOR. The animator is disowned, so when the
+# installer died at a menu nothing reaped it, and it wrote frames over the shell
+# prompt until the terminal closed. The terminal stays open here (the driver
+# lives on) while the installer it started is interrupted.
+cat > "$WORK/inner.sh" <<EOF
+cd "$ROOT"; export HOME="$WORK/home"
+. setup/lib/ui.sh; . setup/lib/common.sh 2>/dev/null; ui_detect >/dev/null 2>&1; UI_FANCY=1
+ui_spin_begin "working"
+sleep 30
+EOF
+cat > "$WORK/driver.sh" <<EOF
+bash "$WORK/inner.sh" &
+p=\$!
+sleep 0.8
+kill -INT \$p; kill -9 \$p 2>/dev/null
+sleep 0.5
+echo; echo DEAD-MARK
+sleep 1.5
+echo; echo "LEFT=\$(pgrep -f "$WORK/inner.sh" | wc -l | tr -d ' ')"
+EOF
+python3 "$WORK/ptykeys.py" "$WORK/driver.sh" 5 > "$WORK/driver.raw" 2>&1
+pkill -f "$WORK/inner.sh" 2>/dev/null
+case "$(python3 "$WORK/frames.py" "$WORK/driver.raw" DEAD-MARK)" in
+    "found 0") pass "no spinner frame after the installer is interrupted" ;;
+    *)         fail "an orphaned spinner kept drawing after the installer died" ;;
+esac
+grep -q 'LEFT=0' "$WORK/driver.raw" && pass "no animator process outlives the installer" \
+    || fail "an animator process outlived the installer"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

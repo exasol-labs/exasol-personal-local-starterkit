@@ -2107,7 +2107,16 @@ function Invoke-ExakitUninstallRun {
         'exasol.exe' = Get-ExakitManifestValue 'components.personal.ownership_path'
         'exapump.exe' = Get-ExakitManifestValue 'components.exapump.ownership_path'
     }
-    foreach ($id in (@('exasol','exapump') + @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }))) {
+    # Read once, here: the registry is marketplace/catalog.json under the kit
+    # copy, and the kit home (that copy included) is gone by the time step 6
+    # sweeps the add-on launchers - asked again there, it threw "Cannot find
+    # path ...\.exasol-starter-kit\kit" and the uninstall stopped before the
+    # CLI binaries were handed to the deferred delete.
+    $uninstallAddonIds = @()
+    if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
+        $uninstallAddonIds = @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+    }
+    foreach ($id in (@('exasol','exapump') + $uninstallAddonIds)) {
         if (-not (Test-ExakitComponentManaged $id)) { $protectedBinNames += $id }
     }
     function Test-PreservedEntry([string]$Entry) {
@@ -2204,7 +2213,7 @@ function Invoke-ExakitUninstallRun {
                     Info "Removing the Exasol launcher download cache $cacheLabel"
                     try {
                         Remove-Item -LiteralPath $launcherLeft.Cache -Recurse -Force -ErrorAction Stop
-                        RecordRemoved "Launcher download cache removed: $cacheLabel"
+                        RecordRemoved "Launcher download cache removed: $(Get-ExakitTilde $launcherLeft.Cache) ($($launcherLeft.CacheSize))"
                     } catch { Warn2 "Could not remove the launcher download cache $($launcherLeft.Cache) (continuing uninstall)" }
                 }
             }
@@ -2248,7 +2257,12 @@ function Invoke-ExakitUninstallRun {
             Info "  will remove: managed MCP configuration in the AI clients ($mcpClientList)"
         } else {
             Info "Removing managed MCP configuration from AI clients"
-            try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @()) }
+            # 6>$null: the operation prints its own summary panel (MCP operation
+            # summary / Operation / Clients / Status / Summary) with Write-Host,
+            # which landed under the spinner as five raw lines; the one line
+            # below is the record. Twin of `exakit_mcp_operation uninstall
+            # >/dev/null 2>&1` in exakit_uninstall_run.
+            try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @() 6>$null) }
             catch { Warn2 "Removing the managed AI client config reported issues (continuing uninstall)" }
         }
         RecordRemoved "MCP entry removed from the AI clients: $mcpClientList"
@@ -2351,12 +2365,12 @@ function Invoke-ExakitUninstallRun {
                     Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            if ($keptSaid) { RecordRemoved "Kit files removed from $($script:ExakitHome); your $keptSaid stay there" }
-            else { RecordRemoved "Kit files removed from $($script:ExakitHome); files other tools reuse stay there" }
+            if ($keptSaid) { RecordRemoved "Kit files removed from $(Get-ExakitTilde $script:ExakitHome); your $keptSaid stay there" }
+            else { RecordRemoved "Kit files removed from $(Get-ExakitTilde $script:ExakitHome); files other tools reuse stay there" }
         } else {
             if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
             else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
-            RecordRemoved "Kit home removed: $($script:ExakitHome)"
+            RecordRemoved "Kit home removed: $(Get-ExakitTilde $script:ExakitHome)"
         }
     }
 
@@ -2370,9 +2384,7 @@ function Invoke-ExakitUninstallRun {
     # Marketplace add-on launchers are swept by registry id - a new add-on
     # needs no edit here.
     $binNames = @("exakit.cmd", "exapump.exe", "exasol.exe", "exakit.ps1")
-    if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
-        foreach ($addon in Get-ExakitMarketplaceAddons) { $binNames += "$($addon.Id).cmd" }
-    }
+    foreach ($addonId in $uninstallAddonIds) { $binNames += "$addonId.cmd" }
     # A staged <launcher>.cmd.new (the deferred shim writer's) whose swap has
     # not run yet goes too: it is the kit's file, and left behind it is a
     # stray launcher nobody removes.
@@ -2755,7 +2767,7 @@ function Invoke-ExakitUninstallComponent {
         }
         "mcp_configs" {
             Info "Removing the managed MCP configuration from the AI clients"
-            try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @()) }
+            try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @() 6>$null) }
             catch { Warn2 "Removing the managed AI client config reported issues" }
             # Nobody is pointed at the launcher's MCP server any more: it goes too.
             if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar }

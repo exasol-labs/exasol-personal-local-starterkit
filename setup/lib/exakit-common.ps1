@@ -715,8 +715,15 @@ function Warn2([string]$Msg) {
         Write-ExakitLog "WARN" $Msg
         return
     }
+    # A running spinner owns its line: printed beside it, the warning was glued
+    # onto "Removing the database (12s)" and wrapped. Give the line back first,
+    # the way OkStep does, and take it again after. Only when a spinner runs:
+    # some callers load this file without ui.ps1.
+    $spinHeld = ($null -ne $script:UiSpinFlag) -and (Get-Command Suspend-ExakitSpinner -ErrorAction SilentlyContinue)
+    if ($spinHeld) { Suspend-ExakitSpinner }
     if ($script:UiFancy) { Write-Host ("      {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $Msg) }
     else { Write-Host "      ! $Msg" -ForegroundColor Yellow }
+    if ($spinHeld) { Resume-ExakitSpinner }
     Write-ExakitLog "WARN" $Msg
 }
 
@@ -5548,7 +5555,9 @@ function Get-ExakitRepoRoot {
     $kitCopy = Join-Path $script:ExakitHome "kit"
     if (Test-Path (Join-Path $kitCopy "mcp")) { return $kitCopy }
     $commonDir = Split-Path -Parent $PSCommandPath
-    $repoRoot = (Resolve-Path (Join-Path $commonDir "..\..")).Path
+    # Not Resolve-Path: it throws once the folder is gone (an uninstall removes
+    # the kit copy this file was loaded from), and this answers "nothing found".
+    $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $commonDir "..\.."))
     if (Test-Path (Join-Path $repoRoot "mcp")) { return $repoRoot }
     # When this finds nothing the callers print "Could not find the MCP package
     # source ..." and stop, and until now that was the whole record: the screen did

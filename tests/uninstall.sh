@@ -42,7 +42,7 @@ exists() { [ -e "$1" ] && echo yes || echo no; }
 # Build the fake install tree and drive the engine inside one sandboxed bash.
 # All state (fake HOME, stubs, markers) lives under $SANDBOX.
 run_engine() { # run_engine <dry> ; prints nothing, side effects in $SANDBOX
-    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" bash <<'HARNESS'
+    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" UN_REGISTRY_NEEDS_KIT="${UN_REGISTRY_NEEDS_KIT:-}" bash <<'HARNESS'
 set -u
 HOME="$SANDBOX/home"
 export HOME
@@ -86,7 +86,13 @@ personal_teardown(){ printf '%s\n' "$*" > "$SANDBOX/marker_personal"; }
 exakit_mcp_operation(){ printf '%s\n' "$*" > "$SANDBOX/marker_mcp"; }
 # The engine sweeps add-on launchers by registry id; mirror the real registry
 # so a machine with the dash-server launcher gets it removed.
-exakit_marketplace_addons(){ printf '%s\n' "dash-server|x"; }
+# With UN_REGISTRY_NEEDS_KIT=1 it answers only while the kit home's manifest is
+# there, the way the real one answers only while the kit copy it reads
+# (marketplace/catalog.json) is: step 5 removes both before step 6 sweeps.
+exakit_marketplace_addons(){
+    if [ -n "${UN_REGISTRY_NEEDS_KIT:-}" ] && [ ! -f "$EXAKIT_HOME/manifest.json" ]; then return 1; fi
+    printf '%s\n' "dash-server|x"
+}
 exakit_marketplace_installed_addons(){ :; }
 
 # --- pull in only the functions under test --------------------------------
@@ -159,6 +165,12 @@ check "real: exapump bin gone"    no  "$(exists "$H/.local/bin/exapump")"
 check "real: dash-server venv gone" no "$(exists "$H/.exasol-starter-kit/dash-server-venv")"
 check "real: dash-server keeps only its instance" "instance" "$(ls -A "$H/.exasol-starter-kit/dash-server" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: dash-server bin gone" no "$(exists "$H/.local/bin/dash-server")"
+# The add-on registry is read from the kit copy, which step 5 removes: asked
+# again at step 6 it answered nothing and the add-on launcher stayed behind.
+seed
+UN_REGISTRY_NEEDS_KIT=1 run_engine 0
+check "registry gone: kit manifest removed" no "$(exists "$H/.exasol-starter-kit/manifest.json")"
+check "registry gone: dash-server bin still swept" no "$(exists "$H/.local/bin/dash-server")"
 # The AI client config snapshots: only the newest is kept beside the home, readable by its owner alone (SEC-16).
 seed
 mkdir -p "$H/.exasol-starter-kit/backups/claude" "$H/.exasol-starter-kit-backups-20200101-000000"
