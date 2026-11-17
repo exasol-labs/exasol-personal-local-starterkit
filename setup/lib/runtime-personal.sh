@@ -1502,10 +1502,19 @@ personal_stuck_vm_hint() {
 # EXAKIT_PERSONAL_REAP_MIN_AGE a runner is a VM still booting, and killing
 # that is the data-loss path the reaper's age gate exists for
 # (personal_is_orphan_daemon).
+#
+# AND ONLY THIS DEPLOYMENT'S OWN RUNNER: the port alone is not proof either
+# (another deployment can be configured on the same port while this one is
+# down). Each listener must pass the same proof as the deployment_failed
+# recovery (_personal_is_own_runner_pid: the kit's runner, working inside
+# this deployment), and is proven again before a KILL, since after the wait
+# the pid may belong to another process. Nothing unproven is ever touched.
 personal_clear_stale_vm() {
     _csv_pids=""
+    _csv_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+    [ -n "$_csv_cache" ] || return 1
     for _csv_pid in $(personal_db_port_pids); do
-        _personal_is_runner_process "$_csv_pid" && _csv_pids="$_csv_pids $_csv_pid"
+        _personal_is_own_runner_pid "$_csv_pid" "$_csv_cache" && _csv_pids="$_csv_pids $_csv_pid"
     done
     [ -n "$_csv_pids" ] || return 1
     for _csv_pid in $_csv_pids; do
@@ -1533,6 +1542,10 @@ personal_clear_stale_vm() {
     done
     for _csv_pid in $_csv_pids; do
         if kill -0 "$_csv_pid" 2>/dev/null; then
+            if ! _personal_is_own_runner_pid "$_csv_pid" "$_csv_cache"; then
+                warn "Process $_csv_pid is still running but is no longer proven to be this deployment's runner - it was not forced."
+                continue
+            fi
             pkill -9 -P "$_csv_pid" 2>/dev/null || true
             kill -9 "$_csv_pid" 2>/dev/null || true
         fi
