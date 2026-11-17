@@ -194,8 +194,11 @@ echo "exakit start reaps before it refuses:"
 # <service>` arrived (bare start and `start database` share it, so the two
 # cannot drift). That is the function the conflict branch is in now; the
 # fallback to cmd_start keeps this guard meaningful if it ever moves back.
-_cs_fn='_start_database'
-grep -q "^_start_database()" "$ROOT/setup/exakit" || _cs_fn='cmd_start'
+# _start_database now only marks the start as asked for and calls
+# _start_database_run, where the branch is.
+_cs_fn='_start_database_run'
+grep -q "^_start_database_run()" "$ROOT/setup/exakit" || _cs_fn='_start_database'
+grep -q "^${_cs_fn}()" "$ROOT/setup/exakit" || _cs_fn='cmd_start'
 _cs_body="$(awk -v fn="$_cs_fn" 'index($0, fn "()") == 1 {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit" \
     | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')"
 _cs_reap="$(printf '%s\n' "$_cs_body" | grep -n 'personal_reap_orphan_daemon' | head -1 | cut -d: -f1)"

@@ -3850,7 +3850,7 @@ check "--json: the answer names the credential input, never its value" "password
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["credential"])' 2>/dev/null)"
 lacks "...the value is in no field of it" "$CPW" "$OUT"
 check "...the file holds it alone" "$CPW" "$(cat "$WORK/paste.sec")"
-check "...owner-only" "600" "$(stat -f %Lp "$WORK/paste.sec" 2>/dev/null || stat -c %a "$WORK/paste.sec")"
+check "...owner-only" "600" "$(stat -c %a "$WORK/paste.sec" 2>/dev/null || stat -f %Lp "$WORK/paste.sec")"
 check "none of these credentials is in the kit home, the day's log included" "" "$(grep -rlF "$CPW" "$HOME_K" 2>/dev/null)"
 rm -f "$WORK/paste.sec"
 pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"

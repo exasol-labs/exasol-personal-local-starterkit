@@ -886,6 +886,9 @@ jobs:
   shell-tests:
     name: shell tests (${{ matrix.os }}, ${{ matrix.group }})
     runs-on: ${{ matrix.os }}
+    # The longest group runs about 11 minutes on macOS; a suite that hangs
+    # (a wait with no end) fails the job instead of holding the whole run.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
