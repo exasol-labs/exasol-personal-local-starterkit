@@ -6983,7 +6983,17 @@ _exakit_marketplace_apply_python() {
     _mpa_bar=""
     _mpa_bar_live=0
     _mpa_current=""
-    while IFS='|' read -r _mpa_tag _mpa_id _mpa_phase _mpa_detail _mpa_seconds; do
+    # The events FIFO opened on its own descriptor, again when the open is
+    # interrupted: a plain `done <fifo` blocks in open() until Python opens the
+    # other end, and a signal arriving meanwhile (a child ending, the spinner)
+    # fails it on macOS with "Interrupted system call" - every event lost and
+    # the add-on's own failure never said. Tried while the worker lives.
+    _mpa_open=0
+    while ! { exec 8<"$_mpa_dir/events"; } 2>/dev/null; do
+        _mpa_open=$(( _mpa_open + 1 ))
+        [ "$_mpa_open" -lt 200 ] && kill -0 "$_mpa_pid" 2>/dev/null || break
+    done
+    while IFS='|' read -r _mpa_tag _mpa_id _mpa_phase _mpa_detail _mpa_seconds <&8; do
         if [ "$_mpa_tag" != '@@EXAKIT' ]; then
             case "$_mpa_tag" in
                 *'• '*)
@@ -7057,7 +7067,8 @@ warn|$_mpa_id: $_mpa_detail"
 warn|$_mpa_id did not finish: $_mpa_detail"
                 ;;
         esac
-    done <"$_mpa_dir/events"
+    done
+    exec 8<&-
     if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; fi
     [ -z "$_mpa_bar" ] || rm -f "$_mpa_bar"
     wait "$_mpa_pid" 2>/dev/null || true
