@@ -467,6 +467,7 @@ function Uninstall-FakeDash { param([switch]$DryRun) if (-not $DryRun) { Remove-
 function Test-ExakitMarketplaceAddonInstalled { param([string]$Id) $true }
 function Remove-ExakitAddonSkills { param([string]$Id) }
 function Initialize-ExakitLogging { }
+function Show-ExakitHomeNotice { }
 $script:dryInfo = @()
 function Info($m) { $script:dryInfo += "$m" }
 $script:ManifestPath = Join-Path $script:ExakitHome "manifest.json"

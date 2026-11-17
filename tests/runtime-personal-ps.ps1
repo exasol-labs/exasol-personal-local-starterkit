@@ -502,6 +502,8 @@ Reset-Machine
 Remove-Item Env:EXAKIT_PERSONAL_READY_TIMEOUT -ErrorAction SilentlyContinue
 # The real Invoke-ExakitBounded on a tiny real child (this PowerShell): the
 # outcome it records is what the teardown warning names.
+# The machine model above stubs it, so the real one is loaded again first.
+. (Join-Path $repo "setup/lib/exakit-common.ps1")
 Write-Host ""
 Write-Host "Invoke-ExakitBounded records why a call gave no answer"
 $selfExe = (Get-Process -Id $PID).Path

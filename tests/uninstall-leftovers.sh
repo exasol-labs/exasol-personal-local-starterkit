@@ -239,6 +239,10 @@ $(grep '^EXAKIT_KIT_IMAGE_REPOS=' "$ROOT/setup/lib/common.sh")
 manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; *) echo "" ;; esac; }
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
+# Component ownership: everything here is the kit's own.
+exakit_component_is_managed(){ return 0; }
+exakit_preserved_component_paths(){ :; }
+exakit_preserve_component(){ info "Keeping \$1"; }
 personal_teardown(){
     EXAKIT_TEARDOWN_WARNINGS="\${STUB_TW:-}"
     if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "\$EXAKIT_PERSONAL_DEPLOY_DIR"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi

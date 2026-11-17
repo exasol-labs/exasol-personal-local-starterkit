@@ -100,6 +100,7 @@ function Warn2($m) { $script:out += "WARN $m"; Write-Host "WARN $m" }
 function Fail($m) { throw $m }
 function Write-ExakitLog { param($Level, $Message) }
 function Initialize-ExakitLogging { }
+function Show-ExakitHomeNotice { }
 function Get-ExakitManifestValue { param([string]$Path) return "" }
 function Set-ExakitManifestValue { param($Path, $Value) $script:manifest[$Path] = $Value }
 function Remove-ExakitStepDone { param($Name) }
@@ -127,6 +128,10 @@ function Stop-ExakitPidQuiet { param([int]$Id) $script:stopped += $Id; return $t
 # The Startup folder is a sandbox directory, never the real one.
 $env:EXAKIT_STARTUP_DIR = Join-Path $fakeHome "Startup"
 function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in $Paths) { Remove-Item -Force -ErrorAction SilentlyContinue $f } }
+# Ownership: everything in this fixture was installed by the kit, so nothing is kept.
+function Get-ExakitPreservedComponentPaths { @() }
+function Test-ExakitComponentManaged { param([string]$Component) $true }
+function Write-ExakitPreservedComponent { param([string]$Component) }
 # The launcher. STUB_INFO_OK / STUB_DESTROY_RC / STUB_DESTROY_REMOVES as in the
 # bash suite.
 function Get-PersonalCli { return "exasol-stub" }
@@ -141,6 +146,14 @@ function Invoke-ExakitLogged {
         return [int]("0" + $env:STUB_DESTROY_RC)
     }
     return 0
+}
+# The launcher's destroy (Invoke-PersonalDestroy runs it directly), through
+# the same stub so the calls and STUB_DESTROY_* apply.
+function Invoke-PersonalDestroy {
+    $script:PersonalDestroyError = ""
+    if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -eq 0) { return $true }
+    $script:PersonalDestroyError = "stub destroy failed"
+    return $false
 }
 function Invoke-ExakitBounded {
     param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8)

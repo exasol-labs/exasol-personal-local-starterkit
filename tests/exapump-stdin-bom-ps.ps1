@@ -47,7 +47,7 @@ foreach ($site in $sites) {
     $sets = @($fn.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         $n.Left.Extent.Text -eq '[Console]::InputEncoding' }, $true))
-    $bomless = @($sets | Where-Object { $_.Right.Extent.Text -match 'UTF8Encoding\(\s*\$false\s*\)' })
+    $bomless = @($sets | Where-Object { $_.Right.Extent.Text -match 'UTF8Encoding(\(\s*\$false\s*\)|\s+\$false)' })
     Check "$($site.Name) sets [Console]::InputEncoding to UTF8Encoding(`$false)" ($bomless.Count -ge 1) "assignments: $(@($sets | ForEach-Object { $_.Extent.Text }) -join ' | ')"
     $tries = @($fn.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally }, $true))
     $restored = $false
@@ -58,12 +58,9 @@ foreach ($site in $sites) {
             $n.Right.Extent.Text -match '\$previous(ConsoleInput|InputEncoding)' }, $true))
         if ($inFinally.Count -ge 1) { $restored = $true }
     }
-    Check "$($site.Name) restores [Console]::InputEncoding in a finally" $restored "no restore of `$previousConsoleInput inside a finally block"
-    $outEnc = @($fn.FindAll({ param($n)
-        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
-        $n.Left.Extent.Text -eq '$OutputEncoding' -and
-        $n.Right.Extent.Text -match 'UTF8Encoding\(\s*\$false\s*\)' }, $true))
-    Check "$($site.Name) still sets a BOM-less `$OutputEncoding" ($outEnc.Count -ge 1) "missing"
+    Check "$($site.Name) restores [Console]::InputEncoding in a finally" $restored "no restore of the previous input encoding inside a finally block"
+    # No $OutputEncoding check: the SQL goes to exapump's stdin as UTF-8 bytes
+    # (#52), not through a PowerShell pipe, so $OutputEncoding never applies.
 }
 
 # --- behavioural: the first bytes exapump receives ---------------------------

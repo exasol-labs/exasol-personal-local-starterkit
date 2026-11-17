@@ -2767,6 +2767,9 @@ function Get-PersonalPrunableStateDirs {
 # gone (Dirs, bottom-up). Nothing at all while another deployment shares them.
 function Get-PersonalLauncherLeftovers {
     $plan = [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() }
+    # No deployment folder known: nothing proves which deployment is the
+    # kit's, so the shared cache and folders stay.
+    if (-not $script:PersonalDeployDir) { return $plan }
     if (@(Get-PersonalOtherDeployments).Count -gt 0) { return $plan }
     $cache = Get-PersonalLauncherCacheDir
     if ($cache) {
