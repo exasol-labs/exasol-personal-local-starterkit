@@ -2063,6 +2063,15 @@ function Invoke-ExakitTableMenu {
     if ($null -eq $Table) { return @() }
     $n = $Table.Rows.Count
     if ($n -lt 1) { return @() }
+    # A MENU REPLACES the narration above it, the same as Start-ExakitTable: a
+    # spinner still animating here prefixes the menu's rows with its frames and
+    # keeps going while the menu waits for a key (the install's add-on offer
+    # starts one before its table is up). Stopped, nesting zeroed, before the
+    # first row is drawn. Twin of the same block in ui_table_menu.
+    if ($null -ne $script:UiSpinFlag) {
+        $script:UiSpinNested = 0
+        try { Stop-ExakitSpinner } catch { }
+    }
     $sel = New-Object 'System.Collections.Generic.List[int]'
     foreach ($d in $Defaults) {
         if ($d -ge 1 -and $d -le $n -and -not $sel.Contains($d)) { [void]$sel.Add($d) }

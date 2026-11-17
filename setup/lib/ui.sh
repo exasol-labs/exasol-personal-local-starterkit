@@ -364,9 +364,16 @@ ui_spin_begin() {
     # from where it was, not restart at (0s) every time something prints.
     _UI_STEP_T0="${2:-$(date +%s 2>/dev/null || echo 0)}"
     printf '\033[?25l'                          # hide cursor
+    # The animator is disowned, so nothing reaps it if the run dies without
+    # stopping it (Ctrl-C at a menu, an exit from a subshell that held the pid):
+    # it then wrote frames over the shell prompt forever. It checks the shell
+    # that started it each frame and goes when that shell is gone. $$ is that
+    # shell's pid even inside ( ), which is the process that matters.
+    _usb_parent=$$
     (
         _i=0
         while :; do
+            kill -0 "$_usb_parent" 2>/dev/null || exit 0
             _f="${UI_SPIN_FRAMES[$_i]}"
             _now="$(date +%s 2>/dev/null || echo 0)"
             _el=$((_now - _UI_STEP_T0))
@@ -885,6 +892,8 @@ ui_progress_animate() {
     # forking a process per frame.
     _upa_cols="$(_ui_term_cols 2>/dev/null || echo 80)"
     while :; do
+        # Run with &: $$ is the shell that started it. Gone with it (see ui_spin_begin).
+        kill -0 "$$" 2>/dev/null || return 0
         _upa_state=""
         read -r _upa_state < "$1" 2>/dev/null || true
         # A read that caught the file mid-write has no phase yet: skip the frame
@@ -1948,9 +1957,12 @@ ui_table_begin() {
     _utb_prev="${UI_TABLE_LINES:-0}"
     case "$_utb_prev" in ''|*[!0-9]*) _utb_prev=0 ;; esac
     rm -f "$1.stop"
+    _utb_parent=$$
     (
         UI_TABLE_LINES="$_utb_prev"
         while :; do
+            # Gone with the shell that started it (see ui_spin_begin).
+            kill -0 "$_utb_parent" 2>/dev/null || exit 0
             # ONE frame, ONE write. Rendering straight to the terminal meant a
             # kill could land between two of a frame's rows: the cursor was then
             # part-way through a table nobody had finished, and the next thing to
@@ -2117,6 +2129,16 @@ ui_animation_stop() {
 ui_table_menu() {
     _utm_f="$1"
     _utm_n=0
+    # A MENU REPLACES the narration above it, the same as ui_table_begin: a
+    # spinner still animating here prefixes every row of the menu with a frame
+    # and keeps going while it waits for a key (the install's add-on offer
+    # starts one for the seconds before its table is up, and on a re-run with
+    # nothing to auto-install nothing else stopped it). Stopped, nesting zeroed,
+    # before the first row is drawn. Twin of the same block in Invoke-ExakitTableMenu.
+    if [ -n "${_UI_SPIN_PID:-}" ]; then
+        _UI_SPIN_NESTED=0
+        _ui_step_stop_spinner
+    fi
     # Which rows can be ticked at all. A disabled row is drawn but never
     # selectable: the cursor steps over it, Space ignores it, and Select All
     # leaves it alone — that last one through _UI_CHECKBOX_SELECTABLE, which the
