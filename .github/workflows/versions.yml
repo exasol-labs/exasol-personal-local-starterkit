@@ -1062,8 +1062,14 @@ jobs:
         if: matrix.group == 'suites-14'
       - run: python3 tests/test_ask.py
         if: matrix.group == 'suites-11'
-      - run: python3 tests/test_share.py
+      # test_share reaches the Dash Server MCP client, which imports httpx (51ed2104):
+      # in a venv of its own, as the runner's Python is externally managed.
+      - name: python3 tests/test_share.py (with httpx)
         if: matrix.group == 'suites-14'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/share-venv"
+          "$RUNNER_TEMP/share-venv/bin/python" -m pip install --quiet "httpx>=0.27,<1"
+          "$RUNNER_TEMP/share-venv/bin/python" tests/test_share.py
       - run: python3 tests/test_rust_udf.py
         if: matrix.group == 'suites-14'
       - run: python3 tests/test_rust_container.py
@@ -1528,9 +1534,18 @@ jobs:
           podman info --format '{{.Host.Arch}} podman {{.Version.Version}}'
           df -h "$HOME" | tail -1
           free -g | head -2
+      # This release ships the Data Scientist, the notebook add-on and the fraud and
+      # Amazon datasets hidden (visible: false / hidden=yes, aaabaca8 and 0ac7bd42).
+      # What they do is still the kit's, so this job installs a copy of the checkout
+      # with them switched back on (tests/release_kit.py), as the persona tests do.
+      - name: a kit copy with this release's hidden parts on
+        run: |
+          python3 -c 'import sys; sys.path.insert(0, "tests"); from pathlib import Path
+          from release_kit import kit_with_hidden_parts_on
+          print(kit_with_hidden_parts_on(Path(sys.argv[1])))' "$RUNNER_TEMP/release-kit"
       - name: install the kit from this checkout
         env:
-          EXAKIT_LOCAL_KIT: ${{ github.workspace }}
+          EXAKIT_LOCAL_KIT: ${{ runner.temp }}/release-kit
           EXAKIT_PERSONA: data-scientist   # the ML Engineer and udf-devkit are hidden for now
           EXAKIT_DATASETS: tpch,amazon_sales,fraud_transactions
           EXAKIT_MARKETPLACE_ADDONS: notebook
