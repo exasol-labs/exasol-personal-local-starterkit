@@ -467,7 +467,10 @@ Remove-Item -Force -LiteralPath $hoRows -ErrorAction SilentlyContinue
 $env:EXAKIT_UPDATE_HANDOVER = "1"
 $env:EXAKIT_UPDATE_RESULTS_FILE = $hoRows
 Remove-Item Env:\EXAKIT_UPDATE_ROW_FIELDS -ErrorAction SilentlyContinue
+# A Continue window: this run fails, and on 5.1 its stderr under Stop is a terminating error.
+$eapRows = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File (Join-Path $hoSetup "exakit.ps1") update all *> $null
+$ErrorActionPreference = $eapRows
 $env:EXAKIT_UPDATE_HANDOVER = $null
 $env:EXAKIT_UPDATE_RESULTS_FILE = $null
 $env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields

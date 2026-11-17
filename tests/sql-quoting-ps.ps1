@@ -51,16 +51,21 @@ public static class Stub { public static int Main(string[] args) {
         return ($lines[$lines.Count - 1] -replace '^<<', '' -replace '>>$', '')
     }
     $q = 'SELECT "name", ''it''''s'' FROM "s1"."t2"'
+    # How the statement reaches powershell.exe from THIS process: Windows PowerShell 5.1 drops the inner
+    # double quotes of a native argument unless they are written \" (what exakit sql tells a 5.1 user
+    # to type); PowerShell 7 passes them as they are. What exakit then hands exapump is what is checked.
+    $qArg = $q
+    if ($PSVersionTable.PSVersion.Major -lt 7) { $qArg = $q -replace '"', '\"' }
 
     # A Continue window: on 5.1 a native command's redirected stderr is otherwise a terminating error.
     $ErrorActionPreference = "Continue"
     Write-Host "== an argument keeps its double quotes =="
     Remove-Item $seen -ErrorAction SilentlyContinue
-    $out = (& $engine -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $cli sql --json $q 2>$null | Out-String).Trim()
+    $out = (& $engine -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $cli sql --json $qArg 2>$null | Out-String).Trim()
     Check "--json: exapump receives the statement as written" $q (Statement-Seen)
     Check "--json: one JSON answer" '{"ok":true,"rows":[]}' $out
     Remove-Item $seen -ErrorAction SilentlyContinue
-    [void](& $engine -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $cli sql $q 2>$null)
+    [void](& $engine -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $cli sql $qArg 2>$null)
     Check "plain: exapump receives the statement as written" $q (Statement-Seen)
 
     Write-Host "== a statement on stdin =="
