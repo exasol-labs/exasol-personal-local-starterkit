@@ -1964,10 +1964,14 @@ function Write-ExakitUninstallLeftoverReport {
 # WITHOUT -f: an image a container still uses stays, with the one command that
 # removes it later. Every engine call is bounded, so a hung engine cannot stall
 # the uninstall.
+# The Federation kit pulls two more through the launcher, into the same
+# engine: the MCP server beside the database (exasol/mcp-server, pulled by
+# digest, so it is listed as <none>) and the script language containers a
+# first `exakit connect` installs (exasol/script-language-container, ~1 GB for
+# Java). Both were left behind. Only these exact repositories, the same rules.
 function Invoke-ExakitUninstallKitImages {
     param([switch]$DryRun)
-    # Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx).
-    $kitRepos = @("exasol/nano")
+    $kitRepos = @("exasol/nano", "exasol/mcp-server", "exasol/script-language-container")
     $anyEngine = $false
     foreach ($engineName in @("docker", "podman")) {
         $engine = Get-Command $engineName -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1976,7 +1980,7 @@ function Invoke-ExakitUninstallKitImages {
         $list = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
             -Arguments @("images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}")
         if ($null -eq $list) {
-            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/nano"
+            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/*"
             continue
         }
         $gone = @()
@@ -2030,16 +2034,86 @@ function Invoke-ExakitUninstallKitImages {
                 continue
             }
             $rmi = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 60 -Arguments @("rmi", $ref)
-            if ($null -ne $rmi) { $gone += $name }
+            if ($null -ne $rmi) {
+                # One name per repository on the ok line, however many tags went.
+                $label = $repo
+                if ($repo -eq "exasol/script-language-container") { $label = "script-language-container" }
+                if ($gone -notcontains $label) { $gone += $label }
+            }
             else { Info "Kept image ${name}: $engineName did not remove it (a container may still use it, or $engineName did not answer). Remove it later with: $engineName rmi $ref" }
         }
         if ((-not $DryRun) -and $gone.Count -gt 0) {
-            OkStep "Container images removed ($engineName): $($gone -join ', ')"
+            # In the fixed repository order, whatever order the engine listed them.
+            $ordered = @($kitRepos | ForEach-Object { if ($_ -eq "exasol/script-language-container") { "script-language-container" } else { $_ } } | Where-Object { $gone -contains $_ })
+            OkStep "Container images removed ($engineName): $($ordered -join ', ')"
         }
     }
     if (-not $anyEngine) {
-        Info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+        Info "Neither Docker nor Podman was found, so the kit's container images were not checked."
     }
+}
+
+# Get-ExakitUninstallOtherRuns - every OTHER exakit run of this kit still
+# alive, as objects with Pid and Command. Twin of _exakit_uninstall_other_runs.
+#
+# An `exakit connect` left open in another window kept running while a full
+# uninstall deleted the kit from under it, and nothing said it was there. A
+# run is this kit's when a PowerShell's command line names the kit's own
+# exakit.ps1 (exakit.cmd starts one). An idle cmd.exe naming exakit.cmd is not
+# a run, nor is an editor with the file open. This process, its parents (the
+# exakit.cmd -> powershell chain) and its own children are not "other".
+# Read-only: nothing is ever stopped.
+function Get-ExakitUninstallOtherRuns {
+    $targets = @((Join-Path $script:ExakitHome "kit\setup\exakit.ps1"))
+    if ($PSCommandPath) { $targets += $PSCommandPath }
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
+    $byId = @{}
+    foreach ($p in $procs) { $byId[[int]$p.ProcessId] = $p }
+    $mine = @{}
+    $cur = [int]$PID
+    for ($k = 0; $k -lt 64 -and $cur -and -not $mine.ContainsKey($cur); $k++) {
+        $mine[$cur] = $true
+        if (-not $byId.ContainsKey($cur)) { break }
+        $cur = [int]$byId[$cur].ParentProcessId
+    }
+    $out = @()
+    foreach ($p in $procs) {
+        $id = [int]$p.ProcessId
+        if ($mine.ContainsKey($id)) { continue }
+        $name = ("" + $p.Name).ToLowerInvariant()
+        if ($name -ne "powershell.exe" -and $name -ne "pwsh.exe") { continue }
+        $cl = "" + $p.CommandLine
+        $at = -1
+        $hit = ""
+        foreach ($t in $targets) {
+            if (-not $t) { continue }
+            $i = $cl.IndexOf($t, [System.StringComparison]::OrdinalIgnoreCase)
+            if ($i -ge 0) { $at = $i; $hit = $t; break }
+        }
+        if ($at -lt 0) { continue }
+        $q = [int]$p.ParentProcessId
+        $child = $false
+        for ($k = 0; $k -lt 64 -and $q; $k++) {
+            if ($q -eq [int]$PID) { $child = $true; break }
+            if (-not $byId.ContainsKey($q)) { break }
+            $q = [int]$byId[$q].ParentProcessId
+        }
+        if ($child) { continue }
+        $rest = $cl.Substring($at + $hit.Length).Trim().Trim('"').Trim()
+        $words = @($rest -split '\s+' | Where-Object { $_ } | Select-Object -First 3)
+        $out += [pscustomobject]@{ Pid = $id; Command = ((@("exakit") + $words) -join " ") }
+    }
+    return $out
+}
+
+# Test-ExakitUninstallBlocked - name every other exakit run still alive;
+# $true when there is one (the uninstall must not start).
+function Test-ExakitUninstallBlocked {
+    $runs = @(Get-ExakitUninstallOtherRuns)
+    foreach ($r in $runs) {
+        Warn2 "exakit is still running in another window: $($r.Command) (pid $($r.Pid)). Close it, then run exakit uninstall again."
+    }
+    return ($runs.Count -gt 0)
 }
 
 function Invoke-ExakitUninstallRun {
@@ -2567,6 +2641,16 @@ function Invoke-CmdUninstall {
         return
     }
 
+    # ANOTHER exakit RUN OF THIS KIT STILL ALIVE (an `exakit connect` left open
+    # in another window) blocks every full uninstall: it is named, never
+    # stopped, and the run exits 1 with nothing removed. A dry run lists it as
+    # the blocker and still shows the plan. Twin of cmd_uninstall.
+    $blocked = Test-ExakitUninstallBlocked
+    if ($blocked -and -not $DryRun) {
+        Info "Nothing was removed."
+        exit 1
+    }
+
     # -DryRun previews the FULL plan; -Yes is the scripted full uninstall.
     # Everything else goes through the selectable menu: pick what goes, see
     # what that means, type the word. Twin of cmd_uninstall in setup/exakit.
@@ -2578,6 +2662,7 @@ function Invoke-CmdUninstall {
         Write-Host ""
         Info "Not touched: uv/uvx (shared tool), any PATH entry in your profile, and anything the kit did not install."
         Info "Dry run only - nothing was removed. Pick individual pieces interactively with: exakit uninstall"
+        if ($blocked) { Info "The uninstall refuses to start until the exakit run named above is closed." }
         return
     }
 

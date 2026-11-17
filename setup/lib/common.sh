@@ -15705,9 +15705,21 @@ _exakit_uninstall_closing_hints() {
 # the launcher's own VM, so the host engine holds nothing of the kit's there.
 # Every engine call is bounded, so a hung engine cannot stall the uninstall.
 # Twin of Invoke-ExakitUninstallKitImages.
-# Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx), so an
-# image of it on this machine is the user's own.
-EXAKIT_KIT_IMAGE_REPOS="exasol/nano"
+# The Federation kit pulls two more through the launcher, into the same
+# engine: the MCP server that runs beside the database (exasol/mcp-server,
+# pulled by digest, so the engine lists it as <none>) and the script language
+# containers a first `exakit connect` installs
+# (exasol/script-language-container, the Java one is ~1 GB). Both were left
+# behind by a full uninstall. Only these exact repositories, the same rules.
+EXAKIT_KIT_IMAGE_REPOS="exasol/nano exasol/mcp-server exasol/script-language-container"
+
+# _exakit_kit_image_label <repo> - the short name a ✓ line uses for a repo.
+_exakit_kit_image_label() {
+    case "$1" in
+        exasol/script-language-container) printf 'script-language-container' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
 _exakit_uninstall_kit_images() {
     _kim_dry="${1:-0}"
     _kim_os="$(detect_os 2>/dev/null || uname -s 2>/dev/null)"
@@ -15718,7 +15730,7 @@ _exakit_uninstall_kit_images() {
         command -v "$_kim_eng" >/dev/null 2>&1 || continue
         _kim_any=1
         if ! _kim_list="$(exakit_run_bounded 30 "$_kim_eng" images --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)"; then
-            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano"
+            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/*"
             continue
         fi
         _kim_rows="$(printf '%s\n' "$_kim_list" | while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
@@ -15763,19 +15775,96 @@ _exakit_uninstall_kit_images() {
                 continue
             fi
             if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
-                _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
+                # One name per repository on the ✓ line, however many tags went.
+                _kr_label="$(_exakit_kit_image_label "$_kr_repo")"
+                case ", $_kim_gone, " in *", $_kr_label, "*) : ;; *) _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_label" ;; esac
             else
                 info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows
 KIMROWS
-        [ -n "$_kim_gone" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_gone"
+        # In the fixed repository order, whatever order the engine listed them.
+        _kim_line=""
+        for _kr_want in $EXAKIT_KIT_IMAGE_REPOS; do
+            _kr_label="$(_exakit_kit_image_label "$_kr_want")"
+            case ", $_kim_gone, " in *", $_kr_label, "*) _kim_line="${_kim_line:+$_kim_line, }$_kr_label" ;; esac
+        done
+        [ -n "$_kim_line" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_line"
         _kim_gone=""
     done
     if [ "$_kim_any" = 0 ]; then
-        info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+        info "Neither Docker nor Podman was found, so the kit's container images were not checked."
     fi
+    return 0
+}
+
+# _exakit_uninstall_other_runs - every OTHER exakit run of this kit that is
+# still alive, one "pid|short command" line each.
+#
+# An `exakit connect` left open in another window kept running while a full
+# uninstall deleted the kit from under it: nothing said it was there, and it
+# failed half-way through whatever it was doing. A run is this kit's when its
+# command line names the installed command ($EXAKIT_BIN_DIR/exakit) or a
+# script in the kit's own copy ($EXAKIT_HOME/kit/setup/), run directly or by
+# a shell (an editor with the file open is not a run). This shell, its
+# parents and its own children (subshells, spinner animators) are not "other".
+# Read-only: nothing is ever stopped. Twin of Get-ExakitUninstallOtherRuns.
+_exakit_uninstall_other_runs() {
+    _uor_bin="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/exakit"
+    _uor_kit="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/kit/setup/"
+    _uor_ps="$(ps -axo pid=,ppid=,command= 2>/dev/null)" || return 0
+    [ -n "$_uor_ps" ] || return 0
+    printf '%s\n' "$_uor_ps" | awk -v self="$$" -v bin="$_uor_bin" -v kit="$_uor_kit" '
+        {
+            line = $0; sub(/^[ \t]+/, "", line)
+            pid = line; sub(/[ \t].*$/, "", pid)
+            rest = line; sub(/^[0-9]+[ \t]+/, "", rest)
+            ppid = rest; sub(/[ \t].*$/, "", ppid)
+            cmd = rest; sub(/^[0-9]+[ \t]*/, "", cmd)
+            par[pid] = ppid; c[pid] = cmd; ord[++n] = pid
+        }
+        END {
+            p = self; k = 0
+            while (p != "" && p != "0" && !(p in anc) && k < 128) { anc[p] = 1; p = par[p]; k++ }
+            for (i = 1; i <= n; i++) {
+                pid = ord[i]
+                if (pid in anc) continue
+                cmd = c[pid]; at = 0
+                b = index(cmd, bin)
+                if (b > 0) { nx = substr(cmd, b + length(bin), 1); if (nx == "" || nx == " ") at = b }
+                if (!at) { kk = index(cmd, kit); if (kk > 0) { tail = substr(cmd, kk + length(kit)); sub(/[ \t].*$/, "", tail); if (tail == "exakit" || tail ~ /\.sh$/) at = kk } }
+                if (!at) continue
+                # Only a RUN of it: the path is the program, or what a shell
+                # (bash/sh/zsh, through env) was told to run - not an editor
+                # or a pager that has the file open.
+                pre = substr(cmd, 1, at - 1); np = split(pre, pw, /[ \t]+/); okp = 1
+                for (j = 1; j <= np; j++) {
+                    if (pw[j] == "") continue
+                    bn = pw[j]; sub(/.*\//, "", bn)
+                    if (bn !~ /^-?(ba|z|da|k)?sh$/ && bn != "env" && pw[j] !~ /^-/) { okp = 0; break }
+                }
+                if (!okp) continue
+                q = par[pid]; d = 0; k = 0
+                while (q != "" && q != "0" && k < 128) { if (q == self) { d = 1; break }; q = par[q]; k++ }
+                if (d) continue
+                s = substr(cmd, at); n1 = split(s, w, /[ \t]+/)
+                name = w[1]; sub(/.*\//, "", name)
+                out = name; for (j = 2; j <= n1 && j <= 4; j++) out = out " " w[j]
+                print pid "|" out
+            }
+        }'
+}
+
+# exakit_uninstall_blocked <dry> - say which other exakit runs are alive; 0
+# when at least one is (the uninstall must not start), 1 when none is.
+exakit_uninstall_blocked() {
+    _ub_list="$(_exakit_uninstall_other_runs 2>/dev/null || true)"
+    [ -n "$_ub_list" ] || return 1
+    printf '%s\n' "$_ub_list" | while IFS='|' read -r _ub_pid _ub_cmd; do
+        [ -n "$_ub_pid" ] || continue
+        warn "exakit is still running in another window: $_ub_cmd (pid $_ub_pid). Close it, then run exakit uninstall again."
+    done
     return 0
 }
 
