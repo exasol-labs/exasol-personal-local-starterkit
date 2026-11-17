@@ -30,7 +30,7 @@ import publicip  # noqa: E402
 
 # Characters the guides use that an ASCII console cannot show.
 ASCII = {"→": ">", "←": "<", "—": "-", "–": "-", "‘": "'", "’": "'",
-         "“": '"', "”": '"', "…": "...", " ": " ", "×": "x", "•": "-"}
+         "“": '"', "”": '"', "…": "...", " ": " ", "×": "x", "•": "-", "·": "-"}
 # Words that say nothing about which field a "where to find" step covers.
 STOP = {"the", "and", "for", "with", "its", "your", "this", "open", "name", "file", "from", "into"}
 
