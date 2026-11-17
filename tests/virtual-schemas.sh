@@ -3438,7 +3438,7 @@ PY
     # after the credential (over the stand-in bucket), its tables and one key,
     # the panel's row as auto, and the drafted tables connected.
     db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
-    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
+    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID *:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
     Q_DRAFT="$(when 'n to give a folder instead')"
     EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="s3 --name s3form --set bucket=docs-bucket --set region=ap-south-1" \
