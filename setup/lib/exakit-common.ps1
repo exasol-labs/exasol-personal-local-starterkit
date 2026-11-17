@@ -5615,11 +5615,15 @@ function Remove-ExakitReadonlyAllowlist {
         foreach ($command in $readonly) { $ours += "Bash($prefix $command`:*)" }
         $ours += "Bash($prefix skills)"
         $ours += "Bash($prefix skills --json)"
+        $ours += "Bash($prefix tls-pin)"
+        $ours += "Bash($prefix tls-pin --json)"
         $ours += "Bash($prefix uninstall`:*)"
     }
     foreach ($command in ($readonly + @("uninstall"))) { $ours += "PowerShell(exakit $command`:*)" }
     $ours += "PowerShell(exakit skills)"
     $ours += "PowerShell(exakit skills --json)"
+    $ours += "PowerShell(exakit tls-pin)"
+    $ours += "PowerShell(exakit tls-pin --json)"
     $ours += "mcp__exasol"
     $path = Join-Path (Join-Path (Get-ExakitAgentHome) ".claude") "settings.json"
     if (-not (Test-Path $path)) { return "REMOVED 0" }

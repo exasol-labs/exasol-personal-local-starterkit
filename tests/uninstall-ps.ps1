@@ -480,6 +480,25 @@ Check "addon: its staged .cmd.new is gone" "no" (Ex (Join-Path $script:BinDir "d
 Check "addon: exakit.cmd.new is not its to remove" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
 Check "addon: a bystander .cmd.new stays" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
 Check "addon: exakit.cmd stays" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd"))
+# --- the Claude permission rules: uninstall removes every rule the install wrote ---
+# The real writer and remover, run against the sandboxed profile. Uninstall used
+# to miss the 14 `tls-pin` rules (12 Bash spellings, 2 PowerShell): only a
+# round trip through both functions catches a rule added to one and not the other.
+foreach ($name in @('Test-ExakitLegacyAllowlistRule','Write-ExakitSettingsJson','Get-ExakitAgentHome','Set-ExakitReadonlyAllowlist','Remove-ExakitReadonlyAllowlist')) {
+    $definition = $commonAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    Invoke-Expression $definition.Extent.Text
+}
+$claudeDir = Join-Path $fakeProfile ".claude"
+New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+$settings = Join-Path $claudeDir "settings.json"
+Set-Content -Path $settings -Value '{"permissions": {"allow": ["Bash(git status:*)", "Bash(exakit tls-pin --accept)"], "deny": ["Bash(rm -rf:*)"]}, "theme": "dark"}'
+[void](Set-ExakitReadonlyAllowlist)
+$written = @((Get-Content -Raw $settings | ConvertFrom-Json).permissions.allow | Where-Object { "$_" -like "*tls-pin*" -and "$_" -ne "Bash(exakit tls-pin --accept)" })
+Check "rules: the install writes the tls-pin rules" "14" $written.Count
+[void](Remove-ExakitReadonlyAllowlist)
+$doc = Get-Content -Raw $settings | ConvertFrom-Json
+Check "rules: uninstall leaves only the user's own" "Bash(git status:*)|Bash(exakit tls-pin --accept)|Bash(rm -rf:*)|dark" ((@($doc.permissions.allow) + @($doc.permissions.deny) + @($doc.theme)) -join "|")
+Check "rules: a second uninstall removes nothing" "REMOVED 0" (Remove-ExakitReadonlyAllowlist)
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
