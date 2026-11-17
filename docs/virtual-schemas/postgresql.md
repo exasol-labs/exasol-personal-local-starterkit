@@ -1,7 +1,22 @@
-# PostgreSQL
+# PostgreSQL — Federation guide
 
-Self-hosted PostgreSQL, Amazon RDS or Aurora PostgreSQL, Azure Database for
-PostgreSQL. One source is one schema of one database.
+> **Federation** lets your local Exasol query PostgreSQL data in place, without copying it.
+> `exakit connect postgresql` turns one schema into a virtual schema, `VS_<NAME>`, that you query with SQL.
+
+**Works with:** self-hosted PostgreSQL, Amazon RDS and Aurora PostgreSQL,
+Azure Database for PostgreSQL. One source is one schema of one database.
+
+## At a glance
+
+| You need | Where to find it |
+|---|---|
+| Host and port | RDS endpoint, Aurora **Reader** endpoint or Azure server name ([step 1](#1-host-and-port)) |
+| Database and schema | `\l` and `\dn` in `psql` ([step 2](#2-database-and-schema)) |
+| A read-only user | You create it ([step 3](#3-a-read-only-user)) |
+| Your IP let in | Security group or firewall rule ([step 4](#4-open-the-network)) |
+| A CA certificate file | Your region's RDS bundle, or the root that signs the server ([step 5](#5-the-ca-certificate)) |
+
+Then [connect](#connect) and [query](#query) `VS_<NAME>`.
 
 ## The simplest way: ask your AI agent
 
@@ -21,77 +36,9 @@ for TLS verify. Write the password to a file, never into the chat.
 the database, plus the AWS CLI (`aws configure`) for RDS/Aurora or the Azure
 CLI (`az login`) for Azure.
 
-**Prefer to do it by hand?** Follow the steps below.
+**Prefer to do it by hand?** Prepare the source with the five steps below.
 
-## What `exakit connect` asks for
-
-### Required
-
-| Field | Example | Where it comes from |
-|---|---|---|
-| Name (alias) for this connection | `sales` | You choose it. `sales` gives the schema `VS_SALES`. |
-| Host name or address | `mydb.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or Azure server name ([step 1](#1-host-and-port)). |
-| Database | `sales` | RDS: Configuration → DB name ([step 2](#2-database-and-schema)). |
-| Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
-| Password | (hidden) | That user's password. |
-
-### Optional
-
-| Field | Default if left out | Example |
-|---|---|---|
-| Port | `5432` | `5432` |
-| Schema | `public` | `public` |
-| TLS | `verify` | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
-
-## Connection string you can paste
-
-```text
-postgres://exakit_reader@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales?currentSchema=public&sslmode=verify-full
-jdbc:postgresql://mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
-mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
-mydb.abc123.eu-central-1.rds.amazonaws.com
-```
-
-| String | Fills |
-|---|---|
-| `postgres://user@host:port/db?currentSchema=...&sslmode=...` (or `postgresql://`) | host, port, database, user, schema and TLS |
-| `jdbc:postgresql://host:port/db` | host, port and database (and `user`, `currentSchema`, `sslmode` when given) |
-| `host:port/db` | host, port and database |
-| `host` | host |
-
-`sslmode` sets TLS: `verify-full` and `verify-ca` give `verify`, `require` and
-`prefer` give `require`, `disable` gives `disable`. A password in the string
-(`user:password@` or `password=`) is the credential: taken out of the string
-and not asked again.
-
-### Where to find the connection string
-
-You do not build it: copy the address your provider shows.
-
-- **RDS:** AWS Console → RDS → Databases → `<db>` → Connectivity & security →
-  Endpoint and Port. RDS shows the parts, not a whole string. Paste
-  `<endpoint>:5432/<database>`.
-- **Aurora:** the same tab, the **Reader** endpoint.
-- **Azure:** Azure Database for PostgreSQL flexible servers → `<server>` →
-  Overview → Server name. Paste `<server>.postgres.database.azure.com:5432/<database>`.
-- **A string from your team or an app config** (`postgres://...`,
-  `jdbc:postgresql://...`) works as it is.
-
-Leave the password out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
-
-### Where to find each part of the string
-
-| Part of the string | Where to find it |
-|---|---|
-| host | RDS: Connectivity & security → Endpoint. Azure: Overview → Server name ([step 1](#1-host-and-port)). |
-| port | RDS: Connectivity & security → Port. Default `5432`. |
-| database | RDS: Configuration → DB name, or `\l` in `psql` ([step 2](#2-database-and-schema)). |
-| `currentSchema` | `\dn` in `psql` ([step 2](#2-database-and-schema)). Default `public`. |
-| user | The read-only user you make ([step 3](#3-a-read-only-user)). |
-| `sslmode` | Your choice. Leave it out for `verify`. |
-
-## Where to find each value
+## Where to find each value: prepare the source
 
 ### 1. Host and port
 
@@ -176,10 +123,14 @@ check the certificate.
 exakit connect postgresql
 ```
 
-The kit prints your public IP, asks for a connection string (hidden; press
-Enter on an empty line to type the fields instead), then each field above. It
-shows a plan and asks once. The first connect installs Java in the database
-(one restart). Your tables appear as `VS_SALES`.
+1. The kit prints your public IP.
+2. It asks for a connection string (hidden). Paste one, or press Enter on an
+   empty line to type the fields one by one.
+3. It asks for each field in [the table below](#what-exakit-connect-asks-for-reference).
+4. It shows the plan and connects. The first connect enables **Federation** in
+   the database: it installs Java there (one restart).
+
+Your tables appear as `VS_SALES`.
 
 Without prompts (put the password alone in an owner-only file):
 
@@ -197,12 +148,98 @@ a string that contains `&`. For a quoted name in `exakit sql`, pipe the
 statement in (`'SELECT "x" FROM VS_SALES.T' | exakit sql`) or use
 `exakit sql --file query.sql`.
 
-## Common problems
+## Query
 
-| Symptom or error text | Fix |
+Names arrive in upper case, so query them without quotes:
+
+```bash
+exakit sql "SELECT * FROM VS_SALES.ORDERS LIMIT 10"
+exakit sql "SELECT CAST(RENTAL_RATE AS DECIMAL(10,2)) FROM VS_SALES.FILM LIMIT 10"
+```
+
+- `NUMERIC` columns arrive as `VARCHAR`: cast them to compute, as above.
+- A column of a domain type (pagila's `FILM.RELEASE_YEAR`) or an extension type
+  such as `vector` cannot be read, and `BYTEA` reads as the text
+  `'bytea NOT SUPPORTED'`: leave such columns out of the `SELECT` list.
+
+## Troubleshooting
+
+| Error you see | Why | Fix |
+|---|---|---|
+| "connect timed out", "The connection attempt failed" | The source does not let your IP in. | Allow your IP in the security group or firewall; on RDS, Publicly accessible = Yes ([step 4](#4-open-the-network)). |
+| "PKIX path building failed", "trustAnchors parameter must be non-empty" | `verify` has no CA file to check the server with. | Give the CA with `--set ca=<pem>` ([step 5](#5-the-ca-certificate)). Do not switch to `require` to hide it. |
+| "password authentication failed" | Wrong user or password. | `exakit source reauth sales`. |
+| "permission denied for table" or "for schema" | A grant is missing. | Run the grants in [step 3](#3-a-read-only-user). |
+| "validity check failed" | The database clock is behind (the computer slept). | `exakit stop`, then `exakit start`. |
+
+## What `exakit connect` asks for (reference)
+
+### Required
+
+| Field | Example | Where it comes from |
+|---|---|---|
+| Name (alias) for this connection | `sales` | You choose it. `sales` gives the schema `VS_SALES`. |
+| Host name or address | `mydb.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or Azure server name ([step 1](#1-host-and-port)). |
+| Database | `sales` | RDS: Configuration → DB name ([step 2](#2-database-and-schema)). |
+| Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Password | (hidden) | That user's password. |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| Port | `5432` | `5432` |
+| Schema | `public` | `public` |
+| TLS | `verify` | `verify`, `require` or `disable` |
+| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
+
+## Connection string you can paste (reference)
+
+```text
+postgres://exakit_reader@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales?currentSchema=public&sslmode=verify-full
+jdbc:postgresql://mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
+mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
+mydb.abc123.eu-central-1.rds.amazonaws.com
+```
+
+| String | Fills |
 |---|---|
-| "connect timed out", "The connection attempt failed" | Allow your IP in the security group or firewall; on RDS, Publicly accessible = Yes. |
-| "PKIX path building failed", "trustAnchors parameter must be non-empty" | Give the CA with `--set ca=<pem>` (step 5). Do not switch to `require` to hide it. |
-| "password authentication failed" | Wrong user or password: `exakit source reauth sales`. |
-| "permission denied for table" or "for schema" | Run the grants in step 3. |
-| "validity check failed" | The database clock is behind (the computer slept): `exakit stop`, then `exakit start`. |
+| `postgres://user@host:port/db?currentSchema=...&sslmode=...` (or `postgresql://`) | host, port, database, user, schema and TLS |
+| `jdbc:postgresql://host:port/db` | host, port and database (and `user`, `currentSchema`, `sslmode` when given) |
+| `host:port/db` | host, port and database |
+| `host` | host |
+
+**TLS modes:** `sslmode` sets TLS. `verify-full` and `verify-ca` give `verify`;
+`require` and `prefer` give `require`; `disable` gives `disable`.
+
+**A password in the string** (`user:password@` or `password=`) is the
+credential: the kit takes it out of the string and does not ask again. Better:
+leave it out. The kit asks for it at a hidden prompt, or reads it from
+`--password-file`.
+
+### Where to find the connection string
+
+You do not build it: copy the address your provider shows.
+
+- **RDS:** AWS Console → RDS → Databases → `<db>` → Connectivity & security →
+  Endpoint and Port. RDS shows the parts, not a whole string. Paste
+  `<endpoint>:5432/<database>`.
+- **Aurora:** the same tab, the **Reader** endpoint.
+- **Azure:** Azure Database for PostgreSQL flexible servers → `<server>` →
+  Overview → Server name. Paste `<server>.postgres.database.azure.com:5432/<database>`.
+- **A string from your team or an app config** (`postgres://...`,
+  `jdbc:postgresql://...`) works as it is.
+
+The string is optional. At the prompt, press Enter alone and `exakit connect`
+asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| host | RDS: Connectivity & security → Endpoint. Azure: Overview → Server name ([step 1](#1-host-and-port)). |
+| port | RDS: Connectivity & security → Port. Default `5432`. |
+| database | RDS: Configuration → DB name, or `\l` in `psql` ([step 2](#2-database-and-schema)). |
+| `currentSchema` | `\dn` in `psql` ([step 2](#2-database-and-schema)). Default `public`. |
+| user | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| `sslmode` | Your choice. Leave it out for `verify`. |
