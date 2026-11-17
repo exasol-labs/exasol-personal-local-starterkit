@@ -1162,6 +1162,8 @@ jobs:
           "$RUNNER_TEMP/langfuse-venv/bin/python" tests/test_model_provider.py
           # The multi-page dashboard needs pandas, which only this venv has.
           "$RUNNER_TEMP/langfuse-venv/bin/python" tests/test_board.py
+          # The number formats of Ask your data read pandas types too (29b8238a).
+          "$RUNNER_TEMP/langfuse-venv/bin/python" tests/test_number_format.py
       - run: python3 tests/test_notebook_contents.py
         if: matrix.group == 'suites-14'
       - run: python3 tests/test_notebook_ai.py
@@ -1175,8 +1177,6 @@ jobs:
       - run: python3 tests/test_role_picker.py
         if: matrix.group == 'suites-14'
       - run: python3 tests/test_role_check.py
-        if: matrix.group == 'suites-13'
-      - run: python3 tests/test_number_format.py
         if: matrix.group == 'suites-13'
       - run: python3 tests/test_notebook_bundle.py
         if: matrix.group == 'suites-14'

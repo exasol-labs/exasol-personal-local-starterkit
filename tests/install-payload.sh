@@ -37,7 +37,10 @@ mb=$((bytes / 1048576))
 # 1. Budget. The install payload is scripts plus the bundled datasets (~7 MB).
 #    This is a ceiling to catch a heavy asset riding along unnoticed, not a
 #    target - if a dataset legitimately grows, raise it deliberately.
-budget_mb=12
+# Raised from 12 deliberately: the notebook add-on's documentation site ships in
+# the kit copy it serves from (notebook/docs/site, about 66 MB before compression;
+# notebook/package/exakit_nb/docs.py), which put the archive at 18 MB.
+budget_mb=20
 if [ "$mb" -le "$budget_mb" ]; then
     pass "source archive is ${mb} MB (budget ${budget_mb} MB)"
 else
