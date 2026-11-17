@@ -540,11 +540,15 @@ rerun="$( EXAKIT_HOME="$WORK/rerun-home"
     printf '#!/bin/sh\nprintf 0.1.0\n' > "$EXAKIT_BIN_DIR/exakit"
     chmod +x "$EXAKIT_BIN_DIR/exakit"
     mark_step exakit_helper >/dev/null 2>&1
+    EXAKIT_LOG_FILE="$WORK/rerun-home/install.log"; : > "$EXAKIT_LOG_FILE"
     _out="$(kit_shared_steps 3 4 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
     # grep rather than case: inside a command substitution bash 3.2 reads the
     # close-paren of a case pattern as the end of the substitution itself, and
     # quote characters in a comment here confuse it the same way. Keep both out.
-    if printf '%s\n' "$_out" | grep -q 'out of date'; then
+    # Setup Utilities holds the lines of an item while it runs, since 04303b8a:
+    # a step that passes leaves its tick on screen, and what it said is in the
+    # install log.
+    if { printf '%s\n' "$_out"; cat "$EXAKIT_LOG_FILE"; } | grep -q 'out of date'; then
         printf 'said-out-of-date '
     else
         printf 'SILENT '
@@ -1513,7 +1517,7 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     printf ' '
     printf '%s\n' "$_out" | grep -q 'exakit update' && printf 'repair-pyexasol' || printf 'NO-REPAIR-PYEXASOL' )"
 check "a dying component leaves a working CLI, a repair line, and no half-marked step" \
-    "cli mcp,exakit_helper data-skipped repair-exapump repair-pyexasol" "$soft"
+    "cli exakit_helper,mcp data-skipped repair-exapump repair-pyexasol" "$soft"
 
 # Nothing failing must not produce a summary out of thin air.
 quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
@@ -1538,7 +1542,7 @@ quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
     printf '%s\n' "$_out" | grep -q 'did not complete' && printf 'SPURIOUS' || printf 'silent'
     printf ' %s' "$(manifest_get steps_completed | tr -d '\" []' )" )"
 check "a clean run says nothing and marks everything" \
-    "silent exapump,mcp,pyexasol,exakit_helper" "$quiet"
+    "silent exapump,pyexasol,exakit_helper,mcp" "$quiet"
 echo "release notes travel with the kit:"
 mkdir -p "$WORK/wn-kit/setup"
 cat > "$WORK/wn-kit/setup/whats-new.json" <<'WN_ONE'
