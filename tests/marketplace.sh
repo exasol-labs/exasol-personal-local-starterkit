@@ -810,7 +810,26 @@ lacks "and does not mention the Rust toolchain" "Rust" \
 # exercised against the Python add-on in test_marketplace_json_tables.py.
 check "the JSON Tables add-on is implemented in Python" "yes"     "$([ -f "$ROOT/marketplace/addons/json_tables.py" ] && echo yes || echo no)"
 
+# Earlier sections leave json-tables recorded as a kit install in this run's
+# manifest (the menu tests install it, stubbed): its version and its command.
+# The next two sections are about a machine where the kit never installed it -
+# a recorded command wins over EXAKIT_JSON_TABLES_BIN by design (owned_path).
+forget_json_tables() {
+    [ -f "$EXAKIT_MANIFEST" ] || return 0
+    python3 - "$EXAKIT_MANIFEST" <<'FORGETJTEOF'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+doc.get("components", {}).pop("json_tables", None)
+doc.get("components", {}).pop("json-tables", None)
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+FORGETJTEOF
+}
+
 echo "manual installs are never re-offered:"
+forget_json_tables
 # A tool the user installed themselves is "present": the marketplace must not
 # advertise it, and the kit must never manage or remove it. The launcher name
 # often differs from the add-on id, so this is keyed on EXAKIT_<ID>_BIN too --
@@ -913,6 +932,7 @@ has "...and the opt-out row only when nothing else is ticked" \
     'if ($defaults.Count -eq 0) { [void]$defaults.Add($script:ExakitTableRowSkip) }' "$_dl_ps1"
 
 echo "data-load routes JSON through the add-on:"
+forget_json_tables
 . "$ROOT/setup/lib/exapump.sh"
 check "file kinds are classified from the name" "csv parquet json json json csv unknown" "$(
     for _f in a.csv b.parquet c.json d.ndjson e.jsonl.gz f.CSV.gz g.xlsx; do

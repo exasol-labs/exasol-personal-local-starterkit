@@ -250,7 +250,8 @@ exit $script:PendingExitCode
     $j = Get-JsonPart (Invoke-Driver "tls-pin-json")
     Check "tls-pin --json: status, matches, both values, changed" "pinned True $fp1 $fp1 False" "$($j.status) $($j.matches) $($j.fingerprint) $($j.live) $($j.changed)"
     # Read off the raw text: this test's own ConvertFrom-Json (pwsh 7) would turn the timestamp into a [datetime].
-    Has "...recorded_at as written (UTC ISO 8601)" '"recorded_at": "2026-01-01T00:00:00Z"' $script:OUT
+    # Windows PowerShell 5.1's ConvertTo-Json puts two spaces after the colon; the value is what counts.
+    Check "...recorded_at as written (UTC ISO 8601)" "True" ([bool]($script:OUT -match '"recorded_at":\s+"2026-01-01T00:00:00Z"'))
     Write-ManifestDoc $port2 $fp1
     $o = Invoke-Driver "tls-pin"
     Check "tls-pin: a changed certificate exits 6" 6 $script:CODE

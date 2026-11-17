@@ -142,6 +142,7 @@ function Remove-McpSidecar { param([switch]$DryRun) }
 # harness with no console would only get in the way.
 function Start-ExakitSpinner { param([string]$Label) }
 function Stop-ExakitSpinner { }
+function Set-ExakitSpinnerLabel { param([string]$Label) }
 # The process list is a FIXTURE, never the machine's: a real run here would
 # enumerate - and stop - the exasol-mcp-server of whatever AI client is open on
 # the box running the suite. Stops are recorded, never sent. Empty by default.

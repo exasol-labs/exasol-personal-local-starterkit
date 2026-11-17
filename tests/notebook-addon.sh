@@ -54,7 +54,7 @@ out="$(full_uninstall 1 2>&1)"
 contains "the dry run names the work that stays" "your work stays in $EXAKIT_HOME: notebooks, MLflow runs and models, dashboards" "$out"
 check "the dry run removes nothing" "yes" "$([ -f "$EXAKIT_HOME/manifest.json" ] && echo yes || echo no)"
 out="$(full_uninstall 0 2>&1)"
-contains "the real run says so" "your work was kept there (notebooks, MLflow runs and models, dashboards)" "$out"
+contains "the real run says so" "your notebooks, MLflow runs and models, dashboards stay there" "$out"
 check "the user's notebook and MLflow store are still there" "precious|runs" \
     "$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb" 2>/dev/null)|$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db" 2>/dev/null)"
 check "the kit's MLflow store and the dashboards are still there" "registry|board" \

@@ -50,7 +50,8 @@ class AdapterDryRunTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", script], env=self._environment(),
                                 capture_output=True, text=True, timeout=30, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(str(self.profile), result.stdout)
+        # The preview names a path under HOME the way the screen does, with ~ (f326b39e).
+        self.assertIn("~/" + self.profile.relative_to(self.base).as_posix(), result.stdout)
         self._assert_preserved()
 
     def _tree(self) -> dict[str, tuple[int, int] | None]:
