@@ -327,7 +327,9 @@ if printf '%s\n' "$_trap" | grep -qF 'check your network or proxy'; then
 else
     pass "the trap does not mention the network at all"
 fi
-if printf '%s\n' "$_trap" | grep -qF 'Fix the issue above and re-run." -ForegroundColor'; then
+# Written through Write-InstallLine (colour only where the rest of the kit's
+# UI would colour), or the plain Write-Host -ForegroundColor it replaced.
+if printf '%s\n' "$_trap" | grep -qE 'Fix the issue above and re-run\." (-ForegroundColor )?Red'; then
     pass "...and every other phase still gets a plain 'fix it and re-run'"
 else
     fail "the trap lost its plain second line, so a non-download failure ends with no advice at all"
@@ -499,10 +501,13 @@ printf '\n== the Windows-on-ARM install says what it is skipping ==\n'
 _has "$ROOT/setup/lib/common.sh" 'not part of this installation, skipping' \
     "bash names a step it is not running" \
     "bash no longer names a skipped step - the wording the Windows twin copies is gone"
-_has "$_SWD" 'Info "Step 3/6  exapump - not part of this installation, skipping"' \
-    "the Windows path names the skipped exapump step" \
-    "Windows-on-ARM jumps from Step 2/6 to Step 5/6 again"
-_has "$_SWD" 'Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
+_has "$_SWD" 'Info "exapump - not part of this installation, skipping"' \
+    "the Windows path names the skipped exapump item" \
+    "Windows-on-ARM skips the exapump item of Setup Utilities without printing it"
+_has "$_SWD" '"Database features - skipped: they are set up through exapump, which is not installed"' \
+    "...and the skipped database step" \
+    "Windows-on-ARM skips the database step without printing it"
+_has "$_SWD" 'Info "Step 4/4  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
     "...and the skipped AI bridge step" \
     "Windows-on-ARM skips the AI bridge step without printing it"
 

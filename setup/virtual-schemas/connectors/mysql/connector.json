@@ -1,0 +1,113 @@
+{
+  "id": "mysql",
+  "name": "MySQL",
+  "profile": "java-jdbc",
+  "upstream": "exasol/mysql-virtual-schema",
+  "adapter": {
+    "version": "6.1.0",
+    "asset": "virtual-schema-dist-14.1.0-mysql-6.1.0.jar",
+    "url": "https://github.com/exasol/mysql-virtual-schema/releases/download/6.1.0/virtual-schema-dist-14.1.0-mysql-6.1.0.jar",
+    "size": 528180,
+    "sha256": "97005ff4b161c7294c9ddb722df4b1f9aae4df524eac5fc50abbd6adbf546e58",
+    "license": "MIT"
+  },
+  "driver": {
+    "version": "26.7.0",
+    "asset": "mysql-connector-j-26.7.0.jar",
+    "url": "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/26.7.0/mysql-connector-j-26.7.0.jar",
+    "size": 2613206,
+    "sha256": "69084713593a4aa8d07c383619b9639276f08bccf8faf1c562178147d389b1e1",
+    "license": "GPL-2.0 with Universal FOSS Exception"
+  },
+  "etl": {
+    "drivername": "MYSQL",
+    "prefix": "jdbc:mysql:",
+    "main": "com.mysql.cj.jdbc.Driver",
+    "nosecurity": true
+  },
+  "inputs": [
+    {
+      "name": "host",
+      "label": "Host name or address",
+      "kind": "host",
+      "required": true
+    },
+    {
+      "name": "port",
+      "label": "Port",
+      "kind": "port",
+      "default": 3306
+    },
+    {
+      "name": "database",
+      "label": "Database",
+      "kind": "name",
+      "required": true
+    },
+    {
+      "name": "user",
+      "label": "Username",
+      "kind": "text",
+      "required": true
+    },
+    {
+      "name": "password",
+      "label": "Password",
+      "kind": "secret",
+      "required": true
+    },
+    {
+      "name": "tls",
+      "label": "TLS",
+      "question": "How should the connection use TLS?",
+      "choice_hints": ["encrypted, the server's certificate checked", "encrypted, the certificate not checked", "not encrypted"],
+      "kind": "choice",
+      "default": "verify",
+      "choices": [
+        "verify",
+        "require",
+        "disable"
+      ]
+    },
+    {
+      "name": "ca",
+      "label": "CA certificate file (PEM) - required with TLS verify, a public CA too: its root (e.g. ISRG Root X1)",
+      "kind": "ca-file"
+    }
+  ],
+  "paste": {
+    "credential": ["userinfo", "password"],
+    "schemes": ["jdbc:mysql", "mysql"],
+    "bare": true,
+    "path": "database",
+    "params": {"user": "user", "sslmode": "tls", "usessl": "tls"},
+    "map": {"sslmode": {"verify_identity": "verify", "verify_ca": "verify", "required": "require", "preferred": "require", "disabled": "disable"}, "usessl": {"false": "disable", "true": null}},
+    "forms": ["jdbc:mysql://host:3306/db", "mysql://user@host:3306/db", "host[:port][/database]"]
+  },
+  "auth": "password",
+  "url": "jdbc:mysql://{host}:{port}/?{tls}",
+  "tls": {
+    "verify": "sslMode=VERIFY_IDENTITY",
+    "require": "sslMode=REQUIRED",
+    "disable": "sslMode=DISABLED"
+  },
+  "tls_truststore": "sslMode=VERIFY_IDENTITY&trustCertificateKeyStoreUrl=file:{truststore}&trustCertificateKeyStoreType=JKS",
+  "access": "SELECT on the database's tables",
+  "vs_properties": {
+    "CATALOG_NAME": "{database}"
+  },
+  "schema_check": {
+    "input": "database",
+    "statement": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = BINARY {v}) THEN 'ok' ELSE COALESCE((SELECT CONCAT('case:', MIN(schema_name)) FROM information_schema.schemata WHERE LOWER(schema_name) = LOWER({v})), 'missing') END",
+    "case": "MySQL database names are case-sensitive on Linux"
+  },
+  "tips": [
+    "Table and column names keep MySQL's spelling (actor, first_name): quote them, e.g. SELECT \"first_name\" FROM <schema>.\"actor\".",
+    "YEAR columns arrive as DATE (2006 reads as 2006-01-01); TEXT arrives as VARCHAR(65535)."
+  ],
+  "notes": [
+    "MySQL has no schemas below a database: the dialect takes CATALOG_NAME only.",
+    "Connector/J is downloaded from Maven Central on this machine and never redistributed (GPL with the FOSS exception).",
+    "verify needs --set ca=<PEM file or bundle>, a public CA's root too (the loader's own CA store is empty on Exasol Personal 2.4): Connector/J reads trust only from a file or URL, so the kit writes the bundle as a JKS truststore for this source and gives its path relative to where both the adapter and the loader start."
+  ]
+}

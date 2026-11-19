@@ -1,0 +1,121 @@
+{
+  "id": "sqlserver",
+  "name": "SQL Server",
+  "profile": "java-jdbc",
+  "upstream": "exasol/sqlserver-virtual-schema",
+  "adapter": {
+    "version": "3.0.1",
+    "asset": "virtual-schema-dist-14.0.4-sqlserver-3.0.1.jar",
+    "url": "https://github.com/exasol/sqlserver-virtual-schema/releases/download/3.0.1/virtual-schema-dist-14.0.4-sqlserver-3.0.1.jar",
+    "size": 536114,
+    "sha256": "28097686ef11b59ff7045650d05f6254c2701d5dd47ca99c521943bc5e1e16c5",
+    "license": "MIT"
+  },
+  "driver": {
+    "version": "13.4.0.jre8",
+    "asset": "mssql-jdbc-13.4.0.jre8.jar",
+    "url": "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/13.4.0.jre8/mssql-jdbc-13.4.0.jre8.jar",
+    "size": 1534598,
+    "sha256": "81b6b9860c713b53c237bd31f6d650251517818a83d93e5e99fdff250a25f8d3",
+    "license": "MIT"
+  },
+  "etl": {
+    "drivername": "SQLSERVER",
+    "prefix": "jdbc:sqlserver:",
+    "main": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+    "nosecurity": true
+  },
+  "inputs": [
+    {
+      "name": "host",
+      "label": "Host name or address",
+      "kind": "host",
+      "required": true
+    },
+    {
+      "name": "port",
+      "label": "Port",
+      "kind": "port",
+      "default": 1433
+    },
+    {
+      "name": "database",
+      "label": "Database",
+      "kind": "name",
+      "required": true
+    },
+    {
+      "name": "schema",
+      "label": "Schema",
+      "kind": "name",
+      "default": "dbo"
+    },
+    {
+      "name": "user",
+      "label": "Username",
+      "kind": "text",
+      "required": true
+    },
+    {
+      "name": "password",
+      "label": "Password",
+      "kind": "secret",
+      "required": true
+    },
+    {
+      "name": "tls",
+      "label": "TLS",
+      "question": "How should the connection use TLS?",
+      "choice_hints": ["encrypted, the server's certificate checked", "encrypted, the certificate not checked", "not encrypted"],
+      "kind": "choice",
+      "default": "verify",
+      "choices": [
+        "verify",
+        "require",
+        "disable"
+      ]
+    },
+    {
+      "name": "ca",
+      "label": "CA certificate file (PEM) - required with TLS verify, a public CA too: its root plus intermediates",
+      "kind": "ca-file"
+    }
+  ],
+  "paste": {
+    "credential": ["password", "pwd", "userinfo"],
+    "schemes": ["jdbc:sqlserver"],
+    "bare": true,
+    "path": "database",
+    "params": {"databasename": "database", "database": "database", "servername": "host", "portnumber": "port", "user": "user", "username": "user"},
+    "tls": "sqlserver",
+    "instance": "a named instance (host\\instance) is not read: give the host and the instance's TCP port with --set host=... --set port=... (SQL Server Configuration Manager shows the port)",
+    "forms": ["jdbc:sqlserver://host:1433;databaseName=db;encrypt=true", "host[:port][/database]"]
+  },
+  "auth": "password",
+  "url": "jdbc:sqlserver://{host}:{port};databaseName={database};{tls}",
+  "tls": {
+    "verify": "encrypt=true;trustServerCertificate=false;hostNameInCertificate={host}",
+    "require": "encrypt=true;trustServerCertificate=true",
+    "disable": "encrypt=false"
+  },
+  "tls_class": "encrypt=true;trustServerCertificate=false;trustManagerClass=exakit.tls.PemTrustManager;trustManagerConstructorArg={tls_arg}",
+  "access": "SELECT on the schema, through a database user mapped to its login (Azure SQL Database: a contained user)",
+  "vs_properties": {
+    "CATALOG_NAME": "{database}",
+    "SCHEMA_NAME": "{schema}"
+  },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN SCHEMA_ID({v}) IS NOT NULL THEN 'ok' ELSE 'missing' END"
+  },
+  "tips": [
+    "Names keep SQL Server's spelling, spaces included: quote them, e.g. SELECT \"OrderID\" FROM <schema>.\"Orders\".",
+    "datetime arrives as TIMESTAMP(3), bit as BOOLEAN, money as DECIMAL(19,4)."
+  ],
+  "notes": [
+    "SQL Server login only; Windows authentication and Entra ID are not part of this connector.",
+    "Exasol tested the jre8 build of mssql-jdbc 13.4.0; it runs on the Java 17 container.",
+    "A CA (--set ca=<PEM file or bundle>) is checked by the kit's TLS helper class, named in the URL (trustManagerClass): mssql-jdbc reads trust only from a file, and on Exasol Personal no path reaches both the adapter (sandbox, /buckets) and the loader (/ of the database container, /exa/bucketfs). The helper trusts exactly the given certificates and checks the host name; it is compiled from setup/virtual-schemas/java/ by the database's own Java and staged beside the driver (a second JAR= for the loader). Verified against RDS SQL Server 2019.",
+    "Without ca, verify relies on the loader's own CA store, which is empty on Exasol Personal 2.3.0 (an absolute cacerts symlink outside its root): give a public CA's root with --set ca too."
+  ]
+}

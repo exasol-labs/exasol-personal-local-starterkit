@@ -1,0 +1,37 @@
+# Exasol Semantic Views as a module of the SQL preprocessor framework.
+# The framework's module manifest (docs/module-authoring.md, v0.9.1) plus the
+# kit's [kit] table; registered by setup/preprocessor/manage.py register-module.
+name = "semantic_views"
+description = "Semantic SQL for every user: Semantic DDL and metric queries on published semantic views, compiled by Semantic Views' own runtimes."
+phase = "EXPAND"
+script_name = "PREPROC_RT.SEMANTIC_VIEWS_V1"
+function = "semantic_views"
+version = 1
+min_framework = "0.9.1"
+deploy_mode = "library-deployed"
+sha256 = "b0c6f95e5bbc90e964f2a9be5740b5141592d839960099a14a06a2438c7cfff7"
+
+# Every user, as Semantic Views' own database-wide mode reaches them: the
+# administrator, the MCP read-only login, Dash Server, and users made later
+# once the next `exakit update` refreshes the framework's rule resolution.
+[suggested_scope]
+type = "ROLE"
+value = "PUBLIC"
+
+[source]
+repo = "exasol-labs/exasol-semantic-views"
+ref = "v0.6.1"
+
+[[objects]]
+type = "LUA SCALAR SCRIPT"
+name = "PREPROC_RT.SEMANTIC_VIEWS_REFUSE_V1"
+
+[[objects]]
+type = "LUA SCRIPT"
+name = "PREPROC_RT.SEMANTIC_VIEWS_V1"
+
+[kit]
+addon = "semantic-views"
+label = "Semantic Views"
+receipt = "components.semantic_views"
+artifact = "semantic_views_v1.sql"

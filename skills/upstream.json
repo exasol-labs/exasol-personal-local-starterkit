@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "about": "Skills copied unchanged from the components' own repositories. Edit this file, then run: python3 tools/sync_upstream_skills.py. A skill's optional kit_note goes into the quoted kit header above the upstream body. Never edit the copies under skills/<name>/ by hand: tests/skills.sh compares them with skills/upstream.lock.json.",
+  "sources": [
+    {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "follows": "components.mcp.version",
+      "why": "Ships inside the MCP server the kit installs, at the same version.",
+      "skills": [
+        {"name": "exasol-mcp-server", "path": "exasol/ai/mcp/server/skills/exasol-mcp-server",
+         "kit_note": "On this kit, skip the Preprocessors section: the kit's MCP server has no preprocessor tools (`list_exasol_preprocessors`, `set_exasol_preprocessor`). Semantic SQL and JSON Tables queries already work in every session of every user through the kit's SQL preprocessor framework. Never switch a session's preprocessor, with a tool or with `ALTER SESSION SET SQL_PREPROCESSOR_SCRIPT`: that would switch off JSON Tables and every other module for the session."},
+        {"name": "exasol-sql-dialect", "path": "exasol/ai/mcp/server/skills/exasol-sql-dialect"},
+        {"name": "exasol-system-tables", "path": "exasol/ai/mcp/server/skills/exasol-system-tables"},
+        {"name": "exasol-table-design", "path": "exasol/ai/mcp/server/skills/exasol-table-design"},
+        {"name": "exasol-import-export", "path": "exasol/ai/mcp/server/skills/exasol-import-export"},
+        {"name": "exasol-udfs", "path": "exasol/ai/mcp/server/skills/exasol-udfs"}
+      ]
+    },
+    {
+      "repo": "exasol-labs/exasol-agent-skills",
+      "ref": "af04558dde9f7320e012453bff9a2af57b978368",
+      "why": "Exasol's agent skills. Pinned to a commit: exasol-pyexasol is newer than the v0.24.1 release.",
+      "skills": [
+        {"name": "exasol-database", "path": "plugins/exasol/skills/exasol-database"},
+        {"name": "exasol-pyexasol", "path": "plugins/exasol/skills/exasol-pyexasol"},
+        {"name": "exasol-bucketfs", "path": "plugins/exasol/skills/exasol-bucketfs"}
+      ]
+    },
+    {
+      "repo": "exasol-labs/dash-server",
+      "ref": "v0.2.1",
+      "follows": "components.dash-server.version",
+      "why": "dash-server's own guide to writing dashboards; it has no frontmatter, so the kit gives it one.",
+      "skills": [
+        {
+          "name": "exasol-dash",
+          "path": "skills",
+          "entry": "exasol_dash_skill.md",
+          "files": ["pyexasol_skill.md"],
+          "addon": "dash-server",
+          "kit_note": "On this kit, Semantic SQL is already on in every Dash Server session: its login, the read-only MCP user, gets the Semantic Views module through the kit's SQL preprocessor framework. Never give a Dash Server profile `session_init_sql` that sets `SQL_PREPROCESSOR_SCRIPT` or runs `ENABLE_SEMANTIC_SQL()`, even when `exasol_profile_validate` shows `preprocessor_active: false` or the SQL smoke check or a guidance step asks for it. Dash Server 0.2.1 only recognises the name `SEMANTIC_ADMIN.SEMANTIC_PREPROCESSOR`, not the framework (`PREPROC_RT.MASTER` or `PREPROC_RT.P_<hash>`), so that report is false on this kit. Following it would switch off JSON Tables and every other module for every dashboard on the profile. If a dashboard on a published semantic model fails its build preflight for this reason, tell the user it is a known Dash Server limitation on this kit (https://github.com/exasol-labs/dash-server/issues/6). Do not switch the preprocessor, and do not rewrite the queries over the raw tables.",
+          "description": "Exasol's own guide (from the dash-server repository) to writing the Dash app itself for a dashboard hosted on dash-server — layout, callbacks, the queries behind each figure, and patching or reviewing an existing app. Use it with the dash-server skill, which covers installing, starting and registering the server."
+        }
+      ]
+    },
+    {
+      "repo": "exasol-labs/exasol-semantic-views",
+      "ref": "v0.6.1",
+      "follows": "components.semantic-views.version",
+      "why": "The semantic layer's own agent skills, at the release the kit installs into the database.",
+      "skills": [
+        {"name": "exasol-semantic-analyst", "path": "skills/exasol-semantic-analyst", "addon": "semantic-views",
+         "kit_note": "On this kit, skip every step in this skill that runs `EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()`, `SESSION_SETUP_SQL`, `set_exasol_preprocessor` or `ALTER SESSION SET SQL_PREPROCESSOR_SCRIPT`, and skip repeating it after a reconnect. Semantic DDL and Semantic SQL already work in every session of every user through the kit's preprocessor framework; that statement would replace the framework for the session and silently switch off JSON Tables and the other modules. If a semantic statement fails with `SEMANTIC_SURFACE_001` or `not a valid GROUP BY expression`, the user runs `exakit update`. The kit's MCP server already runs every query without `row_limit` as `SELECT * FROM (<query>) LIMIT 1000`, so step 6's advice not to pass `row_limit` does not apply here: a result with exactly 1,000 rows may be incomplete, so tell the user \"showing the first 1,000 rows; there may be more\", and pass a larger `row_limit` when the user needs the full result."},
+        {"name": "exasol-semantic-modeler", "path": "skills/exasol-semantic-modeler", "addon": "semantic-views",
+         "kit_note": "On this kit, skip every step in this skill that runs `EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()`, `SESSION_SETUP_SQL`, `set_exasol_preprocessor` or `ALTER SESSION SET SQL_PREPROCESSOR_SCRIPT`, and skip repeating it after a reconnect. Semantic DDL and Semantic SQL already work in every session of every user through the kit's preprocessor framework; that statement would replace the framework for the session and silently switch off JSON Tables and the other modules. If a semantic statement fails with `SEMANTIC_SURFACE_001` or `not a valid GROUP BY expression`, the user runs `exakit update`."},
+        {"name": "exasol-semantic-reviewer", "path": "skills/exasol-semantic-reviewer", "addon": "semantic-views"}
+      ]
+    }
+  ],
+  "not_taken": {
+    "exasol-labs/exasol-json-tables skills/*": "Written for developers of that repository (they open crates/ and tests/ there); the kit's json-tables skill covers using it.",
+    "exasol-labs/exasol-agent-skills exasol-setup-personal": "Installs Exasol Personal itself; in the kit, exakit installs and operates the database.",
+    "exasol-labs/exasol-agent-skills exasol-notebook-connections, exasol-notebook-connector-config": "Configure and open the connector by hand; the kit's notebooks connect through exakit.nb with no secret in a cell.",
+    "exasol-labs/exasol-agent-skills exasol-import, exasol-export, exasol-udfs": "Same subject as the mcp-server skills of the version the kit installs; one skill per subject.",
+    "exasol-labs/exasol-agent-skills exasol": "Routes to skills the kit does not ship (ITDE, SaaS, extensions).",
+    "exasol/dbt-exasol, exasol/exasol-personal": "Only skills for developing those repositories (openspec).",
+    "exasol-labs/exapump, exasol-labs/exasol-scheduler, exasol-labs/exasol-vscode, exasol/notebook-connector, exasol/pyexasol, exasol/script-languages-release": "No skill in the repository.",
+    "exasol/mcp-server exasol-virtual-schemas": "The kit ships its own exasol-virtual-schemas skill (exakit connect and exakit source, and the index of the exasol-vs-<connector> skills); two skills cannot share a name, and the adapter, JDBC and pushdown set-up the upstream guide teaches is what exakit connect does for the user."
+  }
+}

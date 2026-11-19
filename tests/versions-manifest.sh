@@ -382,6 +382,8 @@ echo "install-time resolution:"
 V_PERSONAL="$(exakit_versions_value components.personal.version "$REAL")"
 V_EXAPUMP="$(exakit_versions_value components.exapump.version "$REAL")"
 V_MCP="$(exakit_versions_value components.mcp.version "$REAL")"
+# What an MCP update can offer: the tag of the image this kit copy pins.
+V_IMAGE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["mcp"]["sidecar_image"].split("@")[0].rsplit(":",1)[1])' "$ROOT/versions.json")"
 V_PYEXASOL="$(exakit_versions_value components.pyexasol.version "$REAL")"
 
 # resolve_set <shell-statements> — resolve in a subshell (so nothing leaks into
@@ -421,8 +423,9 @@ check "a cached document beats the kit copy" \
 check "pinned policy ignores the document entirely" \
     "fallback $EXAKIT_PERSONAL_VERSION_FALLBACK $EXAKIT_EXAPUMP_VERSION_FALLBACK $EXAKIT_MCP_VERSION_FALLBACK $EXAKIT_PYEXASOL_VERSION_FALLBACK" \
     "$(resolve_set 'EXAKIT_VERSION_POLICY=pinned')"
+# ...except the MCP server: it is the image this kit copy pins, under every policy.
 check "latest policy still asks upstream" \
-    "latest 7.7.7 7.7.7 6.6.6 6.6.6" \
+    "latest 7.7.7 7.7.7 $V_MCP 6.6.6" \
     "$(resolve_set 'EXAKIT_VERSION_POLICY=latest
                     exakit_latest_github_release_version() { echo 7.7.7; }
                     exakit_latest_pypi_version() { echo 6.6.6; }')"
@@ -442,6 +445,50 @@ recorded="$( EXAKIT_HOME="$WORK/record-home"
              printf '%s %s %s' "$(manifest_get version_policy)" \
                  "$(manifest_get desired.versions_source)" "$(manifest_get desired.exapump)" )"
 check "the install records where the versions came from" "manifest baked $V_EXAPUMP" "$recorded"
+
+# The install's fetch runs under the spinner `exakit version` shows for it. On a
+# network that drops raw GitHub content it takes up to 12 s (bash) or ~36 s
+# (Windows), and the install screen sat on one static line for all of it. The
+# spinner leaves nothing behind; off a terminal it draws nothing at all.
+echo "install-time versions check (spinner):"
+spin_order="$( EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+               EXAKIT_MANIFEST="$WORK/absent-manifest.json"
+               _vs_log=''
+               ui_spin_begin() { _vs_log="$_vs_log begin:$1"; }
+               ui_spin_end() { _vs_log="$_vs_log end"; }
+               exakit_versions_update_cache() { _vs_log="$_vs_log fetch"; return 1; }
+               exakit_resolve_install_versions >/dev/null 2>&1
+               printf '%s' "$_vs_log" )"
+check "bash: the fetch runs between the spinner's start and stop" \
+    " begin:Checking for newer versions fetch end" "$spin_order"
+spin_quiet="$( EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+               EXAKIT_MANIFEST="$WORK/absent-manifest.json"
+               UI_FANCY=1
+               exakit_resolve_install_versions 2>&1 )"
+check "bash: off a terminal the check prints nothing" "" "$spin_quiet"
+if command -v pwsh >/dev/null 2>&1; then
+    _psv_tmp="$(mktemp -d)"
+    ps_spin="$( cd "$ROOT" && EXAKIT_HOME="$_psv_tmp/home" EXAKIT_BIN_DIR="$_psv_tmp/bin" \
+        EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" pwsh -NoProfile -Command '
+      . ./setup/lib/exakit-common.ps1
+      . ./setup/lib/runtime-personal.ps1
+      $env:EXAKIT_PERSONAL_VERSION = ""
+      Initialize-ExakitManifest
+      $script:VsSeen = @()
+      function Update-ExakitVersionsCache { $script:VsSeen += ($null -ne $script:UiSpinFlag); return 1 }
+      $script:UiFancy = $true
+      Resolve-ExakitInstallVersions
+      $after = ($null -eq $script:UiSpinFlag)
+      $script:UiFancy = $false
+      Resolve-ExakitInstallVersions
+      Write-Output ("VS={0} {1} {2}" -f $script:VsSeen[0], $after, $script:VsSeen[1])
+    ' 2>/dev/null | tr -d '\r' | sed -n 's/.*VS=//p' | tail -1)"
+    rm -rf "$_psv_tmp"
+    check "powershell: spinning during the fetch, stopped after, none without a console" \
+        "True True False" "$ps_spin"
+else
+    check "powershell: spinner around the install fetch" "skipped" "skipped"
+fi
 
 echo "exapump digest chain:"
 digest_chain="$( . "$ROOT/setup/lib/detect.sh"
@@ -477,6 +524,7 @@ soft_fail="$( EXAKIT_HOME="$WORK/pyx-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     PATH="$WORK/failing-uv:$PATH"
     if pyexasol_install >/dev/null 2>&1; then printf 'installed '; else printf 'soft-failed '; fi
@@ -496,6 +544,7 @@ completed="$( EXAKIT_HOME="$WORK/kss-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     # Out of scope for this test: data load, MCP client setup, skills, PATH hints.
     exakit_maybe_offer_data_load() { :; }
@@ -503,7 +552,7 @@ completed="$( EXAKIT_HOME="$WORK/kss-home"
     exakit_maybe_offer_skills_install() { :; }
     ensure_path_hint() { :; }
     PATH="$WORK/failing-uv:$PATH"
-    kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" >/dev/null 2>&1
+    kit_shared_steps 3 4 "$ROOT/setup" "$WORK/fake-kit" >/dev/null 2>&1
     [ -x "$EXAKIT_BIN_DIR/exakit" ] && printf 'exakit-installed ' || printf 'NO-EXAKIT '
     [ -f "$EXAKIT_HOME/kit/versions.json" ] && printf 'manifest-copied ' || printf 'NO-MANIFEST '
     printf '%s' "$(manifest_get steps_completed | tr -d ' "[]')" )"
@@ -522,6 +571,7 @@ rerun="$( EXAKIT_HOME="$WORK/rerun-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exakit_maybe_offer_data_load() { :; }
     exakit_maybe_offer_mcp_setup() { :; }
@@ -532,11 +582,15 @@ rerun="$( EXAKIT_HOME="$WORK/rerun-home"
     printf '#!/bin/sh\nprintf 0.1.0\n' > "$EXAKIT_BIN_DIR/exakit"
     chmod +x "$EXAKIT_BIN_DIR/exakit"
     mark_step exakit_helper >/dev/null 2>&1
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
+    EXAKIT_LOG_FILE="$WORK/rerun-home/install.log"; : > "$EXAKIT_LOG_FILE"
+    _out="$(kit_shared_steps 3 4 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
     # grep rather than case: inside a command substitution bash 3.2 reads the
     # close-paren of a case pattern as the end of the substitution itself, and
     # quote characters in a comment here confuse it the same way. Keep both out.
-    if printf '%s\n' "$_out" | grep -q 'out of date'; then
+    # Setup Utilities holds the lines of an item while it runs, since 04303b8a:
+    # a step that passes leaves its tick on screen, and what it said is in the
+    # install log.
+    if { printf '%s\n' "$_out"; cat "$EXAKIT_LOG_FILE"; } | grep -q 'out of date'; then
         printf 'said-out-of-date '
     else
         printf 'SILENT '
@@ -554,6 +608,7 @@ noop="$( EXAKIT_HOME="$WORK/noop-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exakit_maybe_offer_data_load() { :; }
     exakit_maybe_offer_mcp_setup() { :; }
@@ -562,7 +617,7 @@ noop="$( EXAKIT_HOME="$WORK/noop-home"
     PATH="$WORK/failing-uv:$PATH"
     install -m 755 "$ROOT/setup/exakit" "$EXAKIT_BIN_DIR/exakit"
     mark_step exakit_helper >/dev/null 2>&1
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
+    _out="$(kit_shared_steps 3 4 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
     if printf '%s\n' "$_out" | grep -q 'out of date'; then
         printf 'REFRESHED-ANYWAY'
     else
@@ -597,20 +652,21 @@ cat > "$UC/manifest.json" <<EOF
     "version": "0.2.0",
     "source": "example/starter-kit@main"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "0.13.0",
       "path": "$UC/bin/exapump"
     },
-    "mcp_server": {
-      "package": "exasol-mcp-server",
+    "mcp_server": { "ownership": "kit",
+      "backend": "sidecar",
       "version": "1.10.1"
     },
-    "pyexasol": {
+    "pyexasol": { "ownership": "kit",
       "validated": false
     }
   },
@@ -657,7 +713,7 @@ row() {
     printf '%s\n' "$1" \
         | sed "s/$(printf '\033')\[[0-9;]*m//g" \
         | sed 's/^ *[|│] //; s/ *[|│] *$//' \
-        | grep -m1 "^$2 " | tr -s ' ' | sed 's/ *$//'
+        | grep -m1 "^$2 " | tr -s ' ' | sed -E 's/ (kit|user|unknown|-) / /; s/ *$//'
 }
 
 # has <label> <needle> <haystack>
@@ -684,8 +740,8 @@ uc_table="$( EXAKIT_HOME="$UC"
 # The header line itself, squeezed. `exakit version` and `exakit update-check`
 # were merged into one command, so there is one table and it has three columns:
 # what to name in a command, what is on the machine, and what is waiting.
-check "the table is Component / Version / Status" \
-    "Component Version Status" "$(row "$uc_table" Component)"
+check "the table is Component / Version / Owner / Status" \
+    "Component Version Owner Status" "$(row "$uc_table" Component)"
 lacks "the old Installed header is gone" "Installed " "$uc_table"
 lacks "the old Tagged column is gone" "Tagged" "$uc_table"
 lacks "the old Latest header is gone" "Latest" "$uc_table"
@@ -720,7 +776,7 @@ lacks "and no confirmation is promised" "advisory rollback" "$uc_table"
 # no command at all, and it must not be counted into the closing line either.
 lacks "the ahead row is not counted as waiting work" "ahead of tagged" "$uc_table"
 check "a flagged row carries its severity in the status" \
-    "mcp 1.10.1 1.11.0 available (critical)" "$(row "$uc_table" mcp)"
+    "mcp 1.10.1 $V_IMAGE available (critical)" "$(row "$uc_table" mcp)"
 # The fixture's only "recommended" component is the one that is AHEAD, and an
 # ahead row drops its severity on purpose, so the table itself cannot show one.
 # The renderer is guarded directly rather than by a fixture row that no longer
@@ -766,9 +822,9 @@ has "version reports the installed kit version" "Version " "$version_out"
 has "version reports the installed kit version value" "0.2.0" "$version_out"
 has "version keeps the Kit panel" "Kit" "$version_out"
 # The merge, guarded from both sides: version renders the table itself...
-has "version renders the comparison table" "Component Version Status" \
+has "version renders the comparison table" "Component Version Owner Status" \
     "$(row "$version_out" Component)"
-has "version names what is waiting" "1.11.0 available" "$version_out"
+has "version names what is waiting (the image this kit pins)" "$V_IMAGE available" "$version_out"
 has "version promotes update-all" "Bring everything up to date with: exakit update" "$version_out"
 # ...and the second command it was merged from is gone, not hidden.
 lacks "version prints no separate updates panel" "Updates available" "$version_out"
@@ -792,7 +848,7 @@ update_out="$( EXAKIT_HOME="$UC"
     # whether the runtime update is offered inline (see the offer tests below).
     exakit_update all </dev/null 2>&1 )"
 lacks "update prints no comparison table either" "Component update check" "$update_out"
-has "update states its work plan" "mcp 1.10.1 -> 1.11.0" "$update_out"
+has "update states its work plan" "mcp 1.10.1 -> $V_IMAGE" "$update_out"
 has "update applies the light components" "APPLIED mcp" "$update_out"
 lacks "an unattended update never applies the runtime by itself" "APPLIED runtime" "$update_out"
 has "update explains the deferred runtime" "needs the database stopped" "$update_out"
@@ -967,7 +1023,7 @@ override_avail="$( EXAKIT_HOME="$UC"
     _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
     EXAKIT_EXAPUMP_VERSION="0.11.2"
     printf '%s %s' "$(exakit_component_available exapump)" "$(exakit_component_available mcp)" )"
-check "an env override outranks the manifest" "0.11.2 1.11.0" "$override_avail"
+check "an env override outranks the manifest (the MCP server stays the pinned image)" "0.11.2 $V_IMAGE" "$override_avail"
 override_confirm="$( EXAKIT_HOME="$UC"
     EXAKIT_MANIFEST="$UC/manifest.json"
     EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
@@ -1005,6 +1061,200 @@ current_only="$( EXAKIT_HOME="$UC"
 has "an up-to-date install says so once" "Everything is already current." "$current_only"
 lacks "without listing every component" "is current (" "$current_only"
 
+echo "every update run ends with a line that says how it ended:"
+# Seen on a Mac: `exakit update` reinstalled Semantic Views, printed the add-on's
+# own "Installing Exasol Semantic Views into the database" and gave the prompt
+# back with nothing after it - no word that the run was over, or how it went.
+closing_run() { # closing_run <updater-body>
+    ( EXAKIT_HOME="$UC"
+      EXAKIT_MANIFEST="$UC/manifest.json"
+      EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
+      EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+      EXAKIT_ABOUT_OFFLINE=1
+      _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
+      exakit_init_logging() { :; }
+      exakit_component_current() { printf '1.0\n'; }
+      exakit_component_available() { printf '2.0\n'; }
+      exakit_component_is_managed() { return 0; }
+      exakit_component_is_ahead() { return 1; }
+      eval "exakit_update_component() { $1; }"
+      exakit_update exapump 2>&1
+      printf '\nrc=%s' "$?" )
+}
+closing_ok="$(closing_run 'printf "APPLIED %s\n" "$1"; return 0')"
+has "an update that applied something says it finished, and what it updated" \
+    "Update finished - updated: exapump" "$closing_ok"
+check "...and exits 0" "rc=0" "$(printf '%s' "$closing_ok" | tail -n 1)"
+# An updater that answered non-zero without a die (an add-on module whose
+# Python step failed) used to be passed over: nothing after it, exit 0.
+closing_bad="$(closing_run 'return 1')"
+has "an updater that failed is named" "exapump did not update. Details: exakit logs" "$closing_bad"
+has "...the run ends saying it had problems" "Update finished with problems. Retry with: exakit update" "$closing_bad"
+lacks "...never that it finished cleanly" "Update finished - updated" "$closing_bad"
+check "...and exits 1" "rc=1" "$(printf '%s' "$closing_bad" | tail -n 1)"
+
+echo "one exakit update at a time:"
+# A person and an agent ran `exakit update` in the same minute. Nothing told
+# either run about the other; both rewrote the kit, the manifest and the same
+# add-on. The second run now waits with a line that names the first, or stops
+# with exit 1 and the reason - never silently.
+lock_run() { # lock_run [env assignments...] - a current-only update under a lock
+    ( EXAKIT_HOME="$UC"
+      EXAKIT_MANIFEST="$UC/manifest.json"
+      EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
+      EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+      EXAKIT_ABOUT_OFFLINE=1
+      _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
+      for _lr_assign in "$@"; do eval "$_lr_assign"; done
+      exakit_init_logging() { :; }
+      exakit_component_available() { exakit_component_current "$1"; }
+      exakit_update_component() { printf 'APPLIED %s\n' "$1"; }
+      exakit_update exapump 2>&1
+      printf '\nrc=%s\nlock=%s' "$?" "$([ -f "$UC/.update.lock" ] && sed -n 1p "$UC/.update.lock" || printf none)"
+      exakit_sweep_tmp
+      printf '\nafter-sweep=%s' "$([ -f "$UC/.update.lock" ] && printf present || printf gone)" )
+}
+rm -f "$UC/.update.lock"
+lock_free="$(lock_run)"
+lacks "a lone run does not wait" "Another exakit update is running" "$lock_free"
+has "...it holds the lock while it runs" "lock=" "$lock_free"
+lacks "...naming itself, not nobody" "lock=none" "$lock_free"
+has "...and the command's exit sweep removes it" "after-sweep=gone" "$lock_free"
+# A live holder: a sleeping process stands in for the other update.
+sleep 30 &
+LOCK_HOLDER=$!
+printf '%s\n%s\n' "$LOCK_HOLDER" "$(exakit_process_start_time "$LOCK_HOLDER")" > "$UC/.update.lock"
+# die ends the run's subshell, so its exit code is read from outside it.
+lock_busy="$(lock_run 'EXAKIT_UPDATE_LOCK_WAIT=2'; printf '\nexit=%s' "$?")"
+has "a second run names the first and says it waits" \
+    "Another exakit update is running (pid $LOCK_HOLDER) - waiting for it to finish" "$lock_busy"
+has "...and when the wait runs out it stops with the reason" \
+    "Not updating: another exakit update (pid $LOCK_HOLDER) is still running after 2s" "$lock_busy"
+lacks "...without touching anything" "APPLIED" "$lock_busy"
+check "...with exit 1" "exit=1" "$(printf '%s' "$lock_busy" | tail -n 1)"
+check "...leaving the other run's lock alone" "$LOCK_HOLDER" "$(sed -n 1p "$UC/.update.lock" 2>/dev/null)"
+# The --json form of the same stop: one object on stdout, ok false.
+lock_json="$( EXAKIT_HOME="$UC" EXAKIT_MANIFEST="$UC/manifest.json" EXAKIT_UPDATE_LOCK_WAIT=1 \
+    bash -c '. "$1/setup/lib/common.sh"; exakit_update_lock_acquire 1 2>/dev/null' _ "$ROOT")"
+check "--json: the stop is one object with ok false and the reason" "False failed exakit update True" \
+    "$(printf '%s' "$lock_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["ok"], d["status"], d["remedy"], "still running" in d["remedy_hint"])' 2>&1)"
+# The holder finishes while the second run waits: it carries on, and says so.
+kill "$LOCK_HOLDER" 2>/dev/null; wait "$LOCK_HOLDER" 2>/dev/null
+sleep 2 &
+LOCK_HOLDER=$!
+printf '%s\n%s\n' "$LOCK_HOLDER" "$(exakit_process_start_time "$LOCK_HOLDER")" > "$UC/.update.lock"
+lock_waited="$(lock_run 'EXAKIT_UPDATE_LOCK_WAIT=30')"
+has "a waiting run carries on once the other finishes" "The other update finished - continuing" "$lock_waited"
+has "...and ends with its own closing line" "Everything is already current." "$lock_waited"
+check "...exit 0" "rc=0" "$(printf '%s' "$lock_waited" | sed -n 's/^rc=//p' | sed 's/^/rc=/')"
+wait "$LOCK_HOLDER" 2>/dev/null
+# The same wait under a spinner (measured on Windows: the finished line was
+# printed while the spinner still owned the line, and landed on the end of its
+# last frame). The spinner stands in: a frame with no newline, and a stop that
+# returns to column 0 and clears the line. The screen is read the way a
+# terminal shows it, so a line printed before the stop shares the frame's line.
+sleep 2 &
+LOCK_HOLDER=$!
+printf '%s\n%s\n' "$LOCK_HOLDER" "$(exakit_process_start_time "$LOCK_HOLDER")" > "$UC/.update.lock"
+lock_spun="$(lock_run 'EXAKIT_UPDATE_LOCK_WAIT=30' \
+    'ui_spin_begin() { printf "<frame %s (3s)>" "$1"; }' \
+    'ui_spin_end() { printf "<stop>\r\033[K"; }')"
+wait "$LOCK_HOLDER" 2>/dev/null
+lock_screen="$(printf '%s' "$lock_spun" | python3 -c 'import sys
+for line in sys.stdin.read().split("\n"): print(line.split("\r")[-1].replace("\033[K", ""))')"
+has "under a spinner: the waiting line is an info line" \
+    "    - Another exakit update is running (pid $LOCK_HOLDER) - waiting for it to finish" "$lock_screen"
+check "...the spinner is stopped before the finished line" "stop-first" \
+    "$(printf '%s' "$lock_spun" | python3 -c 'import sys
+s = sys.stdin.read(); a = s.find("<stop>"); b = s.find("The other update finished")
+print("stop-first" if 0 <= a < b else "finished-first (stop at %d, finished at %d)" % (a, b))')"
+check "...which is a line of its own, not the end of the spinner's frame" "    - The other update finished - continuing" \
+    "$(printf '%s\n' "$lock_screen" | grep 'The other update finished')"
+# A lock whose process is gone (killed with -9, no exit sweep) is taken over.
+printf '999999\nMon Jan  1 00:00:00 2001\n' > "$UC/.update.lock"
+lock_stale="$(lock_run 'EXAKIT_UPDATE_LOCK_WAIT=2')"
+lacks "a dead run's lock is taken over without waiting" "Another exakit update is running" "$lock_stale"
+check "...and the run completes" "rc=0" "$(printf '%s' "$lock_stale" | sed -n 's/^rc=//p' | sed 's/^/rc=/')"
+# The run the previous kit's updater hands over is part of the run holding the
+# lock: waiting there would be waiting for itself.
+sleep 30 &
+LOCK_HOLDER=$!
+printf '%s\n%s\n' "$LOCK_HOLDER" "$(exakit_process_start_time "$LOCK_HOLDER")" > "$UC/.update.lock"
+lock_handover="$(lock_run 'EXAKIT_UPDATE_HANDOVER=1' 'EXAKIT_UPDATE_LOCK_WAIT=2')"
+lacks "a handed-over run takes no lock and does not wait" "Another exakit update is running" "$lock_handover"
+check "...and leaves the parent's lock as it was" "$LOCK_HOLDER" "$(sed -n 1p "$UC/.update.lock" 2>/dev/null)"
+kill "$LOCK_HOLDER" 2>/dev/null; wait "$LOCK_HOLDER" 2>/dev/null
+rm -f "$UC/.update.lock"
+
+echo "a check that could not reach the manifest never says everything is current:"
+# Measured on Windows: the fetch failed on every run, and the run then compared
+# against the manifest the kit shipped with and answered "Everything is already
+# current." with exit 0 - an update that never looked. The same run with the
+# fetch failing (a stubbed curl timing out, exit 28) must say it could not check,
+# say which versions it showed instead, and exit 1.
+check_fail_run() { # check_fail_run <extra exakit_update args...>
+    ( EXAKIT_HOME="$UC"
+      EXAKIT_MANIFEST="$UC/manifest.json"
+      EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
+      EXAKIT_VERSIONS_URL="https://raw.githubusercontent.com/example/starter-kit/main/versions.json"
+      EXAKIT_ABOUT_OFFLINE=1
+      _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""; _EXAKIT_VERSIONS_CHECK_ERROR=""
+      exakit_init_logging() { :; }
+      # CHECK_FAIL_COMPONENT: one component is behind and its update fails.
+      exakit_component_available() {
+          if [ "$1" = "${CHECK_FAIL_COMPONENT:-}" ]; then echo "9.9.9"; return 0; fi
+          exakit_component_current "$1"; }
+      exakit_update_component() {
+          if [ "$1" = "${CHECK_FAIL_COMPONENT:-}" ]; then return 1; fi
+          printf 'APPLIED %s\n' "$1"; }
+      curl() { return "${CHECK_CURL_RC:-28}"; }
+      exakit_update "$@" 2>&1
+      printf '\nrc=%s' "$?" )
+}
+check_failed_screen="$(check_fail_run all)"
+has "a failed check says it could not check, and why" \
+    "Could not check for updates: timed out reaching raw.githubusercontent.com. Check your internet connection or proxy." "$check_failed_screen"
+has "...which versions it showed instead" \
+    "Check your internet connection or proxy. Showing the versions this kit already knows (updated July 29, 2026). Then run the same command again." "$check_failed_screen"
+lacks "...the retry is the same command, not the one that installs things" "Retry: exakit update" "$check_failed_screen"
+lacks "...and never that everything is current" "Everything is already current." "$check_failed_screen"
+check "...and exits 1" "rc=1" "$(printf '%s' "$check_failed_screen" | tail -n 1)"
+check_failed_json="$(check_fail_run --json)"
+check "--json: a failed check is a failed run with the reason, the remedy and where the versions came from" \
+    "False failed True baked could not check for updates (network): timed out reaching raw.githubusercontent.com|exakit update|Check your internet connection or proxy. Showing the versions this kit already knows (updated July 29, 2026). Then run the same command again." \
+    "$(printf '%s' "$check_failed_json" | sed '$d' | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+f = d["failed"][0]
+print(d["ok"], d["status"], d["check_failed"], d["manifest_source"], "|".join([f["error"], f["remedy"], f["remedy_hint"]]))' 2>&1)"
+check "...and exits 1" "rc=1" "$(printf '%s' "$check_failed_json" | tail -n 1)"
+# Offline, downloads usually fail too: the network row is still there, first,
+# and the top-level remedy is the network's, not the failed component's.
+check_failed_both_json="$(CHECK_FAIL_COMPONENT=exapump check_fail_run --json)"
+check "--json: a failed check with a failed component still names the network failure first" \
+    "failed True [None, 'exapump'] could not check for updates (network): timed out reaching raw.githubusercontent.com|exakit update" \
+    "$(printf '%s' "$check_failed_both_json" | sed '$d' | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["status"], d["check_failed"], [f["component"] for f in d["failed"]], d["failed"][0]["error"] + "|" + d["remedy"])' 2>&1)"
+check "an HTTP error names the status code" "raw.githubusercontent.com answered HTTP 404" \
+    "$(_exakit_curl_failure_reason 22 "https://raw.githubusercontent.com/x/y/main/versions.json" 404)"
+check "an unresolvable host is named" "could not resolve raw.githubusercontent.com" \
+    "$(_exakit_curl_failure_reason 6 "https://raw.githubusercontent.com/x/y/main/versions.json")"
+current_json="$( EXAKIT_HOME="$UC"
+    EXAKIT_MANIFEST="$UC/manifest.json"
+    EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
+    EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+    _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""; _EXAKIT_VERSIONS_CHECK_ERROR=""
+    exakit_init_logging() { :; }
+    exakit_component_available() { exakit_component_current "$1"; }
+    exakit_update_component() { printf 'APPLIED %s\n' "$1"; }
+    exakit_update --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["ok"], d["status"], d["check_failed"], d["manifest_source"])' 2>&1 )"
+check "--json: a run that did not try the network is not a failed check" "True current False baked" "$current_json"
+
 echo "installed versions come from disk, not just from the record:"
 # The record says what the kit installed. A user can upgrade pyexasol inside its
 # venv or drop in another exapump build, and an update check that trusted the
@@ -1025,11 +1275,12 @@ cat > "$LIVE/manifest.json" <<EOF
   "manifest_version": 1,
   "kit_level": 1,
   "kit": { "version": "0.2.0" },
-  "runtime": { "type": "personal", "version": "2.0.0-rc4" },
+  "runtime": { "ownership": "kit", "type": "personal", "version": "2.0.0-rc4" },
   "components": {
-    "exapump": { "version": "0.11.2", "path": "$LIVE/bin/exapump" },
-    "mcp_server": { "version": "1.10.1" },
-    "pyexasol": { "version": "2.2.2", "python": "$LIVE/venv/bin/python" }
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit", "version": "0.11.2", "path": "$LIVE/bin/exapump" },
+    "mcp_server": { "ownership": "kit", "backend": "sidecar", "version": "1.10.1" },
+    "pyexasol": { "ownership": "kit", "version": "2.2.2", "python": "$LIVE/venv/bin/python" }
   },
   "steps_completed": []
 }
@@ -1053,16 +1304,23 @@ check "a missing binary reports not installed" "not installed" \
     "$(live_read exapump 'rm -f "$LIVE/bin/exapump"; PATH="/nonexistent"')"
 check "a missing venv reports not installed" "not installed" \
     "$(live_read pyexasol 'rm -f "$LIVE/venv/bin/python"')"
-# The MCP server is materialised per launch by uvx, so its record stands.
+# The MCP server is the image the sidecar last served with: its record stands.
 check "the MCP server keeps its recorded version" "1.10.1" "$(live_read mcp)"
+# A record from before the sidecar (clients on the old stdio server) is not this
+# server: no version, so the update moves it over.
+check "a record from before the sidecar has no version" "" \
+    "$(live_read mcp 'manifest_del components.mcp_server.backend')"
 
 # A component that is gone must read as gone in EVERY command. Swallowing the reader's
 # "provably absent" verdict made `exakit version` print a recorded version while
 # the version table and status both said "not installed".
 # PATH must not contain a real exapump either, or the binary fallback finds the
 # tester's own install; python3 has to stay reachable for the manifest reads.
+# The offline URL as everywhere else here: `exakit version` always asks upstream,
+# and with PATH reset to the system directories no stubbed curl stands in its way.
 absent_version="$( rm -f "$LIVE/bin/exapump" "$LIVE/venv/bin/python"
     EXAKIT_HOME="$LIVE" PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" \
+        EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
         bash "$ROOT/setup/exakit" version 2>&1 )"
 has "version agrees that a deleted exapump is gone" "exapump not installed" "$(row "$absent_version" exapump)"
 has "version agrees that a deleted venv is gone" "pyexasol not installed" "$(row "$absent_version" pyexasol)"
@@ -1094,7 +1352,7 @@ check "personal reports the recorded runtime, not the launcher" "2.0.0-rc4" \
 
 # The runtime is probed too, but with one deliberate difference: a probe that cannot
 # answer keeps the record instead of reporting absence. A stopped deployment is an
-# ordinary state; the runtime row must not flicker to "inspect" because the
+# ordinary state; the runtime row must not flicker to "unknown" because the
 # launcher is not answering.
 mkdir -p "$LIVE/rt"
 printf '#!/bin/sh\necho 3.1.4\n' > "$LIVE/rt/exasol"
@@ -1119,117 +1377,48 @@ check "personal reports the record, launcher present or not" "2.0.0-rc4" \
 check "personal is not installed when nothing recorded it" "not installed" \
     "$(runtime_read personal 'exakit_installation_runtime_type() { printf ""; }')"
 
-# The MCP server is never installed as such: uvx materialises it per launch, so what
-# exists is the spec pinned into each AI client config. The status operation is stubbed
-# to hand back a config path, and the pin is read out of the file itself.
-mkdir -p "$LIVE/mcp"
-printf '{"mcpServers":{"exasol":{"command":"uvx","args":["exasol-mcp-server@1.9.0"]}}}\n' \
-    > "$LIVE/mcp/client-a.json"
-printf '{"mcpServers":{"exasol":{"command":"uvx","args":["exasol-mcp-server@1.10.1"]}}}\n' \
-    > "$LIVE/mcp/client-b.json"
-mcp_read() (
-    EXAKIT_HOME="$LIVE"
-    EXAKIT_MANIFEST="$LIVE/manifest.json"
-    exakit_run_mcp_operation_cli() {
-        printf '{"artifacts":[%s]}\n' "$MCP_ARTIFACTS" > "$3"
-    }
-    eval "${1:-}"
-    exakit_component_current mcp 2>/dev/null || printf 'not installed'
-)
-check "mcp: the pin in the client config is what will run" "1.9.0" \
-    "$(MCP_ARTIFACTS='{"path":"'"$LIVE"'/mcp/client-a.json"}' mcp_read)"
-# Clients that disagree yield the OLDEST pin: this value is compared against the
-# advertised version, and the oldest is the weakest link — the client that would launch
-# the most outdated server. Which client is stale belongs to mcp-doctor.
-check "mcp: disagreeing clients yield the oldest pin" "1.9.0" \
-    "$(MCP_ARTIFACTS='{"path":"'"$LIVE"'/mcp/client-a.json"},{"path":"'"$LIVE"'/mcp/client-b.json"}' mcp_read)"
-check "mcp: no configured client keeps the record" "1.10.1" \
-    "$(MCP_ARTIFACTS='' mcp_read)"
-check "mcp: no mcp module at all keeps the record" "1.10.1" \
-    "$(mcp_read 'unset -f exakit_run_mcp_operation_cli')"
-
-echo "the MCP update compares against the client pin, not the record:"
-# The record only says what a previous run WROTE DOWN, and it is written before the
-# client configs are refreshed — so it can name a version no client is launching.
-# `exakit version` already reports the live pin; the updater has to agree with it, or it
-# announces "mcp 1.10.1 -> 2.0.0" from the pin and then declines the work it just
-# announced because the record already says 2.0.0.
+echo "the MCP update moves a kit from before the sidecar, once:"
+# A kit that still had its clients on the kit's own stdio server (no
+# backend=sidecar) is moved: the sidecar is applied and the managed clients are
+# re-rendered to its URL. Run again, it is current and touches nothing.
 DIV="$WORK/divergent-home"
-mkdir -p "$DIV/mcp" "$DIV/kit/mcp" "$DIV/cache"
+mkdir -p "$DIV/kit/mcp" "$DIV/cache"
 cp "$REAL" "$DIV/kit/versions.json"
-printf '{"mcpServers":{"exasol":{"command":"uvx","args":["exasol-mcp-server@1.10.1"]}}}\n' \
-    > "$DIV/mcp/client.json"
 cat > "$DIV/manifest.json" <<EOF
 {
   "manifest_version": 1,
   "kit_level": 1,
-  "runtime": {
-    "type": "personal",
-    "version": "2.2.0"
-  },
+  "runtime": { "ownership": "kit", "type": "personal", "version": "2.4.0" },
   "components": {
-    "mcp_server": {
-      "package": "exasol-mcp-server",
-      "version": "2.0.0"
-    }
+    "personal": {"ownership": "kit"},
+    "mcp_server": { "ownership": "kit", "package": "exasol-mcp-server", "version": "2.4.0" }
   },
   "steps_completed": []
 }
 EOF
-# mcp_update itself runs for real. Only the seams are stubbed: the advertised
-# version, the client-config listing, the config rewrite, and the three steps that
-# would touch the machine (uvx prime, snapshot, stdio handshake). The stubbed
-# rewrite moves the pin in the fixture config exactly as the real configure
-# operation does, so the assertions below read the file, not a promise.
 mcp_update_run() (
     EXAKIT_HOME="$DIV"
     EXAKIT_MANIFEST="$DIV/manifest.json"
     # shellcheck source=/dev/null
     . "$ROOT/setup/lib/mcp.sh"
-    exakit_component_available() { printf '%s\n' "$ADVERTISED"; }
-    exakit_run_mcp_operation_cli() {
-        printf '{"artifacts":[{"path":"%s","client":"claude_code"}]}\n' \
-            "$DIV/mcp/client.json" > "$3"
+    mcp_sidecar_apply() {
+        printf 'APPLIED\n'
+        manifest_set components.mcp_server.backend sidecar
+        manifest_set components.mcp_server.version "$(mcp_sidecar_image_version)"
     }
-    exakit_run_mcp_setup_cli() {
-        printf 'REFRESHED %s\n' "$1"
-        printf '{"mcpServers":{"exasol":{"command":"uvx","args":["exasol-mcp-server@%s"]}}}\n' \
-            "$EXAKIT_MCP_VERSION" > "$DIV/mcp/client.json"
-        printf '{"status":"success","selected_clients":["claude_code"],"artifacts":[]}\n' > "$2"
-    }
+    mcp_managed_clients() { printf 'claude_code\n'; }
+    exakit_run_mcp_setup_cli() { printf 'REFRESHED %s\n' "$1"; printf '{}\n' > "$2"; }
     exakit_print_mcp_setup_summary() { :; }
-    mcp_update_snapshot() { :; }
-    mcp_install() {
-        printf 'PRIMED %s\n' "$EXAKIT_MCP_VERSION"
-        manifest_set components.mcp_server.version "$EXAKIT_MCP_VERSION"
-    }
-    mcp_validate() { :; }
-    eval "${1:-}"
     mcp_update 2>&1
 )
-div_pin() { grep -o 'exasol-mcp-server@[0-9.]*' "$DIV/mcp/client.json" | cut -d@ -f2; }
-div_record() ( EXAKIT_MANIFEST="$DIV/manifest.json"; manifest_get components.mcp_server.version )
-
-divergent="$(ADVERTISED=2.0.0 mcp_update_run)"
-lacks "a record that already names the target is not proof" "already current" "$divergent"
-has "the update runs anyway" "PRIMED 2.0.0" "$divergent"
-has "and the client configs are the thing it rewrites" "REFRESHED claude_code" "$divergent"
-check "the pin the next client launch would use has moved" "2.0.0" "$(div_pin)"
-
-# Idempotent for the real case: the configs now agree with the advertised version,
-# so a second run must do nothing at all rather than re-prime and re-render.
-current="$(ADVERTISED=2.0.0 mcp_update_run)"
-has "a genuinely current install skips cleanly" "already current (2.0.0)" "$current"
-lacks "and nothing is reinstalled" "PRIMED" "$current"
-lacks "and no client config is touched" "REFRESHED" "$current"
-
-# The other direction of the same divergence: the configs are current and the record
-# lags. Nothing to install, but the record is what the renderer reads to pin the NEXT
-# client the user connects, so it is reconciled instead of left lying.
-reconciled="$(ADVERTISED=2.0.0 mcp_update_run 'manifest_set components.mcp_server.version 1.9.0')"
-has "a lagging record is reconciled, not left lying" "Reconciling the recorded MCP version" "$reconciled"
-has "and the skip is still clean" "already current (2.0.0)" "$reconciled"
-check "the record now matches the configs" "2.0.0" "$(div_record)"
+moved="$(mcp_update_run)"
+has "a kit from before the sidecar is moved to it" "APPLIED" "$moved"
+has "...and its clients re-rendered to the URL" "REFRESHED claude_code" "$moved"
+check "...recorded as the sidecar" "sidecar" "$( EXAKIT_MANIFEST="$DIV/manifest.json"; manifest_get components.mcp_server.backend )"
+again="$(mcp_update_run)"
+has "run again: already current" "already current" "$again"
+lacks "...nothing applied" "APPLIED" "$again"
+lacks "...no client touched" "REFRESHED" "$again"
 
 echo "the exapump update compares against the binary on disk, not the record:"
 # components.exapump.version is only what a previous run WROTE DOWN, and
@@ -1249,12 +1438,13 @@ cat > "$XP/manifest.json" <<EOF
 {
   "manifest_version": 1,
   "kit_level": 1,
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "8.2.0",
       "path": "$XP/bin/exapump"
     }
@@ -1343,11 +1533,12 @@ drift_manifest() {
   "manifest_version": 1,
   "kit_level": 1,
   "kit": { "version": "0.2.0" },
-  "runtime": { "type": "personal", "version": "2.2.0" },
+  "runtime": { "ownership": "kit", "type": "personal", "version": "2.2.0" },
   "components": {
-    "exapump": { "version": "$1", "path": "$DR/bin/exapump" },
-    "mcp_server": { "package": "exasol-mcp-server", "version": "1.10.1" },
-    "pyexasol": { "version": "$2", "python": "$DR/venv/bin/python" }
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit", "version": "$1", "path": "$DR/bin/exapump" },
+    "mcp_server": { "ownership": "kit", "backend": "sidecar", "version": "1.10.1" },
+    "pyexasol": { "ownership": "kit", "version": "$2", "python": "$DR/venv/bin/python" }
   },
   "steps_completed": []
 }
@@ -1355,9 +1546,11 @@ EOF
 }
 # EXAKIT_HOME has to be exported into the child: `exakit version` is a separate
 # process, and a plain assignment in this shell would leave it reading the real
-# installation instead of the fixture.
+# installation instead of the fixture. Offline too: `exakit version` always asks
+# upstream for versions.json, and the fixture carries its own copy (kit/).
 version_out() {
-    EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version 2>&1
+    EXAKIT_HOME="$DR" EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
+        bash "$ROOT/setup/exakit" version 2>&1
 }
 # A component upgraded outside the kit reads as what it now IS. The cell used to
 # carry a "(kit installed 0.11.2)" suffix as well, and it cost more than it said:
@@ -1374,6 +1567,23 @@ lacks "and the record is not printed beside it" "kit installed" "$drift_out"
 drift_manifest 0.13.0 2.9.9
 agree_out="$(version_out)"
 lacks "and says nothing extra when they agree" "kit installed" "$agree_out"
+
+echo "current says which manifest it was checked against (#46):"
+# Under the default policy a row is current against the manifest, not upstream: a pin
+# the manifest had fallen behind on read as plain "current". The latest policy looks
+# upstream and keeps the plain word; the JSON keeps "current" and adds checked_against.
+_vm_exapump="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['components']['exapump']['version'])" "$REAL")"
+_vm_updated="$(python3 -c "import json,sys; print(str(json.load(open(sys.argv[1])).get('updated', ''))[:10])" "$REAL")"
+printf '#!/bin/sh\necho "exapump %s"\n' "$_vm_exapump" > "$DR/bin/exapump"
+drift_manifest "$_vm_exapump" 2.9.9
+# Offline, with no cached copy from earlier in this run: the manifest is the kit copy's, not
+# whatever the network served today (upstream main moves; this check must not).
+rm -f "$DR/cache/versions.json"
+current_out="$(EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" EXAKIT_VERSION_POLICY=pinned version_out)"
+has "a current row names the manifest it was checked against" "current (manifest $_vm_updated)" "$(row "$current_out" exapump)"
+current_json="$(EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" EXAKIT_VERSION_POLICY=pinned EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version --json 2>/dev/null)"
+has "...and the JSON keeps status current" '"status": "current"' "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
+has "...with checked_against naming the manifest" "\"checked_against\": \"manifest $_vm_updated\"" "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
 
 echo "a component with no build for this machine is never offered:"
 # exapump publishes nothing for Windows on ARM, and nothing for a CPU outside
@@ -1475,7 +1685,28 @@ unreadable_row="$( EXAKIT_HOME="$UC"
     exakit_repo_root() { return 1; }
     exakit_print_version_table 2>&1 )"
 has "no readable document is stated plainly" "could not be read" "$unreadable_row"
-has "and the row admits it does not know" "inspect" "$unreadable_row"
+has "and the row admits it does not know" "unknown - check: exakit status" "$unreadable_row"
+lacks "...with a next step, not a bare verb" "inspect" "$unreadable_row"
+unreadable_json="$( EXAKIT_HOME="$UC"
+    EXAKIT_MANIFEST="$UC/manifest.json"
+    EXAKIT_VERSIONS_CACHE="$WORK/no-such-cache.json"
+    EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+    _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
+    exakit_repo_root() { return 1; }
+    exakit_print_version_table --json 2>/dev/null )"
+has "--json keeps the fixed word for it" '"status": "unknown"' "$unreadable_json"
+lacks "...not the screen's sentence" "check: exakit status" "$unreadable_json"
+# A runtime the manifest records but this machine no longer has: the row says
+# what to do about it (Windows has always said the same).
+gone_runtime="$( EXAKIT_HOME="$UC"
+    EXAKIT_MANIFEST="$UC/manifest.json"
+    EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json"
+    EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+    _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
+    eval "_gr_cell() $(declare -f exakit_version_installed_cell | sed 1d)"
+    exakit_version_installed_cell() { if [ "$1" = personal ]; then printf 'not installed'; else _gr_cell "$@"; fi; }
+    exakit_print_version_table 2>&1 )"
+has "a runtime that is gone says how to get it back" "not installed - re-run the installer" "$(row "$gone_runtime" personal)"
 
 echo "never backwards (no prompt, no override, no exception):"
 ahead="$( EXAKIT_HOME="$UC"
@@ -1516,13 +1747,14 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     EXAKIT_BIN_DIR="$WORK/soft-home/bin"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     # exapump dies the way a bad download does; MCP works; pyexasol misses softly.
     exapump_install() { die "Could not install exapump"; }
     exapump_create_profile() { :; }
     exapump_validate_connection() { :; }
-    mcp_install() { :; }
-    mcp_validate() { :; }
+    mcp_sidecar_apply() { :; }
+    exakit_configure_mcp_readonly_access() { :; }
     pyexasol_install() { return 1; }
     pyexasol_validate() { :; }
     exakit_maybe_offer_data_load() { printf 'OFFERED-DATA-LOAD\n'; }
@@ -1531,8 +1763,9 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     ensure_path_hint() { :; }
     # exakit_print_soft_failures is called by the setup scripts AFTER the
     # connection panel (so the account of what is missing is the last thing on
-    # screen), not from inside kit_shared_steps. Same shell, same order here.
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
+    # screen), not from inside kit_shared_steps. Same shell, same order here -
+    # the helper is the last item of the shared steps, as the setup scripts run it.
+    _out="$(kit_shared_steps 3 4 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
     [ -x "$EXAKIT_BIN_DIR/exakit" ] && printf 'cli ' || printf 'NO-CLI '
     printf '%s ' "$(manifest_get steps_completed | tr -d '\" []' )"
     printf '%s\n' "$_out" | grep -q 'OFFERED-DATA-LOAD' && printf 'data-offered' || printf 'data-skipped'
@@ -1541,7 +1774,7 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     printf ' '
     printf '%s\n' "$_out" | grep -q 'exakit update' && printf 'repair-pyexasol' || printf 'NO-REPAIR-PYEXASOL' )"
 check "a dying component leaves a working CLI, a repair line, and no half-marked step" \
-    "cli mcp,exakit_helper data-skipped repair-exapump repair-pyexasol" "$soft"
+    "cli exakit_helper,mcp data-skipped repair-exapump repair-pyexasol" "$soft"
 
 # Nothing failing must not produce a summary out of thin air.
 quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
@@ -1549,23 +1782,24 @@ quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
     EXAKIT_BIN_DIR="$WORK/soft-ok-home/bin"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exapump_install() { :; }
     exapump_create_profile() { :; }
     exapump_validate_connection() { :; }
-    mcp_install() { :; }
-    mcp_validate() { :; }
+    mcp_sidecar_apply() { :; }
+    exakit_configure_mcp_readonly_access() { :; }
     pyexasol_install() { :; }
     pyexasol_validate() { :; }
     exakit_maybe_offer_data_load() { :; }
     exakit_maybe_offer_mcp_setup() { :; }
     exakit_maybe_offer_skills_install() { :; }
     ensure_path_hint() { :; }
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
+    _out="$(kit_shared_steps 3 4 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
     printf '%s\n' "$_out" | grep -q 'did not complete' && printf 'SPURIOUS' || printf 'silent'
     printf ' %s' "$(manifest_get steps_completed | tr -d '\" []' )" )"
 check "a clean run says nothing and marks everything" \
-    "silent exapump,mcp,pyexasol,exakit_helper" "$quiet"
+    "silent exapump,pyexasol,exakit_helper,mcp" "$quiet"
 echo "release notes travel with the kit:"
 mkdir -p "$WORK/wn-kit/setup"
 cat > "$WORK/wn-kit/setup/whats-new.json" <<'WN_ONE'
@@ -1832,16 +2066,17 @@ cat > "$NT/manifest.json" <<EOF
   "kit": {
     "version": "$NOTICE_KIT_VERSION"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "$NOTICE_INSTALLED_EXAPUMP",
       "path": "$NT/bin/exapump"
     },
-    "mcp_server": {
+    "mcp_server": { "ownership": "kit", "backend": "sidecar",
       "version": "$NOTICE_INSTALLED_MCP"
     }
   },
@@ -1890,6 +2125,9 @@ EXAKIT_MANIFEST='$NT/manifest.json'
 EXAKIT_VERSIONS_CACHE='$NT/cache/versions.json'
 EXAKIT_VERSIONS_URL='http://offline.invalid/versions.json'
 EXAKIT_NOTICE_STATE='$NT/cache/notice-state.json'
+# The plan is worked out in the background; these checks read what it says, so
+# they wait for it (a [statements] argument can lower this).
+EXAKIT_NOTICE_WAIT=60
 . '$ROOT/setup/lib/common.sh'
 _EXAKIT_VERSIONS_DOC=''; _EXAKIT_VERSIONS_SOURCE=''
 $_n_extra
@@ -1904,7 +2142,7 @@ EOF
 
 if [ "$NOTICE_PTY" = "none" ]; then
     # Without a pty the notice cannot be observed at all (that is its own gate).
-    for _skipped in "a recommended light bump is announced as recommended" "with the cheap command" \
+    for _skipped in "a pending light bump is announced in one plain sentence" "with the cheap command" \
                     "a critical heavy bump is announced as critical" "as a database stop, not a one-liner" \
                     "and never told to just run update" "the kill switch is advertised" \
                     "a normal-severity bump is announced too" \
@@ -1943,9 +2181,10 @@ lacks "the kit is not in the notice" "available for exakit" "$flagged"
   echo "=== stub ==="; cat "$NT/bin/exapump" 2>&1
   echo "=== NOTICE_PTY ==="; echo "$NOTICE_PTY"
 } >> /tmp/vm-debug.out 2>&1
-has "a recommended light bump is announced as recommended" \
-    "A recommended update is available for exapump" "$flagged"
-has "with the cheap command" "apply in seconds:  exakit update" "$flagged"
+has "a pending light bump is announced in one plain sentence" \
+    "Updates are available to your starterkit." "$flagged"
+has "with the cheap command" "Run exakit update to upgrade anytime." "$flagged"
+lacks "and lists no components in that line" "available for exapump" "$flagged"
 has "a critical heavy bump is announced as critical" \
     "A critical update is available for personal" "$flagged"
 has "as a database stop, not a one-liner" "requires stopping the database" "$flagged"
@@ -1955,18 +2194,30 @@ lacks "and never told to just run update" "personal — apply in seconds" "$flag
 lacks "the kill switch is not printed under the notice" "EXAKIT_NO_UPDATE_NOTICE" "$flagged"
 # Every severity is announced now, so the routine one appears too - and appears
 # WITHOUT borrowing urgency it was never given.
-has "a normal-severity bump is announced too" "mcp" "$flagged"
+# The sentence names no components now; the plan behind it still counts the
+# routine one (what `exakit version` lists).
+has "a normal-severity bump is announced too" "mcp" \
+    "$(sed -n 's/^light=//p' "$NT/cache/notice-plan" 2>/dev/null | head -1)"
 
 repeat="$(notice "$WORK/notice-versions.json")"
 has "and it speaks again on the very next command" \
-    "A recommended update is available for exapump" "$repeat"
+    "Updates are available to your starterkit." "$repeat"
+
+# Ctrl+C gives the prompt back at once: a run the person interrupted asks for no
+# version lookup and prints no notice (a stub that would print FETCHED/RESOLVED
+# proves neither ran); the very next normal run (above) still speaks.
+interrupted="$(notice "$WORK/notice-versions.json" '_EXAKIT_INTERRUPTED=1
+exakit_versions_update_cache() { echo FETCHED; }
+exakit_versions_resolve_doc() { echo RESOLVED; }')"
+check "an interrupted run prints no notice and looks nothing up" "" \
+    "$(printf '%s' "$interrupted" | tr -d '[:space:]')"
 
 # The throttle is still there for anyone who wants it, just not the default. It
 # needs a clean slate: the runs above have already recorded a "last shown".
 rm -f "$NT/cache/notice-state.json"
 throttled_first="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_INTERVAL=86400')"
 has "an explicit interval still shows it once" \
-    "A recommended update is available for exapump" "$throttled_first"
+    "Updates are available to your starterkit." "$throttled_first"
 throttled_again="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_INTERVAL=86400')"
 check "and then holds off for the interval" "" \
     "$(printf '%s' "$throttled_again" | tr -d '[:space:]')"
@@ -1975,7 +2226,7 @@ rm -f "$NT/cache/notice-state.json"
 # The shipped document against an install that is behind it: a routine bump, which
 # must now be mentioned, and must not call itself recommended or critical.
 only_normal="$(notice "$REAL")"
-has "a routine bump is announced" "update is available for exapump" "$only_normal"
+has "a routine bump is announced" "Updates are available to your starterkit." "$only_normal"
 lacks "without claiming it is recommended" "A recommended" "$only_normal"
 lacks "or critical" "A critical" "$only_normal"
 
@@ -1991,6 +2242,7 @@ fixture_doc "notice: an advertised set the install has overshot" "$WORK/notice-a
     "components.exapump.version=0.0.0" \
     "components.exapump.severity=recommended" \
     "components.mcp.version=0.0.0" \
+    "components.mcp.sidecar_image=docker.io/exasol/mcp-server:0.0.0@sha256:$(printf '0%.0s' $(seq 64))" \
     "components.mcp.severity=normal" \
     "components.personal.version=$NOTICE_ADVERTISED_PERSONAL" \
     "components.personal.severity=critical"
@@ -1998,7 +2250,7 @@ rm -f "$NT/cache/notice-state.json" "$NT/cache/notice-plan"
 ahead_notice="$(notice "$WORK/notice-ahead.json")"
 lacks "an install ahead of the tagged set is not announced" "exapump" "$ahead_notice"
 lacks "nor the other component that overshot" "mcp" "$ahead_notice"
-lacks "and no light line is printed at all" "apply in seconds" "$ahead_notice"
+lacks "and no light line is printed at all" "Updates are available to your starterkit." "$ahead_notice"
 has "while a component genuinely behind is still announced" \
     "A critical update is available for personal" "$ahead_notice"
 # The cached plan re-verification carried the same equality-only flaw, which is
@@ -2019,13 +2271,13 @@ printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
 chmod +x "$NT/bin/exapump"
 probe_count() { [ -f "$WORK/probe-count" ] && wc -c < "$WORK/probe-count" | tr -d ' ' || printf 0; }
 cached_first="$(notice "$WORK/notice-versions.json")"
-has "the first run still says its piece" "update is available" "$cached_first"
+has "the first run still says its piece" "available" "$cached_first"
 probes_after_first="$(probe_count)"
 check "and it did probe" "yes" "$([ "$probes_after_first" -gt 0 ] && printf yes || printf no)"
 plan_stamp() { sed -n 's/^computed_at=//p' "$NT/cache/notice-plan" 2>/dev/null | head -1; }
 stamp_after_first="$(plan_stamp)"
 cached_second="$(notice "$WORK/notice-versions.json")"
-has "the second run says the same thing" "update is available" "$cached_second"
+has "the second run says the same thing" "available" "$cached_second"
 # Served from the plan, not worked out again. The probe count is no longer the signal:
 # the cached path deliberately re-probes its pending candidates so it can never repeat
 # an update that has already been taken.
@@ -2044,7 +2296,7 @@ printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
 chmod +x "$NT/bin/exapump"
 caught_up="$(notice "$WORK/notice-versions.json")"
 lacks "a candidate that caught up is dropped" "for exapump" "$caught_up"
-has "and the ones still behind are kept" "mcp" "$caught_up"
+has "and the ones still behind are kept" "Updates are available to your starterkit." "$caught_up"
 # Back to behind, so what follows sees the same fixture as before.
 printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
     "$NOTICE_INSTALLED_EXAPUMP" > "$NT/bin/exapump"
@@ -2093,6 +2345,52 @@ no_cache_leak="$( EXAKIT_HOME="$NT"
     EXAKIT_VERSIONS_CACHE="$WORK/definitely-not-here.json"
     _exakit_notice_signature 2>&1 >/dev/null )"
 check "a missing versions cache prints nothing" "" "$no_cache_leak"
+
+# THE PROMPT IS NEVER HELD FOR THE PLAN. Seen on a Mac: after `exakit
+# marketplace` installed two add-ons the cursor sat on an empty line for several
+# seconds - the notice was probing every component on the prompt's time - and
+# the user pressed Enter, thinking it had hung. A slow probe now costs the
+# command at most EXAKIT_NOTICE_WAIT seconds; the plan is finished in the
+# background and the next command prints it.
+rm -f "$NT/cache/notice-plan" "$NT/cache/notice-state.json"
+printf '#!/bin/sh\nsleep 8\necho "exapump %s"\n' "$NOTICE_INSTALLED_EXAPUMP" > "$NT/bin/exapump"
+chmod +x "$NT/bin/exapump"
+slow_t0="$(date +%s)"
+slow="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_WAIT=1')"
+slow_took=$(( $(date +%s) - slow_t0 ))
+check "a slow probe does not hold the prompt" "yes" \
+    "$([ "$slow_took" -le 4 ] && printf yes || printf 'no (%ss)' "$slow_took")"
+lacks "...and prints nothing it has not worked out" "Updates are available" "$slow"
+for _np_wait in $(seq 1 60); do [ -f "$NT/cache/notice-plan" ] && break; sleep 1; done
+check "the plan is worked out in the background" "yes" \
+    "$([ -f "$NT/cache/notice-plan" ] && printf yes || printf no)"
+printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
+    "$NOTICE_INSTALLED_EXAPUMP" > "$NT/bin/exapump"
+chmod +x "$NT/bin/exapump"
+slow_next="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_WAIT=0')"
+has "...and the next command prints it" "Updates are available to your starterkit." "$slow_next"
+
+# A cached plan is printed without asking an add-on's module again: each one is
+# a Python start (and Exasol for VS Code runs the editor's CLI, 15 s cold), which
+# is most of what the prompt used to wait for. Any change the kit makes to an
+# add-on rewrites the manifest, and that retires the plan instead.
+cp "$NT/manifest.json" "$WORK/notice-manifest.bak"
+python3 - "$NT/manifest.json" <<'NOTICE_SV_PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["components"]["semantic_views"] = {"ownership": "kit", "version": "0.0.1"}
+json.dump(doc, open(sys.argv[1], "w"), indent=2)
+NOTICE_SV_PY
+rm -f "$NT/cache/notice-plan" "$WORK/addon-probed"
+notice "$WORK/notice-versions.json" >/dev/null
+has "an installed add-on behind its advertised version is in the plan" "semantic-views:" \
+    "$(sed -n 's/^light=//p' "$NT/cache/notice-plan" 2>/dev/null | head -1)"
+addon_cached="$(notice "$WORK/notice-versions.json" "semantic_views_installed_version() { echo probed >> '$WORK/addon-probed'; echo 0.0.1; }")"
+has "the cached plan still announces it" "Updates are available to your starterkit." "$addon_cached"
+check "...without starting the add-on's module" "not-probed" \
+    "$([ -f "$WORK/addon-probed" ] && printf PROBED || printf not-probed)"
+cp "$WORK/notice-manifest.bak" "$NT/manifest.json"
+rm -f "$NT/cache/notice-plan" "$NT/cache/notice-state.json"
 
 kill_switch="$(notice "$WORK/notice-versions.json" 'EXAKIT_NO_UPDATE_NOTICE=1')"
 check "the kill switch silences it" "" "$(printf '%s' "$kill_switch" | tr -d '[:space:]')"
@@ -2144,11 +2442,12 @@ cat > "$K2/manifest.json" <<'EOF'
   "kit": {
     "version": "0.2.0"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
-  "components": {},
+  "components": {
+    "personal": {"ownership": "kit"}},
   "steps_completed": []
 }
 EOF
@@ -2319,8 +2618,10 @@ self_update() (
                 *) shift ;;
             esac
         done
-        # Only the main branch archive exists in this world; the tag fallbacks 404.
+        # The main branch archive exists in this world; a release tag only when
+        # SU_TAG_SERVE says so (SEC-02: the tag is asked for first).
         case "$_su_url" in
+            *refs/tags/v*.tar.gz) [ -n "${SU_TAG_SERVE:-}" ] || return 22; cp "$SU_TAG_SERVE" "$_co" ;;
             *refs/heads/main.tar.gz) cp "$SU_SERVE" "$_co" ;;
             *) return 22 ;;
         esac
@@ -2342,6 +2643,16 @@ PS_KIT_SRC="$MK_LAST_SRC"       # reused by the PowerShell self-update check bel
 check "a newer kit replaces the copy and records itself" \
     "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@main kit-present replaced cli-installed backup-kept" \
     "$(self_update "$WORK/kit-0.3.0.tgz" 0.3.0)"
+
+# SEC-02: the announced release's tag is used when it exists, not main.
+check "the announced release's tag comes before main" \
+    "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@v0.3.0 kit-present replaced cli-installed backup-kept" \
+    "$(SU_TAG_SERVE="$WORK/kit-0.3.0.tgz" self_update "$WORK/kit-0.2.5-for-main.tgz" 0.3.0)"
+make_kit_tarball "$WORK/kit-0.2.9.tgz" 0.2.9
+check "a release archive that is not the announced version is refused" \
+    "rc=1 version=0.2.0" \
+    "$(SU_TAG_SERVE="$WORK/kit-0.2.9.tgz" self_update "$WORK/kit-0.3.0.tgz" 0.3.0 | cut -d' ' -f1-2)"
+has "...saying which version it was" "says it is version 0.2.9, not 0.3.0" "$(cat "$WORK/su-out.txt")"
 
 # The raw endpoint can be minutes ahead of the branch archive: record what landed.
 make_kit_tarball "$WORK/kit-0.2.5.tgz" 0.2.5
@@ -2418,8 +2729,8 @@ if command -v pwsh >/dev/null 2>&1; then
         EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json" \
         EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
         pwsh -NoProfile -File "$ROOT/setup/exakit.ps1" version 2>&1 | tr -d '\r')"
-    check "powershell: Component / Version / Status" \
-        "Component Version Status" "$(row "$ps_table" Component)"
+    check "powershell: Component / Version / Owner / Status" \
+        "Component Version Owner Status" "$(row "$ps_table" Component)"
     has "powershell: kit row is comparable" "exakit 0.2.0 current" "$(row "$ps_table" exakit)"
     has "powershell: installed stays installed" "exapump 0.13.0" "$(row "$ps_table" exapump)"
     has "powershell: a waiting update names the version" \
@@ -2544,6 +2855,8 @@ $env:EXAKIT_BIN_DIR = "$env:NT/bin"
 $env:EXAKIT_VERSIONS_CACHE = "$env:NT/cache/versions.json"
 $env:EXAKIT_VERSIONS_URL = "http://offline.invalid/versions.json"
 $env:EXAKIT_NOTICE_STATE = "$env:NT/cache/notice-state.json"
+# The plan is worked out by a detached PowerShell; wait for it here.
+$env:EXAKIT_NOTICE_WAIT = "60"
 . "$env:VM_ROOT/setup/lib/exakit-common.ps1"
 # The component readers live in the CLI; load it with a harmless command.
 . "$env:VM_ROOT/setup/exakit.ps1" -Command "help" *> $null
@@ -2554,14 +2867,24 @@ PSEOF
             *)   ps_notice="$(NT="$NT" VM_ROOT="$ROOT" script -q                     -c "pwsh -NoProfile -File $WORK/ps-notice.ps1" /dev/null </dev/null 2>&1)" ;;
         esac
         ps_notice="$(printf '%s' "$ps_notice" | tr -d '\r\n\004\010' | sed 's/\^D//g')"
-        has "powershell: recommended light bump" "A recommended update is available for exapump" "$ps_notice"
+        has "powershell: light bump in one plain sentence" "Updates are available to your starterkit." "$ps_notice"
         has "powershell: critical heavy bump" "A critical update is available for personal" "$ps_notice"
         has "powershell: the heavy line names the cost" "requires stopping the database" "$ps_notice"
+        # Ctrl+C: an interrupted run gives the prompt back with no notice.
+        sed 's/^Show-ExakitUpdateNotice$/$script:ExakitUserInterrupted = $true; Show-ExakitUpdateNotice/' \
+            "$WORK/ps-notice.ps1" > "$WORK/ps-notice-int.ps1"
+        case "$NOTICE_PTY" in
+            bsd) ps_int="$(NT="$NT" VM_ROOT="$ROOT" script -q /dev/null                     pwsh -NoProfile -File "$WORK/ps-notice-int.ps1" </dev/null 2>&1)" ;;
+            *)   ps_int="$(NT="$NT" VM_ROOT="$ROOT" script -q                     -c "pwsh -NoProfile -File $WORK/ps-notice-int.ps1" /dev/null </dev/null 2>&1)" ;;
+        esac
+        lacks "powershell: an interrupted run prints no notice" "available" \
+            "$(printf '%s' "$ps_int" | tr -d '\r\n\004\010')"
         cp "$REAL" "$NT/kit/versions.json"
     else
-        check "powershell: recommended light bump" "skipped" "skipped"
+        check "powershell: light bump in one plain sentence" "skipped" "skipped"
         check "powershell: critical heavy bump" "skipped" "skipped"
         check "powershell: the heavy line names the cost" "skipped" "skipped"
+        check "powershell: an interrupted run prints no notice" "skipped" "skipped"
     fi
     ps_version="$(EXAKIT_HOME="$UC" EXAKIT_BIN_DIR="$UC/bin" \
         EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json" \
@@ -2569,7 +2892,7 @@ PSEOF
         pwsh -NoProfile -File "$ROOT/setup/exakit.ps1" version 2>&1 | tr -d '\r')"
     has "powershell: version reports the kit version" "Version " "$ps_version"
     has "powershell: version reports the kit version value" "0.2.0" "$ps_version"
-    has "powershell: version renders the table" "Component Version Status" "$(row "$ps_version" Component)"
+    has "powershell: version renders the table" "Component Version Owner Status" "$(row "$ps_version" Component)"
     has "powershell: version promotes update-all" "Bring everything up to date with: exakit update" "$ps_version"
     lacks "powershell: version prints no separate updates panel" "Updates available" "$ps_version"
     lacks "powershell: and points at no update-check" "update-check" "$ps_version"
@@ -2577,7 +2900,7 @@ else
     check "powershell(versions_manifest)" "skipped" "skipped"
     check "powershell(non_https_refused)" "skipped" "skipped"
     check "powershell(runtime_offer_decisions)" "skipped" "skipped"
-    for _skipped in "Component / Version / Status" "kit row is comparable" "installed stays installed" \
+    for _skipped in "Component / Version / Owner / Status" "kit row is comparable" "installed stays installed" \
                     "a waiting update names the version" "older advertised version" "critical severity" \
                     "maintainer note" "repair status for a missing component" \
                     "promotes update-all" \
@@ -2599,7 +2922,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "an installed kit follows its own source:"
 # THE BUG: EXAKIT_KIT_REPO defaulted to the published repository and never read
-# the manifest, while json_tables_mirror_repo already followed kit.source. A
+# the manifest, while the JSON Tables add-on already followed kit.source. A
 # kit installed from a fork downloaded release assets from the fork and digest
 # pins from the default - a split brain where every add-on install died on a
 # checksum mismatch that looked like corruption - and `exakit update exakit`
@@ -2739,6 +3062,17 @@ for component, entries in sorted(coupled.items()):
         if found != want:
             problems.append("%s: versions.json says %s, %s says %s (%s)"
                             % (component, want, name, found, path))
+catalog_path = os.path.join(root, "marketplace", "catalog.json")
+if os.path.isfile(catalog_path):
+    catalog = json.load(open(catalog_path, encoding="utf-8"))
+    for row in catalog.get("addons", []):
+        component = row.get("id")
+        want = (components.get(component) or {}).get("version")
+        found = row.get("default_version")
+        checked += 1
+        if want is None or found != want:
+            problems.append("%s: versions.json says %s, marketplace/catalog.json says %s"
+                            % (component, want, found))
 print("checked=%d" % checked)
 for problem in problems:
     print("  " + problem)

@@ -1,0 +1,78 @@
+{
+  "id": "s3",
+  "name": "Amazon S3 (document files)",
+  "profile": "java-document-files",
+  "upstream": "exasol/s3-document-files-virtual-schema",
+  "adapter": {
+    "version": "5.0.0",
+    "asset": "document-files-virtual-schema-dist-10.0.1-s3-5.0.0.jar",
+    "url": "https://github.com/exasol/s3-document-files-virtual-schema/releases/download/5.0.0/document-files-virtual-schema-dist-10.0.1-s3-5.0.0.jar",
+    "size": 100185917,
+    "sha256": "97944047b5d902091b10ba5338423e14d2ca806f4de6ef57075b23891f0a42e9",
+    "license": "MIT"
+  },
+  "driver": null,
+  "etl": null,
+  "import_script": "IMPORT_FROM_S3_DOCUMENT_FILES",
+  "inputs": [
+    {
+      "name": "bucket",
+      "label": "S3 bucket name",
+      "kind": "s3-bucket",
+      "required": true
+    },
+    {
+      "name": "region",
+      "label": "AWS region of the bucket (e.g. eu-central-1)",
+      "kind": "aws-region",
+      "required": true
+    },
+    {
+      "name": "mapping",
+      "label": "EDML mapping",
+      "prompt": "EDML mapping path",
+      "kind": "edml",
+      "draft": true,
+      "form_default": "auto:data/",
+      "hint": [
+        "EDML mapping: a .json file or a folder of them on this computer.",
+        "Enter takes auto:data/: the kit drafts the mapping from the data/ folder after you give the access key."
+      ]
+    },
+    {
+      "name": "access_key_id",
+      "label": "Access key ID",
+      "kind": "aws-key-id",
+      "required": true,
+      "or_in_credential_file": true
+    },
+    {
+      "name": "secret",
+      "label": "Secret access key",
+      "kind": "secret",
+      "required": true
+    }
+  ],
+  "paste": {
+    "style": "s3",
+    "forms": ["s3://bucket/...", "https://bucket.s3.<region>.amazonaws.com/..."]
+  },
+  "auth": "aws-keys",
+  "host": "{bucket}.s3.{region}.amazonaws.com",
+  "credential": "s3",
+  "store": "bucket",
+  "access": "S3: s3:ListBucket on the mapped prefixes and s3:GetObject on the objects",
+  "vs_properties": {
+    "MAPPING": "{mapping_path}"
+  },
+  "tips": [
+    "Tables and columns are named by the mapping file: a change to the mapping needs a new connect (exakit source remove <name>, then connect again).",
+    "A CSV mapping without fields has its columns inferred, and a date then arrives as VARCHAR(2000000): name the fields and their types in the mapping to get typed columns."
+  ],
+  "notes": [
+    "The credential is an access key: the secret key alone on standard input (with --set access_key_id=...), or a JSON file through --password-file - what `aws iam create-access-key` prints, or `aws sts` temporary credentials with their session token. The kit never reads ~/.aws.",
+    "The account needs s3:ListBucket on the mapped prefixes and s3:GetObject on the objects (plus kms:Decrypt for a KMS-encrypted bucket). Measured: a prefix outside the policy fails as AccessDenied naming the action.",
+    "Standard regional endpoints over verified HTTPS only: no endpoint override, path-style access or anonymous reads. A bucket name with dots is refused, because its virtual-hosted name does not match the S3 certificate.",
+    "The adapter detects the file type by extension (.json, .jsonl, .csv, .parquet); CSV and Parquet can infer their columns, JSON needs explicit fields. A source glob that matches no file reads as an empty table - the check names such tables."
+  ]
+}

@@ -202,5 +202,222 @@ else
     fail "the PowerShell resume restarts the elapsed counter"
 fi
 
+# 5. A SUBSHELL's outcome line must not end the parent's spinner. Bash gives a
+#    subshell its parent's $$, so an owner check on $$ alone let the subshell
+#    that set up the read-only MCP user stop Step 4's spinner at (3s) and leave
+#    it frozen there while the MCP server took half a minute to start.
+cat > "$WORK/subshell.sh" <<EOF
+cd "$ROOT"
+. setup/lib/ui.sh
+. setup/lib/common.sh 2>/dev/null
+ui_detect >/dev/null 2>&1
+UI_FANCY=1
+EXAKIT_QUIET_DETAIL=1
+ui_spin_begin "Starting the MCP server and checking it answers"
+_outer="\$_UI_SPIN_PID"
+( ui_spin_begin inner; ui_spin_end; ok_step "read-only user ready" ) >/dev/null 2>&1
+sleep 0.5
+if kill -0 "\$_outer" 2>/dev/null; then echo; echo SPINNER-ALIVE; else echo; echo SPINNER-KILLED; fi
+ui_spin_end
+EOF
+case "$(python3 "$WORK/ptyrun.py" "$WORK/subshell.sh" 2>&1 | tr '\r' '\n')" in
+    *SPINNER-ALIVE*)  pass "a subshell's ok_step leaves the parent's spinner running" ;;
+    *SPINNER-KILLED*) fail "a subshell's ok_step stopped the parent's spinner (frozen step line)" ;;
+    *)                fail "the subshell scenario did not report" ;;
+esac
+
+# A MENU STOPS THE SPINNER. The install's add-on offer starts a spinner until
+# its table is up; on a re-run with nothing to auto-install nothing stopped it,
+# so its frames prefixed the menu's rows, kept going while it waited for a key,
+# and ran on into the closing box. The menu must take the line, as
+# ui_table_begin does.
+cat > "$WORK/menu.sh" <<EOF
+cd "$ROOT"
+export HOME="$WORK/home"; mkdir -p "\$HOME"
+. setup/lib/ui.sh
+. setup/lib/common.sh 2>/dev/null
+ui_detect >/dev/null 2>&1
+UI_FANCY=1
+printf 'alpha|Alpha||\nskip|Skip||\n' > "$WORK/menu-table"
+UI_TABLE_TITLE="Marketplace add-ons"
+ui_spin_begin ""
+sleep 0.6
+printf '\nMENU-START\n'
+ui_table_menu "$WORK/menu-table"
+echo "AFTER-MENU pid=[\${_UI_SPIN_PID}]"
+sleep 0.6
+EOF
+# The driver for the two scenarios below: keys typed at 2s (Space, Enter),
+# and a hard deadline, so a spinner that never stops cannot hang the test.
+cat > "$WORK/ptykeys.py" <<'PY'
+import os, pty, sys, select, time, signal
+env = dict(os.environ); env['TERM'] = 'xterm-256color'; env['LC_ALL'] = 'en_US.UTF-8'
+env.pop('NO_COLOR', None); env.pop('EXAKIT_NO_FANCY', None)
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvpe('/bin/bash', ['/bin/bash', sys.argv[1]], env); os._exit(1)
+buf = b''; t0 = time.time(); sent = False; deadline = float(sys.argv[2])
+while time.time() - t0 < deadline:
+    if not sent and time.time() - t0 > 2.0:
+        os.write(fd, b' '); time.sleep(0.3); os.write(fd, b'\r'); sent = True
+    try:
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if r:
+            d = os.read(fd, 65536)
+            if not d: break
+            buf += d
+    except OSError:
+        break
+try: os.kill(pid, signal.SIGKILL)
+except Exception: pass
+sys.stdout.buffer.write(buf)
+PY
+cat > "$WORK/frames.py" <<'PY'
+import sys
+raw = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+start = raw.find(sys.argv[2]); stop = raw.find(sys.argv[3]) if len(sys.argv) > 3 else -1
+seg = raw[start:stop if stop > 0 else None] if start >= 0 else ''
+print('found' if start >= 0 else 'missing', sum(seg.count(c) for c in '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'))
+PY
+python3 "$WORK/ptykeys.py" "$WORK/menu.sh" 7 > "$WORK/menu.raw" 2>&1
+case "$(python3 "$WORK/frames.py" "$WORK/menu.raw" MENU-START AFTER-MENU)" in
+    "found 0") pass "no spinner frame while the menu is on screen" ;;
+    *)         fail "the spinner kept drawing over the menu: $(python3 "$WORK/frames.py" "$WORK/menu.raw" MENU-START AFTER-MENU)" ;;
+esac
+case "$(python3 "$WORK/frames.py" "$WORK/menu.raw" AFTER-MENU)" in
+    "found 0") pass "no spinner frame after the menu returns" ;;
+    *)         fail "the spinner outlived the menu: $(python3 "$WORK/frames.py" "$WORK/menu.raw" AFTER-MENU)" ;;
+esac
+grep -q 'AFTER-MENU pid=\[\]' "$WORK/menu.raw" && pass "the menu released the spinner slot" \
+    || fail "the spinner slot still holds a pid after the menu"
+
+# CTRL-C NEVER LEAVES AN ANIMATOR. The animator is disowned, so when the
+# installer died at a menu nothing reaped it, and it wrote frames over the shell
+# prompt until the terminal closed. The terminal stays open here (the driver
+# lives on) while the installer it started is interrupted.
+cat > "$WORK/inner.sh" <<EOF
+cd "$ROOT"; export HOME="$WORK/home"
+. setup/lib/ui.sh; . setup/lib/common.sh 2>/dev/null; ui_detect >/dev/null 2>&1; UI_FANCY=1
+ui_spin_begin "working"
+sleep 30
+EOF
+cat > "$WORK/driver.sh" <<EOF
+bash "$WORK/inner.sh" &
+p=\$!
+sleep 0.8
+kill -INT \$p; kill -9 \$p 2>/dev/null
+sleep 0.5
+echo; echo DEAD-MARK
+sleep 1.5
+echo; echo "LEFT=\$(pgrep -f "$WORK/inner.sh" | wc -l | tr -d ' ')"
+EOF
+python3 "$WORK/ptykeys.py" "$WORK/driver.sh" 5 > "$WORK/driver.raw" 2>&1
+pkill -f "$WORK/inner.sh" 2>/dev/null
+case "$(python3 "$WORK/frames.py" "$WORK/driver.raw" DEAD-MARK)" in
+    "found 0") pass "no spinner frame after the installer is interrupted" ;;
+    *)         fail "an orphaned spinner kept drawing after the installer died" ;;
+esac
+grep -q 'LEFT=0' "$WORK/driver.raw" && pass "no animator process outlives the installer" \
+    || fail "an animator process outlived the installer"
+
+# THE OFFER'S SPINNER, handed to a table someone else draws. A nested
+# ui_spin_begin that never gave its reference back left ui_spin_end only
+# counting down, so the owner's last frame stayed frozen above the add-ons
+# table. ui_spin_end_all is the real stop the hand-over uses now.
+cat > "$WORK/nested.sh" <<EOF
+cd "$ROOT"; export HOME="$WORK/home"
+. setup/lib/ui.sh; . setup/lib/common.sh 2>/dev/null; ui_detect >/dev/null 2>&1; UI_FANCY=1
+ui_spin_begin ""
+ui_spin_begin "Opening the add-ons"
+sleep 0.6
+ui_spin_end
+echo "COUNTDOWN pid=[\${_UI_SPIN_PID:+set}]"
+ui_spin_end_all
+printf '\nTABLE-START\n'
+sleep 0.8
+echo "TABLE-END pid=[\${_UI_SPIN_PID}] nested=[\${_UI_SPIN_NESTED}]"
+EOF
+python3 "$WORK/ptykeys.py" "$WORK/nested.sh" 4 > "$WORK/nested.raw" 2>&1
+grep -q 'COUNTDOWN pid=\[set\]' "$WORK/nested.raw" && pass "a leaked nested reference keeps ui_spin_end from stopping the owner (the cause)" \
+    || fail "expected ui_spin_end to only count down with a nested reference out"
+case "$(python3 "$WORK/frames.py" "$WORK/nested.raw" TABLE-START TABLE-END)" in
+    "found 0") pass "ui_spin_end_all: no spinner frame once the table owns the line" ;;
+    *)         fail "a frame was drawn after ui_spin_end_all: $(python3 "$WORK/frames.py" "$WORK/nested.raw" TABLE-START TABLE-END)" ;;
+esac
+grep -q 'TABLE-END pid=\[\] nested=\[0\]' "$WORK/nested.raw" && pass "ui_spin_end_all released the slot and every reference" \
+    || fail "ui_spin_end_all left a pid or a reference"
+
+# A spinner that is stopped says nothing on stderr. The stop is a SIGTERM to
+# the animator; one that landed while the frame's `date` ran in a $( ) left the
+# `|| echo 0` writing into a dead pipe, and bash printed
+# "ui.sh: line 463: echo: write error: Broken pipe" on the status screen (4 of
+# 7 pty runs of `exakit status`). A race, so many short start/stop cycles: the
+# unfixed animator printed it 5 times in 60 cycles, 26 in 200. python3 ignores
+# SIGPIPE and its pty child inherits that, as an agent's terminal does.
+cat > "$WORK/stopstorm.sh" <<EOF
+cd "$ROOT"
+. setup/lib/ui.sh
+. setup/lib/common.sh 2>/dev/null
+ui_detect >/dev/null 2>&1
+UI_FANCY=1
+_ss=0
+while [ \$_ss -lt 60 ]; do
+    ui_spin_begin "Checking the database"
+    sleep 0.0\$(( _ss % 9 ))
+    ui_spin_end
+    _ss=\$(( _ss + 1 ))
+done
+echo STORM-DONE
+EOF
+python3 "$WORK/ptyrun.py" "$WORK/stopstorm.sh" > "$WORK/storm.raw" 2>&1
+grep -q 'STORM-DONE' "$WORK/storm.raw" && pass "60 spinner start/stop cycles ran under a pty" \
+    || fail "the start/stop scenario did not finish"
+if grep -aq 'write error\|Broken pipe' "$WORK/storm.raw"; then
+    fail "a stopped spinner printed a bash error: $(grep -ao 'line [0-9]*: [a-z]*: write error' "$WORK/storm.raw" | head -1)"
+else
+    pass "a stopped spinner never prints a write error on the user's screen"
+fi
+
+# Windows: every exakit command sat on a blank console for seconds while the
+# libraries loaded (ui.ps1's Add-Type compiles C#), before anything could draw.
+# exakit.ps1 now puts its own spinner up first and erases it before the
+# command's first line; redirected output and --json get nothing.
+if command -v pwsh >/dev/null 2>&1; then
+    sed 's/\[\], 20)/[], 180)/' "$WORK/ptyrun.py" > "$WORK/ptyrun-slow.py"
+    _bs_env="EXAKIT_HOME='$WORK/bs-home' EXAKIT_BIN_DIR='$WORK/bs-bin'"
+    printf 'cd "%s"\n%s exec pwsh -NoProfile -File setup/exakit.ps1 help\n' "$ROOT" "$_bs_env" > "$WORK/boot.sh"
+    printf 'cd "%s"\n%s exec pwsh -NoProfile -File setup/exakit.ps1 help --json\n' "$ROOT" "$_bs_env" > "$WORK/boot-json.sh"
+    python3 "$WORK/ptyrun-slow.py" "$WORK/boot.sh" > "$WORK/boot.raw" 2>&1
+    if grep -aq 'Starting exakit' "$WORK/boot.raw"; then
+        pass "exakit.ps1 draws a spinner while its libraries load"
+    else
+        fail "exakit.ps1 showed nothing while its libraries loaded"
+    fi
+    _bs_screen="$(python3 "$WORK/replay.py" "$WORK/boot.raw")"
+    case "$_bs_screen" in
+        *"Starting exakit"*) fail "the start-up spinner was left on the screen" ;;
+        *) pass "the start-up spinner is gone from the screen" ;;
+    esac
+    case "$_bs_screen" in
+        *"exakit"*) pass "the command's own output follows" ;;
+        *) fail "no help output after the start-up spinner" ;;
+    esac
+    python3 "$WORK/ptyrun-slow.py" "$WORK/boot-json.sh" > "$WORK/boot-json.raw" 2>&1
+    if grep -aq 'Starting exakit' "$WORK/boot-json.raw"; then
+        fail "--json drew the start-up spinner"
+    else
+        pass "--json draws no start-up spinner"
+    fi
+    (cd "$ROOT" && EXAKIT_HOME="$WORK/bs-home" EXAKIT_BIN_DIR="$WORK/bs-bin" \
+        pwsh -NoProfile -File setup/exakit.ps1 help > "$WORK/boot-piped.out" 2>&1)
+    if grep -aq 'Starting exakit' "$WORK/boot-piped.out"; then
+        fail "redirected output got the start-up spinner"
+    else
+        pass "redirected output gets no start-up spinner"
+    fi
+else
+    printf '  skip pwsh not available: start-up spinner checks\n'
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

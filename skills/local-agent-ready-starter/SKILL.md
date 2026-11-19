@@ -65,7 +65,7 @@ options before piping a remote script into a shell:
   can be read first; installs nothing until the user runs the setup themselves.
 
 When **you** run the installer (no terminal is attached, so the install cannot prompt the
-user), it silently takes safe defaults — it would load **every bundled dataset** and connect
+user), it silently takes safe defaults — it would load **the kit's samples** (retail sales, bank transactions) and connect
 **every AI client found on the machine that isn't connected yet** over MCP, without asking.
 Instead, ask the user these questions first, then pass the answers so their choices are
 honored — prefixed before `sh` on macOS/Linux/WSL, or set as `$env:` variables first in
@@ -75,16 +75,21 @@ releases:
   Claude Code CLI; also `claude_desktop`, `claude_code`, `codex`, `cursor`, `copilot`,
   `gemini`, `opencode`, `continue`, `all`, comma-separated); or `EXAKIT_SKIP_MCP=1` to set
   MCP up later via `exakit mcp-setup`
-- which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
-  `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip data)
+- which data to load → `EXAKIT_DATASETS=retail_sales,bank_transaction` (bundled dataset ids; wins over
+  `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip the samples);
+  `EXAKIT_DATA_FILE=/abs/path.csv` loads the user's own file after them. `external` in `EXAKIT_DATASETS` never starts the connect wizard
+  unattended: it prints the `exakit connect` hint, so connect a source afterwards with
+  `exakit connect <connector> ...` (`exasol-virtual-schemas`)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)
 
-Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASETS=tpch sh` —
-or on Windows: `$env:EXAKIT_MCP_CLIENTS = "claude"; $env:EXAKIT_DATASETS = "tpch"; irm <install.ps1 URL> | iex`.
+Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASETS=retail_sales sh` —
+or on Windows: `$env:EXAKIT_MCP_CLIENTS = "claude"; $env:EXAKIT_DATASETS = "retail_sales"; irm <install.ps1 URL> | iex`.
 (`EXAKIT_REUSE_DB` applies to the macOS native runtime only.)
 
-Tell the user what to expect: a detection summary, an install plan, then numbered steps
-ending in a connection panel — and the suggested first AI prompt is copied to the user's
+Tell the user what to expect: a detection summary, an install plan, numbered steps, then
+the sample data (on a terminal a *Data to load* table, both samples ticked), the `exakit`
+helper as the last step, and a connection panel. The `exakit` command itself is in place
+from the first seconds, so `exakit status` answers while the install runs. The suggested first AI prompt is copied to the user's
 clipboard automatically when a clipboard tool is available, ready to paste into their client.
 **The first database deployment usually finishes in under 2 minutes on every
 platform** (one-time). Do not treat a long-running macOS
@@ -100,17 +105,17 @@ failed step. Common fixes live in the [README troubleshooting table] and `exakit
 ```bash
 exakit status                                   # runtime: running
 exakit info                                      # the connection panel
-exapump sql -p starter-kit 'SELECT CURRENT_TIMESTAMP'
+exapump sql -p starter-kit 'SELECT CURRENT_DATE'
 ```
 
-A returned timestamp means the local database works end to end. If `status` is not
+A returned date means the local database works end to end. If `status` is not
 `running`, `exakit start` brings it back on every platform — prefer it over re-running
 the installer (a re-run with the kit in place is safe and skips the deploy, but `start`
 is the direct tool for the job).
 
 > Two names that look alike but are not the same thing — do not conflate or "correct" them:
 > `starter-kit` is the **exapump connection profile** (`-p starter-kit`); each bundled dataset
-> lives in its **own database schema** (`TPCH`, `ENERGY`, `WEATHER`), while `STARTER_KIT` is the
+> lives in its **own database schema** (`RETAIL_SALES`, `BANK_TRANSACTION`), while `STARTER_KIT` is the
 > default schema for data the user uploads themselves. Use each exactly as written.
 
 ## Step 3 — Connect the AI client over MCP
@@ -126,9 +131,10 @@ connected or not installed on this machine appear greyed out with the reason and
 selected; **every selectable (pending) client is pre-selected**. The user restarts the
 client afterward.
 
-After setup, the client starts the MCP server named `exasol` on demand over stdio (it is not
-a background service). Verify with `exakit mcp-doctor`, which starts the server itself and
-completes an MCP handshake — so a `connected` client is one that can really reach it.
+After setup, every client has an MCP server named `exasol`: the Exasol Personal launcher's own
+MCP server beside the database (`http://127.0.0.1:4896/mcp`), the only one there is. Verify with
+`exakit mcp-doctor`, which heals it when it does not serve and completes an MCP handshake with
+it — so a `connected` client is one that can really reach it.
 
 **If you are the client you just configured, you cannot use those tools yet.** An MCP client
 reads its server list at startup, so the `exasol` tools appear only after *your own* process
@@ -141,17 +147,19 @@ trust. That is what makes the next steps safe.
 
 ## Step 4 — Load the sample data
 
-So the user is not staring at an empty database, load the bundled TPC-H sample (customers,
-orders, line items, parts, suppliers) into the `TPCH` schema:
+Check what is already there first: `exakit status --json` lists `datasets_loaded`. An
+install loads the kit's two samples, `retail_sales` (`RETAIL_SALES`) and `bank_transaction`
+(`BANK_TRANSACTION`). Use what is loaded. Only on an empty database, load a bundled sample:
 
 ```bash
-exakit data-load
+exakit data-load retail_sales   # a bundled dataset by id; bare `exakit data-load` is the menu (terminal only)
 ```
 
-Safe to run any time; choose the bundled sample option to load it. Use `exakit data-load --force`
-to reload the bundled sample directly. If it reports files as *pending*, the sample data has not shipped in this build —
-the user can still continue with their own data:
-`exapump upload yourfile.csv --table STARTER_KIT.MYTABLE -p starter-kit`.
+Safe to run any time: what is already loaded is skipped. Use `exakit data-load --force retail_sales`
+to reload it. If it reports files as *pending*, the sample data has not shipped in this build —
+the user can still continue with their own data, through the same command first:
+`EXAKIT_DATA_TABLE=STARTER_KIT.MYTABLE exakit data-load yourfile.csv` (exapump only when
+`exakit data-load` cannot take the file — the order is in the `exakit` skill).
 
 ## Step 5 — The first trusted query (the payoff, and the point)
 
@@ -162,8 +170,8 @@ hold the discipline even though it is tempting to just answer.
 ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (independently)  ->  RERUN
 ```
 
-1. **Discover.** Ask the user's assistant to list schemas/tables and describe the
-   `TPCH` tables first — ground in the *real* schema, do not guess column names.
+1. **Discover.** Ask the user's assistant to list schemas/tables and describe the tables of a
+   dataset this machine actually loaded (`datasets_loaded` above) — ground in the *real* schema, do not guess column names.
    Without MCP tools (always the case in the session that ran the install) the
    system tables answer the same questions in well under a second:
    `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA NOT LIKE 'SYS%'`
@@ -171,8 +179,9 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
    columns and types, and `~/.exasol-starter-kit/kit/data/data-dictionary.md`
    describes each bundled dataset. Run them through `exakit sql` (`--json` for
    one parseable object).
-2. **Ask, but show the SQL first.** For a question like *"which product category generated
-   the most revenue?"*, present the SQL and a plain-English explanation **before executing**.
+2. **Ask, but show the SQL first.** For a question that fits the loaded data — *"which product
+   category generated the most revenue?"* on the retail sales, *"which channel carries the
+   most debits?"* on the bank transactions — present the SQL and a plain-English explanation **before executing**.
    Call out the judgment calls: what defines "revenue" (price × quantity? an amount column?),
    whether returns are subtracted, what is filtered out. Let the user correct the SQL before
    it runs.

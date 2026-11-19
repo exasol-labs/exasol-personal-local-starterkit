@@ -30,6 +30,8 @@ class LocationResult:
     available: bool
     path: Path | None
     evidence: list[str] = field(default_factory=list)
+    # What to do instead, when this client cannot be configured from here.
+    remedy: str | None = None
 
 
 @dataclass
@@ -59,6 +61,10 @@ class RenderResult:
     managed_hash: str | None
     entry_name: str
     remove_file: bool = False
+    # The parsed document `content` must read back as. An adapter that
+    # re-serialises a whole user file sets it so validate_render can refuse a
+    # write that would change any value the user already had.
+    expected_document: Any = None
 
 
 class ClientAdapter(ABC):
@@ -192,8 +198,15 @@ KIT_MANAGED_SERVER_NAMES = frozenset({"exasol", "dash-server"})
 def program_on_path(environment: ExecutionEnvironment, names: Iterable[str]) -> str | None:
     """The first of ``names`` found as an executable on the environment's PATH."""
     exts = [""] + ([".exe", ".cmd", ".bat"] if environment.os_name == "win32" else [])
+    # Inside WSL the Windows PATH is appended (/mnt/c/...): a program found there
+    # is the WINDOWS client, which reads its config on the Windows side, never
+    # the distro's files the kit would write (WSL-01). Only the distro's own count.
+    in_wsl = bool(environment.env.get("WSL_DISTRO_NAME") or environment.env.get("WSL_INTEROP"))
     for directory in environment.env.get("PATH", "").split(os.pathsep):
         if not directory:
+            continue
+        if in_wsl and len(directory) >= 6 and directory.startswith("/mnt/") and directory[5].isalpha() \
+                and (len(directory) == 6 or directory[6] == "/"):
             continue
         for name in names:
             for ext in exts:

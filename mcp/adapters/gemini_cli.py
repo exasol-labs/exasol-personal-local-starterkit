@@ -159,7 +159,7 @@ class GeminiCliAdapter(ClientAdapter):
         mcp_servers[server_definition.name] = entry
         # No sort_keys: settings.json is the CLI's own settings file, so the
         # managed edit is kept minimally invasive (insertion-order preserved).
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -199,7 +199,7 @@ class GeminiCliAdapter(ClientAdapter):
             if not mcp_servers:
                 document.pop("mcpServers", None)
         # Never delete ~/.gemini/settings.json: it holds unrelated CLI settings.
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

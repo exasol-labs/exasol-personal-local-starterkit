@@ -105,6 +105,17 @@ class ServerDefinition:
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    # How a client that cannot express a remote server reaches this HTTP one: a
+    # local (stdio) bridge to the same URL. None means such a client is skipped,
+    # which is what an add-on endpoint does; the exasol server carries one, so
+    # Claude Desktop keeps its Exasol tools when the server is the launcher's.
+    bridge: "ServerDefinition | None" = None
+
+    def for_client(self, supports_http: bool) -> "ServerDefinition | None":
+        """The definition a client with these capabilities is given: this one, the bridge, or None."""
+        if self.transport is DeploymentMode.HTTP and not supports_http:
+            return self.bridge
+        return self
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, Any] | None) -> "ServerDefinition | None":
@@ -120,6 +131,7 @@ class ServerDefinition:
             headers={
                 str(key): str(value) for key, value in raw.get("headers", {}).items()
             },
+            bridge=cls.from_raw(raw.get("bridge")),
         )
 
 

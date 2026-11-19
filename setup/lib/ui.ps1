@@ -278,15 +278,98 @@ $script:UiSpinNested = 0
 # has to exist before the table section is reached.
 $script:UiTableLive = $false
 
+# ONE ITEM OF A GROUPED STEP. A step that shows several items under one heading
+# (the installer's "Setup Utilities": exapump, then the database features) draws
+# each item's spinner one level in, at the item column, and names the item ahead
+# of what it is doing right now: "exapump  downloading (3s)". The caller sets
+# both for the length of the item and clears them after; empty, the spinner is
+# drawn exactly as before. Twins of _UI_SPIN_INDENT / _UI_SPIN_PREFIX in ui.sh.
+$script:UiSpinIndent = "  "
+$script:UiSpinPrefix = ""
+
+# A GROUPED STEP DRAWN AS A BAR. "Setup Utilities" shows its items as one bar
+# line under the ticks of the items already done: the bar, the count and the
+# item's name stay fixed for the item, and what follows the dot is whatever the
+# item's own code says it is doing now (its Start-ExakitSpinner calls, which
+# only set the words while the bar runs). Pause/resume do nothing under a bar:
+# the item's own lines are held anyway. Display only.
+# Twins: ui_bar_begin / ui_bar_end in ui.sh.
+$script:UiBarActive = $false
+$script:UiBarTitle = ""
+function Start-ExakitStepBar([int]$Done, [int]$Total, [string]$Title) {
+    $script:UiBarActive = $false
+    $script:UiBarTitle = $Title
+    if (-not $script:UiFancy) { return }
+    if ($script:UiTableLive) { return }
+    if ($null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll }
+    if ($Total -lt 1) { $Total = 1 }
+    if ($Done -gt $Total) { $Done = $Total }
+    # The count names the item running now (1/3 while the first runs); the
+    # bar's fill stays what is done.
+    $cur = $Done + 1; if ($cur -gt $Total) { $cur = $Total }
+    $head = "{0}  {1}/{2}  {3}" -f (Get-ExakitBar -Pct ([int]($Done * 100 / $Total))), $cur, $Total, $Title
+    try {
+        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $head; Sub = ""; T0 = (Get-Date); Indent = $script:UiSpinIndent; Dot = $script:UiMidDot })
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('flag', $script:UiSpinFlag)
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            $e = [char]27
+            while ($flag.Run) {
+                $el = [int]((Get-Date) - $flag.T0).TotalSeconds
+                if ($flag.Sub) { [Console]::Write("`r$($flag.Indent)$($flag.Label) $($flag.Dot) $($flag.Sub) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r$($flag.Indent)$($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                Start-Sleep -Milliseconds 200
+            }
+        })
+        [Console]::Write("$($script:UiEsc)[?25l")
+        $script:UiSpinPs = $ps
+        $script:UiSpinRs = $rs
+        $script:UiSpinNested = 0
+        $script:UiBarActive = $true
+        [void]$ps.BeginInvoke()
+    } catch {
+        $script:UiSpinFlag = $null; $script:UiSpinPs = $null; $script:UiSpinRs = $null; $script:UiBarActive = $false
+    }
+}
+function Stop-ExakitStepBar {
+    $script:UiBarTitle = ""
+    if (-not $script:UiBarActive) { return }
+    $script:UiBarActive = $false
+    Stop-ExakitSpinnerAll
+}
+# Set-ExakitStepBarSub - what the item is doing now. The item's own name is
+# already on the bar, so a label that is just that name says nothing new.
+function Set-ExakitStepBarSub([string]$Label) {
+    if (-not $script:UiBarActive -or $null -eq $script:UiSpinFlag) { return }
+    if ($Label -and $script:UiBarTitle -and $Label.StartsWith($script:UiBarTitle)) { $Label = "" }
+    if ($Label) { $Label = $Label.Substring(0, 1).ToLowerInvariant() + $Label.Substring(1) }
+    try { $script:UiSpinFlag.Sub = $Label } catch { }
+}
+
 function Start-ExakitSpinner([string]$Label) {
+    if (Get-Command Set-ExakitAddonActivity -ErrorAction SilentlyContinue) { Set-ExakitAddonActivity -Message $Label }
+    # A step bar owns the line: say the words on it, keep the count.
+    if ($script:UiBarActive) { Set-ExakitStepBarSub $Label; $script:UiSpinNested++; return }
     # A live table is the same single slot: it is already redrawing these rows, so
     # a spinner underneath it takes a reference and draws nothing. Without this a
     # dataset load's first Invoke-ExakitLogged would paint a spinner over the
     # table, and its Stop would then tear the table down.
     if ($null -ne $script:UiSpinFlag -or $script:UiTableLive) { $script:UiSpinNested++; return }
     if (-not $script:UiFancy) { return }
+    # An item's spinner says the item first. A label that already starts with it
+    # (the item's own name, or one Resume-ExakitSpinner hands back) is used as it
+    # is, so a pause and resume never names the item twice.
+    if ($script:UiSpinPrefix) {
+        if (-not $Label) { $Label = $script:UiSpinPrefix }
+        elseif (-not $Label.StartsWith($script:UiSpinPrefix)) {
+            $Label = $script:UiSpinPrefix + "  " + $Label.Substring(0, 1).ToLowerInvariant() + $Label.Substring(1)
+        }
+    }
     try {
-        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date) })
+        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date); Indent = $script:UiSpinIndent })
         $rs = [runspacefactory]::CreateRunspace()
         $rs.Open()
         $rs.SessionStateProxy.SetVariable('flag', $script:UiSpinFlag)
@@ -298,7 +381,9 @@ function Start-ExakitSpinner([string]$Label) {
             $i = 0
             while ($flag.Run) {
                 $el = [int]((Get-Date) - $flag.T0).TotalSeconds
-                [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K")
+                # No label: the spinner alone (the heading above says what is coming). Twin of ui_spin_begin "".
+                if ($flag.Label) { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
                 $i = ($i + 1) % 10
                 Start-Sleep -Milliseconds 90
             }
@@ -315,13 +400,28 @@ function Start-ExakitSpinner([string]$Label) {
 function Stop-ExakitSpinner {
     # Give back a reference taken while something else owned the line; only the
     # call that actually started the animation stops it.
-    if ($script:UiSpinNested -gt 0) { $script:UiSpinNested--; return }
+    if ($script:UiSpinNested -gt 0) {
+        $script:UiSpinNested--
+        if ($script:UiBarActive) { Set-ExakitStepBarSub "" }
+        return
+    }
     if ($null -eq $script:UiSpinFlag) { return }
+    $script:UiBarActive = $false
     try { $script:UiSpinFlag.Run = $false; Start-Sleep -Milliseconds 110 } catch { }
     try { if ($script:UiSpinPs) { $script:UiSpinPs.Stop(); $script:UiSpinPs.Dispose() } } catch { }
     try { if ($script:UiSpinRs) { $script:UiSpinRs.Close(); $script:UiSpinRs.Dispose() } } catch { }
     $script:UiSpinPs = $null; $script:UiSpinRs = $null; $script:UiSpinFlag = $null
     try { [Console]::Write("`r$($script:UiEsc)[K$($script:UiEsc)[?25h") } catch { }  # clear line, restore cursor
+}
+
+# Stop-ExakitSpinnerAll - the line is wanted NOW (a table is about to be drawn
+# by someone else, Python included): stop the animation whatever references are
+# still out, and clear its line. A reference taken by a nested Start and never
+# given back made Stop-ExakitSpinner only count down, and the owner's last frame
+# stayed frozen above the add-ons table. Twin of ui_spin_end_all in ui.sh.
+function Stop-ExakitSpinnerAll {
+    $script:UiSpinNested = 0
+    Stop-ExakitSpinner
 }
 
 # Suspend-ExakitSpinner / Resume-ExakitSpinner - print a line without losing the
@@ -342,6 +442,7 @@ $script:UiSpinPausedLabel = ""
 $script:UiSpinPausedT0 = $null
 function Suspend-ExakitSpinner {
     $script:UiSpinPaused = $false
+    if ($script:UiBarActive) { return }
     if ($script:UiSpinNested -gt 0) { return }
     if ($null -eq $script:UiSpinFlag) { return }
     $script:UiSpinPausedLabel = [string]$script:UiSpinFlag.Label
@@ -358,7 +459,189 @@ function Resume-ExakitSpinner {
     }
 }
 
-function Restore-ExakitCursor { if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
+# Set-ExakitSpinnerLabel - the same spinner line, now saying what it does next,
+# with a fresh counter. The runspace reads Label and T0 from the synchronized
+# hashtable on every frame, so changing them is enough. Only the owner relabels;
+# no spinner of our own (plain mode, or a nested caller): nothing.
+# Twin of ui_spin_relabel in ui.sh.
+function Set-ExakitSpinnerLabel([string]$Label) {
+    if ($script:UiBarActive) { Set-ExakitStepBarSub $Label; return }
+    if ($script:UiSpinNested -gt 0) { return }
+    if ($null -eq $script:UiSpinFlag) { return }
+    try { $script:UiSpinFlag.Label = $Label; $script:UiSpinFlag.T0 = (Get-Date) } catch { }
+}
+
+function Restore-ExakitCursor { Disable-ExakitMenuMouse; if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
+
+# --- mouse in the menus -------------------------------------------------------
+# A click on a row of Read-ExakitCheckboxMenu or Invoke-ExakitTableMenu ticks or
+# unticks it, the same as Space on it; only Enter moves on. Twin of ui_mouse_on /
+# _ui_menu_key in ui.sh. Windows only (the shell menus serve macOS and Linux):
+# the console is put in virtual-terminal input mode, so a click arrives as an SGR
+# report (ESC [< b ; x ; y M) and the arrows as ESC [ A / B, and QuickEdit is
+# switched off - it takes a click for the start of a text selection. Its own
+# mode is given back by Disable-ExakitMenuMouse (and Restore-ExakitCursor, on
+# the way out of a failed run). EXAKIT_NO_MOUSE=1 keeps it off.
+#
+# The wheel belongs to the console: the first wheel report hands the mouse back,
+# so the screen scrolls as it always does, and clicks are re-armed after two
+# quiet seconds or with the next key - as in ui.sh.
+$script:UiMouse = $null
+# The ? key of Invoke-ExakitTableMenu: a scriptblock its caller sets (UI_TABLE_HELP).
+$script:UiTableHelp = $null
+function Enable-ExakitMenuMouse {
+    if (-not $script:UiFancy -or $env:EXAKIT_NO_MOUSE -eq '1' -or $null -ne $script:UiMouse) { return }
+    if ($PSVersionTable.PSVersion.Major -gt 5 -and -not $IsWindows) { return }
+    try {
+        if (-not ('Exakit.ConsoleMode' -as [type])) {
+            Add-Type -Namespace Exakit -Name ConsoleMode -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@
+        }
+        $handle = [Exakit.ConsoleMode]::GetStdHandle(-10)            # STD_INPUT_HANDLE
+        $mode = [uint32]0
+        if (-not [Exakit.ConsoleMode]::GetConsoleMode($handle, [ref]$mode)) { return }
+        # + ENABLE_VIRTUAL_TERMINAL_INPUT (0x200) and ENABLE_EXTENDED_FLAGS (0x80), - ENABLE_QUICK_EDIT_MODE (0x40)
+        $new = [uint32](([int64]$mode -bor 0x280) -band (0xFFFFFFFFL -bxor 0x40))
+        if (-not [Exakit.ConsoleMode]::SetConsoleMode($handle, $new)) { return }
+        $script:UiMouse = @{ Handle = $handle; Mode = $mode; Paused = $false }
+        [Console]::Write("$($script:UiEsc)[?1000h$($script:UiEsc)[?1006h")
+    } catch { $script:UiMouse = $null }
+}
+function Disable-ExakitMenuMouse {
+    $m = $script:UiMouse
+    if ($null -eq $m) { return }
+    $script:UiMouse = $null
+    try { [Console]::Write("$($script:UiEsc)[?1006l$($script:UiEsc)[?1000l") } catch { }
+    try { [void][Exakit.ConsoleMode]::SetConsoleMode($m.Handle, [uint32]$m.Mode) } catch { }
+}
+
+# Test-ExakitMenuConsole - whether a menu can ask: a console whose input is not
+# redirected. Decided the way Test-ExakitInteractive decides it, here because this
+# file is also dot-sourced on its own by install.ps1, where the shared library does
+# not exist yet. One function for every menu, so a test can drive them with keys
+# by defining its own (QAT-08) - nothing else changes it.
+function Test-ExakitMenuConsole {
+    try {
+        return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+    } catch { return $false }
+}
+
+# Read-ExakitMenuKey - one keypress for a menu: @{ Name = Enter | Space | Up | Down
+# | Char | Click | Escape; Char; Y }. Plain keys come as ConsoleKeys; with
+# virtual-terminal input on, the arrows and the mouse come as escape sequences,
+# read here. A click is a left-button press, Y its screen row (1-based); the
+# wheel is handed back to the console and swallowed, with no redraw.
+function Read-ExakitMenuKey {
+    while ($true) {
+        $m = $script:UiMouse
+        if ($null -ne $m -and $m.Paused) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(2)
+            while (-not [Console]::KeyAvailable -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+            $m.Paused = $false
+            [Console]::Write("$($script:UiEsc)[?1000h$($script:UiEsc)[?1006h")
+            if (-not [Console]::KeyAvailable) { continue }
+        }
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'Enter'     { return @{ Name = 'Enter' } }
+            'Spacebar'  { return @{ Name = 'Space' } }
+            'UpArrow'   { return @{ Name = 'Up' } }
+            'DownArrow' { return @{ Name = 'Down' } }
+            # Left/Right mean something only in a menu with a collapse group
+            # (Get-ExakitTreeArrow); every other menu has no arm for them.
+            'LeftArrow'  { return @{ Name = 'Left' } }
+            'RightArrow' { return @{ Name = 'Right' } }
+            # Scrolling keys, for the guide reader (Show-ExakitPager); the
+            # menus have no arm for them.
+            'PageUp'    { return @{ Name = 'PageUp' } }
+            'PageDown'  { return @{ Name = 'PageDown' } }
+            'Home'      { return @{ Name = 'Home' } }
+            'End'       { return @{ Name = 'End' } }
+        }
+        $code = [int]$key.KeyChar
+        if ($code -eq 13 -or $code -eq 10) { return @{ Name = 'Enter' } }
+        if ($code -eq 32) { return @{ Name = 'Space' } }
+        if ($code -ne 27) { return @{ Name = 'Char'; Char = [string]$key.KeyChar } }
+        $seq = ''
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(200)
+        while ($seq.Length -lt 24 -and [DateTime]::UtcNow -lt $deadline) {
+            if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 5; continue }
+            $c = [string][Console]::ReadKey($true).KeyChar
+            $seq += $c
+            if ($seq.Length -ge 2 -and $c -cmatch '[A-Za-z~]') { break }
+        }
+        $read = ConvertFrom-ExakitMenuSequence $seq
+        if ($read.Name -eq 'Wheel') {
+            if ($null -ne $m) {
+                [Console]::Write("$($script:UiEsc)[?1006l$($script:UiEsc)[?1000l")
+                $m.Paused = $true
+            }
+            continue
+        }
+        if ($read.Name -ne 'Ignore') { return $read }
+    }
+}
+
+# Wait-ExakitMenuKey [-Milliseconds] - $true once a key is waiting, $false when
+# none came in the time; $true too where the console cannot say, so the caller
+# simply reads. A test drives the menus by defining its own. Twin of
+# UI_MENU_KEY_TIMEOUT in _ui_menu_key.
+function Wait-ExakitMenuKey {
+    param([int]$Milliseconds = 250)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($Milliseconds)
+    try {
+        while (-not [Console]::KeyAvailable) {
+            if ([DateTime]::UtcNow -ge $deadline) { return $false }
+            Start-Sleep -Milliseconds 25
+        }
+    } catch { return $true }
+    return $true
+}
+
+# ConvertFrom-ExakitMenuSequence <what followed ESC> - @{ Name = Up | Down | Click |
+# Wheel | Escape | Ignore; Y }: the arrows, a left-button press (with its screen
+# row), a wheel turn, a lone Escape; anything else (a button release, a key the
+# menus do not use) is ignored.
+function ConvertFrom-ExakitMenuSequence {
+    param([string]$Sequence)
+    if (-not $Sequence) { return @{ Name = 'Escape' } }
+    if ($Sequence -ceq '[A' -or $Sequence -ceq 'OA') { return @{ Name = 'Up' } }
+    if ($Sequence -ceq '[B' -or $Sequence -ceq 'OB') { return @{ Name = 'Down' } }
+    if ($Sequence -ceq '[C' -or $Sequence -ceq 'OC') { return @{ Name = 'Right' } }
+    if ($Sequence -ceq '[D' -or $Sequence -ceq 'OD') { return @{ Name = 'Left' } }
+    if ($Sequence -ceq '[5~') { return @{ Name = 'PageUp' } }
+    if ($Sequence -ceq '[6~') { return @{ Name = 'PageDown' } }
+    if ($Sequence -ceq '[H' -or $Sequence -ceq 'OH' -or $Sequence -ceq '[1~') { return @{ Name = 'Home' } }
+    if ($Sequence -ceq '[F' -or $Sequence -ceq 'OF' -or $Sequence -ceq '[4~') { return @{ Name = 'End' } }
+    if ($Sequence -cmatch '^\[<(\d+);(\d+);(\d+)([Mm])$') {
+        $button = [int]$Matches[1]
+        if ($Matches[4] -ceq 'M' -and $button -eq 0) { return @{ Name = 'Click'; Y = [int]$Matches[3] } }
+        if ($Matches[4] -ceq 'M' -and ($button -eq 64 -or $button -eq 65)) { return @{ Name = 'Wheel' } }
+    }
+    return @{ Name = 'Ignore' }
+}
+
+# Get-ExakitMenuClickRow -Y -Drawn -Starts - which entry a click on screen row Y
+# (1-based) landed on: the menu's last $Drawn lines end at the cursor, and
+# $Starts holds the line each entry starts on (0-based, ascending; the last value
+# is where the entries end). 0 for a click outside them.
+function Get-ExakitMenuClickRow {
+    param([int]$Y, [int]$Drawn, [int[]]$Starts, [int]$CursorTop = -1, [int]$WindowTop = -1)
+    try {
+        if ($CursorTop -lt 0) { $CursorTop = [Console]::CursorTop }
+        if ($WindowTop -lt 0) { $WindowTop = [Console]::WindowTop }
+    } catch { return 0 }
+    $top = $CursorTop - $Drawn
+    $row = $WindowTop + $Y - 1
+    $offset = $row - $top
+    for ($i = 1; $i -lt $Starts.Count; $i++) {
+        if ($offset -ge $Starts[$i - 1] -and $offset -lt $Starts[$i]) { return $i }
+    }
+    return 0
+}
 
 # --- progress bar (determinate) ---------------------------------------------
 function Write-ExakitProgress([int]$Current, [int]$Total, [string]$Label = "") {
@@ -443,6 +726,14 @@ function Start-ExakitProgress {
                 if ($pct -lt $flag.Shown) { $pct = $flag.Shown }
                 $flag.Shown = $pct
 
+                # A child process may report its progress through a file
+                # (Set-ExakitProgressPhase cannot reach across processes).
+                if ($flag.PhaseFile) {
+                    try {
+                        $said = ([IO.File]::ReadAllText($flag.PhaseFile)).Trim()
+                        if ($said) { $flag.Label = $said }
+                    } catch { }
+                }
                 $text = "$($flag.Label)"
                 if ($text.Length -gt ($tw - 1)) { $text = $text.Substring(0, $tw - 2) + "…" }
                 $text = $text.PadRight($tw + $gap)
@@ -473,8 +764,24 @@ function Start-ExakitProgress {
 
 # Set-ExakitProgress - the job has reached a new stage. The segment's clock
 # starts now, which is what the creep measures against.
+# Write-ExakitProgressLog <pct> <phase> - when EXAKIT_PROGRESS_LOG names a file,
+# every progress update is also one line in it, "pct|phase": how a program
+# without a terminal (a wrapper script or an agent) shows the same live progress
+# the bar and the table draw here. Off unless asked for; a write that fails is
+# ignored. Twin of _ui_progress_log in ui.sh.
+function Write-ExakitProgressLog {
+    param([string]$Pct, [string]$Phase)
+    $log = $env:EXAKIT_PROGRESS_LOG
+    if ([string]::IsNullOrEmpty($log)) { return }
+    try {
+        $line = "{0}|{1}`n" -f $Pct, ($Phase -replace '[\r\n|]', ' ')
+        [System.IO.File]::AppendAllText($log, $line, (New-Object System.Text.UTF8Encoding $false))
+    } catch { }
+}
+
 function Set-ExakitProgress {
     param([int]$Pct, [int]$Ceiling, [int]$Secs, [string]$Phase)
+    Write-ExakitProgressLog -Pct "$Pct" -Phase $Phase
     if ($null -eq $script:UiSpinFlag) { return }
     try {
         $script:UiSpinFlag.Pct = $Pct
@@ -491,6 +798,9 @@ function Set-ExakitProgress {
 # one). Twin of ui_progress_phase in ui.sh.
 function Set-ExakitProgressPhase {
     param([string]$Phase)
+    $pct = ""
+    if ($null -ne $script:UiSpinFlag) { try { $pct = "$($script:UiSpinFlag.Pct)" } catch { } }
+    Write-ExakitProgressLog -Pct $pct -Phase $Phase
     if ($null -eq $script:UiSpinFlag) { return }
     try { $script:UiSpinFlag.Label = $Phase } catch { }
 }
@@ -601,8 +911,12 @@ function Get-ExakitBar {
 #            overwrites in place rather than clearing while both are unchanged
 #   Rows     one hashtable per row:
 #              Kind    group | tee | corner | plain   - the tree connector
+#                      tee-tee | tee-corner | corner-tee | corner-corner - a
+#                      row one level DEEPER: the first word is its parent's
+#                      connector (whose spine it carries on, or not), the
+#                      second its own. Twin of the kinds in ui.sh.
 #              Tick    $true while the row is selected
-#              State   idle | waiting | running | done | failed | disabled
+#              State   idle | waiting | running | done | failed | skipped | disabled
 #              Final   what the Status column says once the row is finished
 #
 # A "disabled" row is one the reader can look at but never pick - an AI client
@@ -670,12 +984,17 @@ function New-ExakitTable {
     return $t
 }
 
-# Add-ExakitTableRow -Kind <group|tee|corner|plain> -Label <text> [-Ticked]
+# Add-ExakitTableRow -Kind <group|tee|corner|plain|tee-tee|...> -Label <text> [-Ticked]
 # One row, appended in the order it will be drawn. Returns its 1-based number,
 # which is how every later call names it.
 function Add-ExakitTableRow {
     param(
-        [ValidateSet("group", "tee", "corner", "plain")][string]$Kind = "plain",
+        # Three levels deep: the connect menu's files under a catalog under
+        # Lakehouse (Get-ExakitTableFrame draws any depth).
+        [ValidateSet("group", "tee", "corner", "plain", "tee-tee", "tee-corner",
+                     "corner-tee", "corner-corner",
+                     "tee-tee-tee", "tee-tee-corner", "tee-corner-tee", "tee-corner-corner",
+                     "corner-tee-tee", "corner-tee-corner", "corner-corner-tee", "corner-corner-corner")][string]$Kind = "plain",
         [Parameter(Mandatory)][string]$Label,
         [string]$Col2 = "",
         [string]$Col3 = "",
@@ -746,6 +1065,9 @@ function Split-ExakitWrap {
 function Get-ExakitTableWidths {
     param([Parameter(Mandatory)][hashtable]$Table)
     $nameW = 10
+    # Never narrower than its own heading ("Name (alias)" is 12): the frame
+    # pads the heading to this width. Twin of the same lines in ui_table_widths.
+    if (("" + $Table.Col1).Length -gt $nameW) { $nameW = ("" + $Table.Col1).Length }
     # A FLOOR, not a starting guess. The status column is measured from the
     # finished statuses, and while the work is still running there are none - so a
     # column sized to what it holds today would be twenty wide during the load and
@@ -759,13 +1081,18 @@ function Get-ExakitTableWidths {
     # beside a description squeezed to fit around it. A name-and-status menu has
     # nothing else holding the width, so it keeps its floor: withhold Status
     # there and the box shrinks to barely wider than the longest name, then
-    # doubles the moment the first row starts.
-    # Twin of the same block in ui_table_widths (ui.sh).
+    # doubles the moment the first row starts. A table whose StatMin is 0 is a
+    # pick-only menu that never runs anything in its rows (the connect menu): no
+    # Status column at all.
+    # Twin of the same block in ui_table_widths (ui.sh), and StatMin of its
+    # UI_TABLE_STAT_MIN.
     $statW = 44
+    if ($Table.ContainsKey("StatMin") -and $null -ne $Table.StatMin) { $statW = [int]$Table.StatMin }
+    $statMin = $statW
     if ($Table.Col2 -or $Table.Col3) {
         $statW = 0
         foreach ($r in $Table.Rows.ToArray()) {
-            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = 44; break }
+            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = $statMin; break }
         }
     }
     # Zero unless a heading names the column, so a table that asks for neither
@@ -774,13 +1101,35 @@ function Get-ExakitTableWidths {
     if ($Table.Col2) { $col2W = ([string]$Table.Col2).Length }
     # FIXED, never measured: the Description column wraps to fill it rather than
     # growing to fit the longest About.
-    if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed }
+    # A table may set its own (Col3Fixed, the connect table's Downloads): the
+    # twin of a caller's UI_TABLE_COL3_FIXED in ui.sh. On the table, not in a
+    # script variable, because the animator's runspace loads this file afresh.
+    $col3Max = $script:UiTableCol3Max
+    if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3Max = [int]$Table.Col3Fixed }
+    if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed; if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3W = [int]$Table.Col3Fixed } }
+    $rowNo = 0
+    # SpanEmpty: a row with nothing in the second column may run its name on into
+    # that column's room, so it is measured apart. Twin of UI_TABLE_SPAN_EMPTY.
+    $spanOn = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and -not $Table.Col3)
+    $span = 0
+    # The widest status a row actually holds (the floor above is room kept for a
+    # bar, not text). Twin of _utw_statneed in ui_table_widths.
+    $statNeed = 0
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
-        # The tree connector plus its space is 3 columns of the name cell.
+        # The tree connector plus its space is 3 columns of the name cell, and a
+        # row one level deeper carries its parent's spine in front of its own -
+        # 6. Measured short, the deeper label would be cut.
         if ($row.Kind -eq "tee" -or $row.Kind -eq "corner") { $len += 3 }
-        if ($len -gt $nameW) { $nameW = $len }
+        elseif ($row.Kind -like "*-*-*") { $len += 3 * ("" + $row.Kind).Split("-").Count }
+        elseif ($row.Kind -like "*-tee" -or $row.Kind -like "*-corner") { $len += 6 }
+        # A radio row (a "one" group in Invoke-ExakitTableMenu) carries "( ) "
+        # after its connector.
+        $rowNo++
+        if ($Table.ContainsKey("Radio") -and (@($Table.Radio) -contains $rowNo)) { $len += 4 }
+        if ($spanOn -and -not ("" + $row.Col2).Trim()) { if ($len -gt $span) { $span = $len } }
+        elseif ($len -gt $nameW) { $nameW = $len }
         # Measured the way Get-ExakitTableCell RENDERS it, not as stored: a
         # finished cell is "<tick> <final>", so a column sized to the bare string
         # is short by the glyph and its space. Short means a row wider than the
@@ -791,8 +1140,21 @@ function Get-ExakitTableWidths {
         if ($row.Final -and $row.State -and $row.State -ne "idle" -and $row.State -ne "disabled") {
             $finalLen = $row.Final.Length + $script:UiTick.Length + 1
             if ($finalLen -gt $statW) { $statW = $finalLen }
+            if ($finalLen -gt $statNeed) { $statNeed = $finalLen }
+        }
+        # A skipped row with nothing to add says "skipped".
+        if (-not $row.Final -and $row.State -eq "skipped") {
+            $finalLen = 7 + $script:UiTick.Length + 1
+            if ($finalLen -gt $statW) { $statW = $finalLen }
+            if ($finalLen -gt $statNeed) { $statNeed = $finalLen }
         }
     }
+    # A Status column is never narrower than its own heading ("Status" is 6):
+    # a row that starts between the two passes above must not size it below
+    # that. Twin of the same floor in ui_table_widths.
+    if ($statW -gt 0 -and $statW -lt 6) { $statW = 6 }
+    # A spanning row's name needs what the name and the second column hold together.
+    if ($span -gt ($nameW + 2 + $col2W)) { $nameW = $span - 2 - $col2W }
     $cols = 80
     if ([int]$Table.Cols -gt 0) { $cols = [int]$Table.Cols }
     # 2 border + 1 space + 4 checkbox + name + 2 gap + status + 1 space + 1 border
@@ -826,7 +1188,7 @@ function Get-ExakitTableWidths {
     # Slack, not overflow: spend it on the Description rather than leave it as a
     # gap beside an empty Status column.
     if ($over -lt 0 -and $col3W -gt 0) {
-        $grow = $script:UiTableCol3Max - $col3W
+        $grow = $col3Max - $col3W
         if ($grow -lt 0) { $grow = 0 }
         if ((-$over) -lt $grow) { $grow = -$over }
         $col3W += $grow
@@ -846,6 +1208,22 @@ function Get-ExakitTableWidths {
             $col3W -= $over
             $over = 0
             if ($col3W -lt 8) { $over = 8 - $col3W; $col3W = 8 }
+        }
+    }
+    # Without fancy output nothing animates, so the frame is drawn once and its
+    # geometry cannot move under a redraw: the room the status floor keeps for a
+    # bar goes back to the names before a single label is cut (an agent shell
+    # read "Upload a file or fold..." beside an empty Status). Down to the widest
+    # status any row holds, never below 12. Twin of the same block in
+    # ui_table_widths.
+    if ($over -gt 0 -and -not $script:UiFancy -and $statW -gt 0) {
+        $statKeep = $statNeed
+        if ($statKeep -lt 12) { $statKeep = 12 }
+        if ($statW -gt $statKeep) {
+            $give = $statW - $statKeep
+            if ($give -gt $over) { $give = $over }
+            $statW -= $give
+            $over -= $give
         }
     }
     if ($over -gt 0) {
@@ -900,6 +1278,20 @@ function Get-ExakitTableCell {
             }
             if ($at -gt 100) { $at = 100 }
             if ($at -lt 0) { $at = 0 }
+            # What the row is doing, before its bar ("downloading 8.1 MB",
+            # "installing"): at most half the cell, and only while the
+            # bar keeps eight cells - a narrow terminal shows the bar alone.
+            $phase = "" + $Row.Phase
+            $phaseW = 0
+            if ($phase) {
+                $phaseMax = [int][Math]::Floor($StatusWidth / 2)
+                if ($phase.Length -gt $phaseMax) {
+                    $mark = "" + $script:UiEllipsis
+                    $phase = $phase.Substring(0, [Math]::Max(0, $phaseMax - $mark.Length)) + $mark
+                }
+                $phaseW = $phase.Length + 1
+                if (($barw - $phaseW) -ge 8) { $barw = $barw - $phaseW } else { $phase = ""; $phaseW = 0 }
+            }
             # Eighths across the whole bar, from integer percent: at forty cells
             # one percent is three eighths, so every step of the creep moves
             # something on screen.
@@ -919,7 +1311,8 @@ function Get-ExakitTableCell {
             $pctText = "$at%"
             $cell.Text = $script:UiAccent + ($script:UiBarFull * $full) + $script:UiDim + $head +
                 ($script:UiBarEmpty * $empty) + $script:UiReset + $pctText.PadLeft($num)
-            $cell.Len = $barw + $num
+            if ($phase) { $cell.Text = $phase + " " + $cell.Text }
+            $cell.Len = $phaseW + $barw + $num
         }
         "waiting" {
             $cell.Text = $script:UiDim + "waiting" + $script:UiReset
@@ -932,6 +1325,16 @@ function Get-ExakitTableCell {
         "failed" {
             $cell.Text = $script:UiErr + $script:UiCross + $script:UiReset + " " + $Row.Final
             $cell.Len = $script:UiCross.Length + 1 + ("" + $Row.Final).Length
+        }
+        "skipped" {
+            # Settled, but nothing was done: no glyph, dim, and indented by the
+            # tick's width so the words still line up with the finished rows
+            # above and below ("skipped" when the caller has nothing to add).
+            $said = "" + $Row.Final
+            if (-not $said) { $said = "skipped" }
+            $pad = $script:UiTick.Length + 1
+            $cell.Text = (" " * $pad) + $script:UiDim + $said + $script:UiReset
+            $cell.Len = $pad + $said.Length
         }
         "disabled" {
             # No glyph: not an outcome of anything that ran, a standing fact
@@ -979,6 +1382,21 @@ function Get-ExakitTableFrame {
     $inner += $statSepW + $statW
     $lines = New-Object 'System.Collections.Generic.List[string]'
 
+    # An activity line above each add-on that is saying what it does: one per row
+    # (several install side by side). No text, no line - nothing is reserved.
+    # Twin of the one-record-per-row side channel in ui_table_frame.
+    # No activity lines in the table: each row's bar and status say enough (the log
+    # keeps what each install did). $env:UI_TABLE_ACTIVITY = "1" draws them. Twin of ui_table_frame.
+    $activities = @{}
+    if ($env:UI_TABLE_ACTIVITY -ne "1") {
+    } elseif ($Table.ContainsKey("Activities") -and $Table.Activities) {
+        foreach ($k in @($Table.Activities.Keys)) { if ($Table.Activities[$k]) { $activities[[int]$k] = "" + $Table.Activities[$k] } }
+    } elseif ($Table.ContainsKey("Activity") -and $Table.Activity) {
+        $activityRow = 2
+        if ($Table.ContainsKey("ActivityRow") -and [int]$Table.ActivityRow -gt 0) { $activityRow = [int]$Table.ActivityRow }
+        $activities[$activityRow] = "" + $Table.Activity
+    }
+
     $title = " " + $Table.Title + " "
     $fill = $inner - $title.Length - 1
     if ($fill -lt 0) { $fill = 0 }
@@ -1022,13 +1440,54 @@ function Get-ExakitTableFrame {
         (" " * $headTail) + $script:UiAccent + $script:UiVB + $script:UiReset)
 
     $now = Get-Date
+    $allRows = $Table.Rows.ToArray()
+    $rowAt = New-Object 'int[]' ($allRows.Count + 1)
     $i = 0
-    foreach ($row in $Table.Rows.ToArray()) {
+    $hidden = @(); $radio = @()
+    if ($Table.ContainsKey("Hidden")) { $hidden = @($Table.Hidden) }
+    if ($Table.ContainsKey("Radio")) { $radio = @($Table.Radio) }
+    foreach ($row in $allRows) {
         $i++
+        # A row a closed "collapse" group hides (Invoke-ExakitTableMenu): not
+        # drawn, and a click never lands on it (its line is the next row's).
+        if ($hidden -contains $i) { $rowAt[$i - 1] = $lines.Count; continue }
+        # $spine is what a wrapped description's continuation lines draw in the
+        # name cell: every spine that carries on PAST this row. A tee's spine
+        # goes on to its next sibling; a corner's ends with it. A row one level
+        # deeper draws its parent's spine (when that one goes on) and its own,
+        # three columns in. Twin of _utr_spine in ui_table_frame.
         $conn = ""
-        $spine = $false
-        if ($row.Kind -eq "tee") { $conn = $script:UiTee + " "; $spine = $true }
-        elseif ($row.Kind -eq "corner") { $conn = $script:UiCorner + " " }
+        $spine = ""
+        $vb = $script:UiVB
+        switch ($row.Kind) {
+            "tee"           { $conn = $script:UiTee + " "; $spine = $vb }
+            "corner"        { $conn = $script:UiCorner + " " }
+            "tee-tee"       { $conn = $vb + "  " + $script:UiTee + " "; $spine = $vb + "  " + $vb }
+            "tee-corner"    { $conn = $vb + "  " + $script:UiCorner + " "; $spine = $vb }
+            "corner-tee"    { $conn = "   " + $script:UiTee + " "; $spine = "   " + $vb }
+            "corner-corner" { $conn = "   " + $script:UiCorner + " " }
+            default {
+                # Three levels and deeper (the connect menu's files under a
+                # catalog under Lakehouse): every level but the last draws its
+                # spine, the last its connector. Twin of _ui_table_tree_conn.
+                $parts = ("" + $row.Kind).Split("-")
+                if ($parts.Count -ge 3) {
+                    for ($k = 0; $k -lt $parts.Count - 1; $k++) {
+                        if ($parts[$k] -eq "tee") { $conn += $vb + "  " } else { $conn += "   " }
+                    }
+                    if ($parts[$parts.Count - 1] -eq "tee") { $spine = $conn + $vb; $conn += $script:UiTee + " " }
+                    else { $spine = $conn; $conn += $script:UiCorner + " " }
+                }
+            }
+        }
+        # A row with children: its continuation lines also start the children's
+        # spine, three columns in, under the first letter of its name.
+        if ($i -lt $allRows.Count -and ($row.Kind -eq "tee" -or $row.Kind -eq "corner")) {
+            $nextKind = "" + $allRows[$i].Kind
+            if ($nextKind -like "*-tee" -or $nextKind -like "*-corner") {
+                if ($row.Kind -eq "tee") { $spine = $vb + "  " + $vb } else { $spine = "   " + $vb }
+            }
+        }
         # A row nobody can pick: no checkbox at all (an empty one invites the
         # reader to try), and the note reads straight on from the label -
         # "Cursor - not installed" is one sentence. Putting the note in the Status
@@ -1051,22 +1510,51 @@ function Get-ExakitTableFrame {
             $box = "[ ]"
             $boxLen = 3
         }
-        if ($row.State -eq "disabled") { $box = "   "; $boxLen = 3 }
+        # $script:UiTableNoBox names rows that are never a choice (the install's
+        # sample row, the add-ons it installs on its own): no checkbox in any state.
+        # Twin of UI_TABLE_NOBOX in ui.sh.
+        $noBox = (@($script:UiTableNoBox) -contains $i)
+        if ($row.State -eq "disabled" -or $noBox) { $box = "   "; $boxLen = 3 }
+        # $script:UiTableLocked: a no-checkbox row that is always on - a dimmed
+        # ticked box no key can untick (the sample datasets row). Twin of UI_TABLE_LOCKED.
+        if ($noBox -and (@($script:UiTableLocked) -contains $i)) {
+            if ($script:UiFancy) { $mark = $script:UiTick } else { $mark = "x" }
+            $box = $script:UiDim + "[" + $mark + "]" + $script:UiReset
+            $boxLen = 2 + $mark.Length
+        }
         if ($i -eq $Cursor) {
             if ($script:UiFancy) { $ptr = $script:UiAccent + "❯" + $script:UiReset } else { $ptr = ">" }
         } else {
             $ptr = " "
         }
         # A row nobody can pick never takes the cursor either.
-        if ($row.State -eq "disabled") { $ptr = " " }
+        if ($row.State -eq "disabled" -or $noBox) { $ptr = " " }
+        # A radio row (a "one" group): no checkbox; "(*)" or "( )" after its
+        # tree connector, in the row's own colour.
+        if ($radio -contains $i) {
+            $box = "   "; $boxLen = 3
+            if ($row.Tick) {
+                if ($script:UiFancy) { $conn += "(" + $script:UiBullet + ") " } else { $conn += "(*) " }
+            } else { $conn += "( ) " }
+        }
         # MEASURED plain, PRINTED possibly dim: a disabled row's name carries
         # colour escapes, and .Length would count those as width.
         $plain = $conn + $row.Label
-        if ($plain.Length -gt $nameW) { $plain = $plain.Substring(0, $nameW - 1) + "…" }
+        # A row that spans into an empty second column (SpanEmpty).
+        $room = $nameW
+        $spanRow = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and $col3W -eq 0 -and -not ("" + $row.Col2).Trim())
+        if ($spanRow) { $room = $nameW + $sepW + $col2W }
+        # The palette's marker: "..." without fancy output, never a byte an ASCII
+        # reader shows as junk. Measured, because the two markers differ in length.
+        if ($plain.Length -gt $room) {
+            $cut = $room - $script:UiEllipsis.Length
+            if ($cut -lt 1) { $cut = 1 }
+            $plain = $plain.Substring(0, $cut) + $script:UiEllipsis
+        }
         $nameLen = $plain.Length
         if ($row.State -eq "disabled") { $name = $script:UiDim + $plain + $script:UiReset }
         else { $name = $plain }
-        $namePad = $nameW - $nameLen
+        $namePad = $room - $nameLen
         if ($namePad -lt 0) { $namePad = 0 }
         $cell = Get-ExakitTableCell -Row $row -StatusWidth $statW -Now $now
         # The optional cells, dim so the eye still lands on the name and the
@@ -1074,9 +1562,16 @@ function Get-ExakitTableFrame {
         # file assembled, so its width is arithmetic, never measured.
         $mid = ""
         $used = 1 + $boxLen + 1 + $nameW + $statSepW + [int]$cell.Len
-        if ($col2W -gt 0) {
+        if ($spanRow) {
+            # Its name already filled the second column's room.
+            $used += $col2W + $sepW
+        } elseif ($col2W -gt 0) {
             $v2 = "" + $row.Col2
-            if ($v2.Length -gt $col2W) { $v2 = $v2.Substring(0, $col2W - 1) + "…" }
+            if ($v2.Length -gt $col2W) {
+                $cut2 = $col2W - $script:UiEllipsis.Length
+                if ($cut2 -lt 1) { $cut2 = 1 }
+                $v2 = $v2.Substring(0, $cut2) + $script:UiEllipsis
+            }
             $mid += $sep + $script:UiDim + $v2 + $script:UiReset + (" " * ($col2W - $v2.Length))
             $used += $col2W + $sepW
         }
@@ -1095,6 +1590,18 @@ function Get-ExakitTableFrame {
         }
         $tail = $inner - $used
         if ($tail -lt 0) { $tail = 0 }
+        if ($activities.ContainsKey($i)) {
+            $activityLeft = 5 + $nameW + $statSepW
+            if ($col2W -gt 0) { $activityLeft += $sepW + $col2W }
+            if ($col3W -gt 0) { $activityLeft += $sepW + $col3W }
+            $activityWidth = $inner - $activityLeft
+            $activity = ("" + $activities[$i]) -replace "[\r\n]", " "
+            if ($activity.Length -gt $activityWidth) { $activity = $activity.Substring(0, $activityWidth) }
+            [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + (" " * $activityLeft) +
+                $script:UiDim + $activity + $script:UiReset + (" " * ($activityWidth - $activity.Length)) +
+                $script:UiAccent + $script:UiVB + $script:UiReset)
+        }
+        $rowAt[$i - 1] = $lines.Count                       # the line this row starts on, for a click
         [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $ptr + $box + " " +
             $name + (" " * $namePad) + $mid + $statSep + $cell.Text + (" " * $tail) +
             $script:UiAccent + $script:UiVB + $script:UiReset)
@@ -1118,11 +1625,11 @@ function Get-ExakitTableFrame {
             # after the corner the tree has ended and a spine below it would
             # point at nothing. Built cell by cell and MEASURED as it goes, so
             # the width is arithmetic rather than a count of escape bytes.
-            if ($spine) {
-                $wleft = (" " * 5) + $script:UiVB + (" " * ($nameW - 1))
-            } else {
-                $wleft = " " * (5 + $nameW)
-            }
+            # Rows one level deeper carry their parent's spine as well as their
+            # own (see $spine above); every glyph in it is one column.
+            $spinePad = $nameW - $spine.Length
+            if ($spinePad -lt 0) { $spinePad = 0 }
+            $wleft = (" " * 5) + $spine + (" " * $spinePad)
             $wlen = 5 + $nameW
             if ($col2W -gt 0) {
                 $wleft += $sep + (" " * $col2W)
@@ -1152,6 +1659,8 @@ function Get-ExakitTableFrame {
     [void]$lines.Add("  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $inner) +
         $script:UiBR + $script:UiReset)
 
+    $rowAt[$allRows.Count] = $lines.Count - 1
+    $Table.RowAt = $rowAt
     $Table.Lines = $lines.Count
     # Recorded for Update-ExakitTable: while the geometry is unchanged it can
     # overwrite the frame in place instead of erasing the region first, and the
@@ -1223,11 +1732,13 @@ function Update-ExakitTable {
 function Set-ExakitTableRow {
     param(
         [Parameter(Mandatory)][int]$Row,
-        [Parameter(Mandatory)][ValidateSet("idle", "waiting", "running", "done", "failed")][string]$State,
+        [Parameter(Mandatory)][ValidateSet("idle", "waiting", "running", "done", "failed", "skipped")][string]$State,
         [int]$Pct = 0, [int]$Ceiling = 0, [int]$Secs = 0,
         [string]$Phase = "", [string]$Final = "",
         [hashtable]$Table = $null
     )
+    if ($State -eq "running") { Write-ExakitProgressLog -Pct "$Pct" -Phase $Phase }
+    elseif ($State -eq "done") { Write-ExakitProgressLog -Pct "100" -Phase $Final }
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return }
     if ($Row -lt 1 -or $Row -gt $Table.Rows.Count) { return }
@@ -1425,6 +1936,10 @@ function Stop-ExakitTable {
     $script:UiTableHandle = $null
     $script:UiSpinNested = 0
     try { [Console]::Write("$($script:UiEsc)[?25h") } catch { }
+    # Keys typed while it animated are thrown away, so a stray Enter cannot
+    # answer the next question on its own. (The console does not echo them while
+    # nothing reads, so the frame itself stays put.) Twin of _ui_input_release.
+    try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
     # The animator can be stopped part-way through a frame, so the last thing
     # drawn is redrawn deliberately rather than trusted.
     if ($null -ne $Table) { Update-ExakitTable -Table $Table -Cursor 0 }
@@ -1444,6 +1959,212 @@ function Stop-ExakitAnimation {
     Restore-ExakitCursor
 }
 
+# --- the tree group modes (collapse, one, first) ----------------------------
+# Twins of the _ui_checkbox_tree_* helpers in common.sh, shared by
+# Read-ExakitCheckboxMenu and Invoke-ExakitTableMenu. A tree mode is one or
+# more words joined by "+":
+#   collapse - the children are HIDDEN until the parent is ticked (not drawn,
+#              skipped by the cursor); ticking the parent ticks no child, and
+#              unticking it clears every row in the range.
+#   one      - the parent's DIRECT children are one-of-N radio rows: picking
+#              one unpicks the others and clears the rows under them, and Space
+#              on the picked one changes nothing. A direct child is a row of the
+#              range that no spec nested in it claims. Enter is refused while a
+#              ticked parent's "one" group has nothing picked.
+#   first    - with "one": opening the parent picks its first selectable
+#              direct child.
+# $Specs is the menu's list of @{ Parent; First; Last; Mode } (innermost
+# first); $Pickable the rows that can be ticked at all. Nothing here changes
+# the any/all/master/claim modes.
+
+function Test-ExakitTreeMode {
+    param([string]$Mode, [string]$Word)
+    return (("+" + $Mode + "+").Contains("+" + $Word + "+"))
+}
+
+# Test-ExakitTreeSpecs - whether any spec uses a tree mode.
+function Test-ExakitTreeSpecs {
+    param($Specs)
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if ((Test-ExakitTreeMode $s.Mode "collapse") -or (Test-ExakitTreeMode $s.Mode "one")) { return $true }
+    }
+    return $false
+}
+
+# ConvertTo-ExakitGroupSpecs - "parent:first:last[:mode]" strings to the
+# hashtables the menus use; a spec missing a field is left out.
+function ConvertTo-ExakitGroupSpecs {
+    param([string[]]$Groups = @())
+    $out = @()
+    foreach ($g in $Groups) {
+        $parts = ("" + $g).Split(":")
+        if ($parts.Count -lt 3) { continue }
+        $gm = "any"
+        if ($parts.Count -ge 4) { $gm = $parts[3] }
+        $out += @{ Parent = [int]$parts[0]; First = [int]$parts[1]; Last = [int]$parts[2]; Mode = $gm }
+    }
+    return $out
+}
+
+# Get-ExakitTreeMembers - the direct children of one spec's parent.
+function Get-ExakitTreeMembers {
+    param($Specs, [int]$Parent, [int]$First, [int]$Last, $Pickable)
+    $out = @()
+    for ($r = $First; $r -le $Last; $r++) {
+        if ($null -ne $Pickable -and -not (@($Pickable) -contains $r)) { continue }
+        $inner = $false
+        foreach ($s in @($Specs)) {
+            if ($null -eq $s) { continue }
+            $sp = [int]$s.Parent
+            if ($sp -eq $Parent) { continue }
+            if ($sp -lt $First -or $sp -gt $Last) { continue }
+            if ($r -ge [int]$s.First -and $r -le [int]$s.Last) { $inner = $true; break }
+        }
+        if (-not $inner) { $out += $r }
+    }
+    return $out
+}
+
+# Get-ExakitTreeRadio - every radio row (a direct child of a "one" group).
+function Get-ExakitTreeRadio {
+    param($Specs, $Pickable)
+    $out = @()
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "one")) { continue }
+        foreach ($m in @(Get-ExakitTreeMembers -Specs $Specs -Parent $s.Parent -First $s.First -Last $s.Last -Pickable $Pickable)) {
+            if (-not ($out -contains $m)) { $out += $m }
+        }
+    }
+    return $out
+}
+
+# Get-ExakitTreeHidden - the rows a closed "collapse" group hides.
+function Get-ExakitTreeHidden {
+    param($Specs, $Selection)
+    $out = @()
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "collapse")) { continue }
+        if (@($Selection) -contains [int]$s.Parent) { continue }
+        for ($r = [int]$s.First; $r -le [int]$s.Last; $r++) { if (-not ($out -contains $r)) { $out += $r } }
+    }
+    return $out
+}
+
+# Get-ExakitTreeMissing - the parent of the first open "one" group with
+# nothing picked; 0 when every open group has its pick.
+function Get-ExakitTreeMissing {
+    param($Specs, $Selection, $Pickable)
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "one")) { continue }
+        if (-not (@($Selection) -contains [int]$s.Parent)) { continue }
+        $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $s.Parent -First $s.First -Last $s.Last -Pickable $Pickable)
+        if ($members.Count -eq 0) { continue }
+        $any = $false
+        foreach ($m in $members) { if (@($Selection) -contains $m) { $any = $true; break } }
+        if (-not $any) { return [int]$s.Parent }
+    }
+    return 0
+}
+
+# Update-ExakitTreeGroup - one tree spec's rule after row $Toggled was toggled;
+# $Selection is the menu's List[int] and is changed in place.
+function Update-ExakitTreeGroup {
+    param($Selection, [int]$Toggled, $Spec, $Specs, $Pickable)
+    $gp = [int]$Spec.Parent; $gf = [int]$Spec.First; $gl = [int]$Spec.Last; $gm = [string]$Spec.Mode
+    if ($Toggled -eq $gp) {
+        if ($Selection.Contains($gp)) {
+            # Opened: nothing under it is ticked, unless "first" picks its
+            # first direct child.
+            if ((Test-ExakitTreeMode $gm "one") -and (Test-ExakitTreeMode $gm "first")) {
+                $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $gp -First $gf -Last $gl -Pickable $Pickable)
+                if ($members.Count -gt 0 -and -not $Selection.Contains([int]$members[0])) { [void]$Selection.Add([int]$members[0]) }
+            }
+        } else {
+            # Closed: nothing under it stays ticked.
+            for ($r = $gf; $r -le $gl; $r++) { [void]$Selection.Remove($r) }
+        }
+        return
+    }
+    if ($Toggled -lt $gf -or $Toggled -gt $gl) { return }
+    if (-not $Selection.Contains($Toggled)) { return }
+    if (Test-ExakitTreeMode $gm "one") {
+        $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $gp -First $gf -Last $gl -Pickable $Pickable)
+        if ($members -contains $Toggled) {
+            # Picked: every other row of the range goes - the other radio rows
+            # and their branches - but the picked row's own branch (an inner
+            # spec, applied first, may have just filled it) stays.
+            $keep = @($Toggled)
+            foreach ($s in @($Specs)) {
+                if ($null -eq $s -or [int]$s.Parent -ne $Toggled) { continue }
+                for ($r = [int]$s.First; $r -le [int]$s.Last; $r++) { $keep += $r }
+            }
+            for ($r = $gf; $r -le $gl; $r++) {
+                if (-not ($keep -contains $r)) { [void]$Selection.Remove($r) }
+            }
+        }
+    }
+    # A row under the parent went on: the parent is on.
+    if (-not $Selection.Contains($gp)) { [void]$Selection.Add($gp) }
+}
+
+# Get-ExakitTreeArrow - what Left or Right does on row $Row in a menu with
+# "collapse" groups, as the exakit-demo mock does it. Returns "toggle" (Right
+# on a closed collapse parent opens it, as Space would; Left on an open one
+# that is no one's child closes it), "move <r>" (Right on an open parent: its
+# first row shown that can be picked; Left on a row under a collapse parent:
+# that innermost parent), or "" (no children and no parent). A row that is
+# both answers Left as a child. Twin of _ui_checkbox_tree_arrow.
+function Get-ExakitTreeArrow {
+    param([string]$Direction, [int]$Row, $Selection, $Specs, $Pickable)
+    $own = $null; $up = 0; $upW = -1
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s -or -not (Test-ExakitTreeMode $s.Mode "collapse")) { continue }
+        if ([int]$s.Parent -eq $Row) { $own = $s }
+        if ($Row -ge [int]$s.First -and $Row -le [int]$s.Last) {
+            $w = [int]$s.Last - [int]$s.First
+            if ($upW -lt 0 -or $w -lt $upW) { $up = [int]$s.Parent; $upW = $w }
+        }
+    }
+    $open = (@($Selection) -contains $Row)
+    if ($Direction -eq "Right") {
+        if ($null -eq $own) { return "" }
+        if (-not $open) { return "toggle" }
+        $hidden = @(Get-ExakitTreeHidden -Specs $Specs -Selection $Selection)
+        for ($c = [int]$own.First; $c -le [int]$own.Last; $c++) {
+            if ($null -ne $Pickable -and -not (@($Pickable) -contains $c)) { continue }
+            if ($hidden -contains $c) { continue }
+            return ("move " + $c)
+        }
+        return ""
+    }
+    if ($up -gt 0) { return ("move " + $up) }
+    if ($null -ne $own -and $open) { return "toggle" }
+    return ""
+}
+
+# Test-ExakitTreeCollapseOn - whether a "collapse" group is in the specs (the
+# hint then says "to open").
+function Test-ExakitTreeCollapseOn {
+    param($Specs)
+    foreach ($s in @($Specs)) { if ($null -ne $s -and (Test-ExakitTreeMode $s.Mode "collapse")) { return $true } }
+    return $false
+}
+
+# Test-ExakitTreeRadioRepick - Space on the picked radio row: it is picked
+# again and nothing else changes. Called after the toggle took it out; puts it
+# back and answers $true, so the menu applies no spec.
+function Test-ExakitTreeRadioRepick {
+    param($Selection, [int]$Toggled, $Radio)
+    if ($Selection.Contains($Toggled)) { return $false }
+    if (-not (@($Radio) -contains $Toggled)) { return $false }
+    [void]$Selection.Add($Toggled)
+    return $true
+}
+
 # Invoke-ExakitTableMenu - the SELECTION phase of the same table: ticks are
 # toggled in the rows the progress will later fill in, so the reader never has to
 # map one screen onto another. Returns the selected 1-based row numbers, ascending.
@@ -1452,11 +2173,27 @@ function Stop-ExakitAnimation {
 # hint, same group and exclusive semantics, so there is one thing to learn.
 # Twin of ui_table_menu in ui.sh.
 #
+# -Groups (optional): further "parent:first:last[:mode]" specs, applied IN ORDER
+# and BEFORE the single -GroupParent group - innermost first, so a nested group
+# settles its own parent before the group above re-reads that parent as one of
+# its children. Read-ExakitCheckboxMenu's -Groups, and the whitespace-separated
+# EXAKIT_TABLE_GROUP in ui.sh. The marketplace's add-ons table is the case: an
+# add-on row is a "claim" parent of its child rows, inside Select All.
+#
 # -OnScreen (optional): how many lines of this table - frame plus anything
 # printed under it - are ALREADY on screen, so a re-ask overwrites them instead
 # of drawing a second table below them. The MCP step passes it when an
 # unconfirmed "Skip" sends the reader back to the menu. Twin of
 # UI_TABLE_MENU_ONSCREEN.
+#
+# -Auto (or $env:UI_TABLE_AUTO = "1", which reaches a child process): nobody is
+# asked. The table is drawn once with its defaults ticked, they are the answer,
+# and it counts as confirmed - the caller was told to do exactly this (`exakit
+# persona add`). No key is read; Start-ExakitTable then turns the same frame
+# into the progress display. Twin of UI_TABLE_AUTO in ui_table_menu.
+$script:UiTableNoBox = @()      # rows drawn without a checkbox and never picked (UI_TABLE_NOBOX)
+$script:UiTableLocked = @()     # of those, rows drawn ticked and dimmed: always on (UI_TABLE_LOCKED)
+
 function Invoke-ExakitTableMenu {
     param(
         [hashtable]$Table = $null,
@@ -1464,12 +2201,43 @@ function Invoke-ExakitTableMenu {
         [int]$ExclusiveIndex = 0,
         [int]$GroupParent = 0, [int]$GroupFirst = 0, [int]$GroupLast = 0,
         [string]$GroupMode = "any",
-        [int]$OnScreen = 0
+        [string[]]$Groups = @(),
+        [int]$OnScreen = 0,
+        # The row the cursor starts on; 0 keeps row 2, past a "Select All" row.
+        # exakit connect's table has none and starts on 1. ⇄ UI_TABLE_MENU_START.
+        [int]$StartRow = 0,
+        # Called before each frame, $true while something behind the menu still
+        # changes the table's rows (the install's own add-ons installing while
+        # the rest are asked about): the menu then redraws while no key comes,
+        # so their bars move. Twin of UI_TABLE_MENU_LIVE.
+        [scriptblock]$Live = $null,
+        [switch]$Auto
     )
+    # ? on a row: $script:UiTableHelp (a scriptblock, set by the caller) is
+    # called with the cursor's row, to show that row's guide (exakit connect:
+    # the connector's); the hint then says "? guide". Unset, ? does nothing.
+    # Twin of UI_TABLE_HELP.
+    $Help = $script:UiTableHelp
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return @() }
     $n = $Table.Rows.Count
     if ($n -lt 1) { return @() }
+    # A MENU REPLACES the narration above it, the same as Start-ExakitTable: a
+    # spinner still animating here prefixes the menu's rows with its frames and
+    # keeps going while the menu waits for a key (the install's add-on offer
+    # starts one before its table is up). Stopped, nesting zeroed, before the
+    # first row is drawn. $script:UiTableMenuSpin (cleared on use): the
+    # caller's spinner runs on while the frame is built and stops right before
+    # it is drawn - exakit connect's wait, said until its menu is there. Twin
+    # of the same block in ui_table_menu.
+    $spinOff = {
+        if ($null -ne $script:UiSpinFlag) {
+            $script:UiSpinNested = 0
+            try { Stop-ExakitSpinner } catch { }
+        }
+    }
+    if (-not $script:UiTableMenuSpin) { & $spinOff }
+    $script:UiTableMenuSpin = $false
     $sel = New-Object 'System.Collections.Generic.List[int]'
     foreach ($d in $Defaults) {
         if ($d -ge 1 -and $d -le $n -and -not $sel.Contains($d)) { [void]$sel.Add($d) }
@@ -1480,7 +2248,7 @@ function Invoke-ExakitTableMenu {
     # pickable children, so there is no second rule to keep in step.
     $pickable = New-Object 'System.Collections.Generic.List[int]'
     for ($i = 1; $i -le $n; $i++) {
-        if ($Table.Rows[$i - 1].State -ne "disabled") { [void]$pickable.Add($i) }
+        if ($Table.Rows[$i - 1].State -ne "disabled" -and -not (@($script:UiTableNoBox) -contains $i)) { [void]$pickable.Add($i) }
     }
     # Move the cursor, stepping over the rows nobody can pick. Returns the new row
     # rather than assigning it: a scriptblock runs in a child scope, so an
@@ -1493,69 +2261,108 @@ function Invoke-ExakitTableMenu {
             $at = $at + $dir
             if ($at -lt 1) { $at = $n }
             if ($at -gt $n) { $at = 1 }
-            if ($pickable.Contains($at)) { return $at }
+            # A row a closed "collapse" group hides cannot be reached either.
+            if ($pickable.Contains($at) -and -not (@($Table.Hidden) -contains $at)) { return $at }
             $tries++
         }
         return $from
     }
+    # Every group, innermost first: the -Groups specs, then the single named
+    # one. The tree modes (collapse, one) need the whole list up front: which
+    # rows are radio buttons, which a closed group hides. Empty for every other
+    # table, which is then drawn exactly as before.
+    $groupSpecs = @(ConvertTo-ExakitGroupSpecs -Groups $Groups)
+    if ($GroupParent -ge 1) {
+        $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
+    }
+    $treeOn = Test-ExakitTreeSpecs -Specs $groupSpecs
+    $Table.Radio = @(); $Table.Hidden = @()
+    if ($treeOn) {
+        $Table.Radio = @(Get-ExakitTreeRadio -Specs $groupSpecs -Pickable $pickable)
+        $Table.Hidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+    }
 
-    # Interactivity is decided the way Test-ExakitInteractive decides it, inlined:
-    # this file is also dot-sourced on its own by install.ps1, where the shared
-    # library does not exist yet.
-    $interactive = $true
-    try {
-        if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { $interactive = $false }
-    } catch { $interactive = $false }
+    $interactive = Test-ExakitMenuConsole
     # CONFIRMED means a human pressed Enter on this table - nothing else. A
     # caller about to INSTALL things needs the distinction: the defaults
     # standing without a console is right for the data-load and MCP menus, and
     # wrong for one whose defaults are "everything". Twin of
     # EXAKIT_TABLE_CONFIRMED in ui.sh.
     $script:ExakitTableConfirmed = $false
+    if ($Auto -or $env:UI_TABLE_AUTO -eq "1") {
+        & $spinOff
+        Set-ExakitTableTicks -Rows @($sel) -Table $Table
+        Show-ExakitTable -Table $Table -Cursor 0
+        $script:ExakitTableConfirmed = $true
+        $Table.Remove("Radio"); $Table.Remove("Hidden")
+        return @($sel | Sort-Object)
+    }
     if (-not $interactive -or -not $script:UiFancy) {
         # No console to answer with: the defaults stand, and the table is printed
         # once so a log still shows what was chosen.
+        & $spinOff
         Set-ExakitTableTicks -Rows @($sel) -Table $Table
         Show-ExakitTable -Table $Table -Cursor 0
+        $Table.Remove("Radio"); $Table.Remove("Hidden")
         return @($sel | Sort-Object)
     }
 
-    # Toggling the group parent ON selects every child, OFF clears them all;
-    # toggling a child re-derives the parent per $GroupMode - "all" makes it a
-    # MASTER toggle (checked only while EVERY child is), "any" a group header.
+    # Toggling a group parent ON selects every child, OFF clears them all;
+    # toggling a child re-derives the parent per its mode - "all" makes it a
+    # MASTER toggle (checked only while EVERY child is), "any" a group header,
+    # "master" is "all" downward only (a child may release the parent, never
+    # claim it), and "claim" the other way round: a child going ON ticks the
+    # parent, one going OFF leaves it as it was - a parent its children need but
+    # that stands on its own. Every group, innermost first: the -Groups specs,
+    # then the single named one ($groupSpecs, built above). A tree spec
+    # (collapse, one) has its own rule, Update-ExakitTreeGroup.
     $applyGroup = {
         param($toggled)
-        if ($GroupParent -lt 1 -or $GroupFirst -lt 1 -or $GroupLast -lt $GroupFirst) { return }
-        if ($toggled -eq $GroupParent) {
-            $parentOn = $sel.Contains($GroupParent)
-            for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
-                if ($c -lt 1 -or $c -gt $n) { continue }
-                # A disabled row can sit inside the range (a group spans a small
-                # tree), so Select All has to step over it rather than tick it.
-                if (-not $pickable.Contains($c)) { [void]$sel.Remove($c); continue }
-                if ($parentOn) { if (-not $sel.Contains($c)) { [void]$sel.Add($c) } }
-                else { [void]$sel.Remove($c) }
+        if ($treeOn -and (Test-ExakitTreeRadioRepick -Selection $sel -Toggled $toggled -Radio $Table.Radio)) { return }
+        foreach ($spec in $groupSpecs) {
+            $gp = [int]$spec.Parent; $gf = [int]$spec.First; $gl = [int]$spec.Last; $gmode = [string]$spec.Mode
+            if ($gp -lt 1 -or $gf -lt 1 -or $gl -lt $gf) { continue }
+            if ((Test-ExakitTreeMode $gmode "collapse") -or (Test-ExakitTreeMode $gmode "one")) {
+                Update-ExakitTreeGroup -Selection $sel -Toggled $toggled -Spec $spec -Specs $groupSpecs -Pickable $pickable
+                continue
             }
-        } elseif ($toggled -ge $GroupFirst -and $toggled -le $GroupLast) {
-            $on = $false
-            if ($GroupMode -eq "all") {
-                $on = $true
-                for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
+            if ($toggled -eq $gp) {
+                $parentOn = $sel.Contains($gp)
+                for ($c = $gf; $c -le $gl; $c++) {
                     if ($c -lt 1 -or $c -gt $n) { continue }
-                    # ...and the all-children rule must not wait for one either,
-                    # or a machine missing one client could never tick Select All.
-                    if (-not $pickable.Contains($c)) { continue }
-                    if (-not $sel.Contains($c)) { $on = $false; break }
+                    # A disabled row can sit inside the range (a group spans a
+                    # small tree), so Select All has to step over it rather than
+                    # tick it.
+                    if (-not $pickable.Contains($c)) { [void]$sel.Remove($c); continue }
+                    if ($parentOn) { if (-not $sel.Contains($c)) { [void]$sel.Add($c) } }
+                    else { [void]$sel.Remove($c) }
                 }
-            } else {
-                for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
-                    if ($c -lt 1 -or $c -gt $n) { continue }
-                    if (-not $pickable.Contains($c)) { continue }
-                    if ($sel.Contains($c)) { $on = $true; break }
+            } elseif ($toggled -ge $gf -and $toggled -le $gl) {
+                if ($gmode -eq "master" -and $sel.Contains($toggled)) { continue }
+                if ($gmode -eq "claim" -and -not $sel.Contains($toggled)) { continue }
+                $on = $false
+                if ($gmode -eq "all") {
+                    $on = $true
+                    for ($c = $gf; $c -le $gl; $c++) {
+                        if ($c -lt 1 -or $c -gt $n) { continue }
+                        # ...and the all-children rule must not wait for one
+                        # either, or a machine missing one client could never
+                        # tick Select All.
+                        if (-not $pickable.Contains($c)) { continue }
+                        if (-not $sel.Contains($c)) { $on = $false; break }
+                    }
+                } elseif ($gmode -eq "claim") {
+                    $on = $true
+                } elseif ($gmode -ne "master") {
+                    for ($c = $gf; $c -le $gl; $c++) {
+                        if ($c -lt 1 -or $c -gt $n) { continue }
+                        if (-not $pickable.Contains($c)) { continue }
+                        if ($sel.Contains($c)) { $on = $true; break }
+                    }
                 }
+                if ($on) { if (-not $sel.Contains($gp)) { [void]$sel.Add($gp) } }
+                else { [void]$sel.Remove($gp) }
             }
-            if ($on) { if (-not $sel.Contains($GroupParent)) { [void]$sel.Add($GroupParent) } }
-            else { [void]$sel.Remove($GroupParent) }
         }
     }
     # An option that cannot be combined with the others - think "Skip". Selecting
@@ -1574,19 +2381,56 @@ function Invoke-ExakitTableMenu {
     # it: the group row is the one answer nobody has to move to - and never on a
     # row that cannot be picked, or the first Space would land on one.
     $cur = 1
-    if ($n -ge 2) { $cur = [int](& $step $cur 1) }
+    if ($StartRow -ge 1 -and $StartRow -le $n) { $cur = $StartRow }
+    elseif ($n -ge 2) { $cur = [int](& $step $cur 1) }
     if (-not $pickable.Contains($cur)) { $cur = [int](& $step $cur 1) }
+    # Enter refused for an open "one" group with nothing picked: said under the
+    # hint until the next key.
+    $note = ""
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     $drawn = 0
     if ($OnScreen -gt 0) { $drawn = $OnScreen }
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    Enable-ExakitMenuMouse
+    try {
     while ($true) {
+        $busy = $false
+        if ($null -ne $Live) { $busy = [bool](& $Live) }
         Set-ExakitTableTicks -Rows @($sel) -Table $Table
         # Built first, then written in ONE write. The other order - clear, then
         # spend time assembling - is what flickered: the region was genuinely
         # empty for that whole time.
         $drawnWidth = [int]$Table.Width
         $frame = Get-ExakitTableFrame -Table $Table -Cursor $cur
-        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle · Enter to confirm" + $script:UiReset
+        $openHint = ""
+        if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " · → to open" }
+        $helpHint = ""
+        if ($null -ne $Help) { $helpHint = " · ? guide" }
+        # [K ends each line: redrawn in place, the hint row is written over
+        # whatever was there, and a longer leftover (the table's own bottom
+        # border, seen live as "Enter to confirm────…╯") stayed on its right.
+        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $helpHint + $script:UiReset + $script:UiEsc + "[K"
+        $extra = 0
+        # DescUnder: the description of the row under the cursor (its Col3) on a
+        # line of its own under the hint, for a table too narrow to keep its
+        # Description column (the install's add-ons). One line, cut to the
+        # console, drawn even when empty so the menu keeps one height. Twin of
+        # UI_TABLE_DESC_UNDER in ui_table_menu.
+        if ($Table.ContainsKey("DescUnder") -and $Table.DescUnder) {
+            $desc = ""
+            if ($cur -ge 1 -and $cur -le $Table.Rows.Count) { $desc = ("" + $Table.Rows[$cur - 1].Col3) -replace "`r?`n", " " }
+            $descW = 80
+            if ([int]$Table.Cols -gt 0) { $descW = [int]$Table.Cols }
+            $descW = $descW - 9
+            if ($descW -lt 10) { $descW = 10 }
+            if ($desc.Length -gt $descW) { $desc = $desc.Substring(0, $descW - $script:UiEllipsis.Length) + $script:UiEllipsis }
+            $hint += "`r`n      " + $script:UiDim + $desc + $script:UiReset + $script:UiEsc + "[K"
+            $extra = 1
+        }
+        if ($note) {
+            $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note + $script:UiEsc + "[K"
+            $extra = $extra + 1; $note = ""
+        }
         # Overwritten in place while the geometry is unchanged, and only erased
         # when it is not - the same rule as Update-ExakitTable, for the same
         # reason: [0J empties the region for the instant before the new frame
@@ -1596,7 +2440,8 @@ function Invoke-ExakitTableMenu {
         # ...and from column 0, like every other frame this file writes: cursor-up
         # preserves the column, so a cursor left mid-row would indent the frame and
         # an erase would spare the first N columns of the one before it.
-        $sameGeom = ($drawn -eq ([int]$Table.Lines + 1) -and $drawnWidth -eq [int]$Table.Width)
+        $sameGeom = ($drawn -eq ([int]$Table.Lines + 1 + $extra) -and $drawnWidth -eq [int]$Table.Width)
+        & $spinOff
         if ($drawn -le 0) {
             [Console]::Write("`r" + $frame + "`r`n" + $hint + "`r`n")
         } elseif ($sameGeom) {
@@ -1604,13 +2449,28 @@ function Invoke-ExakitTableMenu {
         } else {
             [Console]::Write("`r$($script:UiEsc)[${drawn}A$($script:UiEsc)[0J" + $frame + "`r`n" + $hint + "`r`n")
         }
-        $drawn = [int]$Table.Lines + 1
-        $key = [Console]::ReadKey($true)
+        $drawn = [int]$Table.Lines + 1 + $extra
+        # No key in a quarter second while the rows move: draw them again.
+        if ($busy -and -not (Wait-ExakitMenuKey -Milliseconds 250)) { continue }
+        $key = Read-ExakitMenuKey
         $confirmed = $false
-        $handled = $true
-        switch ($key.Key) {
-            "Enter"     { if ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true } }
-            "Spacebar"  {
+        if ($key.Name -eq 'Click') {
+            # The click picks the row under it and toggles it, as Space would there.
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn $drawn -Starts $Table.RowAt
+            if ($hit -ge 1 -and $pickable.Contains($hit)) { $cur = $hit; $key = @{ Name = 'Space' } }
+        }
+        switch ($key.Name) {
+            "Enter"     {
+                # Enter on the exclusive row (Skip) answers Skip, whatever else
+                # is ticked: pending rows start ticked, so "move to Skip, press
+                # Enter" used to load them anyway. Twin of ui_table_menu.
+                if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
+                $miss = 0
+                if ($treeOn) { $miss = Get-ExakitTreeMissing -Specs $groupSpecs -Selection $sel -Pickable $pickable }
+                if ($miss -gt 0) { $note = "Pick one of the options under " + $Table.Rows[$miss - 1].Label + "." }
+                elseif ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true }
+            }
+            "Space"     {
                 # A row that cannot be picked cannot be toggled either. The cursor
                 # never rests on one, so this catches only the keypress that
                 # arrives before the cursor has moved at all.
@@ -1620,25 +2480,323 @@ function Invoke-ExakitTableMenu {
                     & $applyExclusive $cur
                 }
             }
-            "UpArrow"   { $cur = [int](& $step $cur (-1)) }
-            "DownArrow" { $cur = [int](& $step $cur 1) }
-            default     { $handled = $false }
-        }
-        if (-not $handled) {
-            switch -Regex ([string]$key.KeyChar) {
-                '^[kK]$' { $cur = [int](& $step $cur (-1)) }
-                '^[jJ]$' { $cur = [int](& $step $cur 1) }
+            "Up"        { $cur = [int](& $step $cur (-1)) }
+            "Down"      { $cur = [int](& $step $cur 1) }
+            { $_ -eq "Left" -or $_ -eq "Right" } {
+                # Right opens a collapse group or steps into it, Left steps out
+                # or closes it; nothing in any other table.
+                if ($treeOn) {
+                    $act = Get-ExakitTreeArrow -Direction $key.Name -Row $cur -Selection $sel -Specs $groupSpecs -Pickable $pickable
+                    if ($act -eq "toggle") {
+                        if ($sel.Contains($cur)) { [void]$sel.Remove($cur) } else { [void]$sel.Add($cur) }
+                        & $applyGroup $cur
+                        & $applyExclusive $cur
+                    } elseif ($act -like "move *") { $cur = [int]$act.Substring(5) }
+                }
+            }
+            "Char"      {
+                switch -Regex ($key.Char) {
+                    '^[kK]$' { $cur = [int](& $step $cur (-1)) }
+                    '^[jJ]$' { $cur = [int](& $step $cur 1) }
+                    # The highlighted row's guide, in the alternate screen:
+                    # this table comes back as it was, cursor and ticks kept.
+                    '^\?$'   { if ($null -ne $Help) { [void](& $Help $cur) } }
+                }
             }
         }
         if ($confirmed) { break }
+        if ($treeOn) {
+            $Table.Hidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+            # The cursor's row closed under it: back up to the nearest row shown.
+            if (@($Table.Hidden) -contains $cur) { $cur = [int](& $step $cur (-1)) }
+        }
     }
+    } finally { Disable-ExakitMenuMouse }
     # Redraw once without the pointer or the hint: the selection is made, and the
     # same table is about to become the progress display. $drawn counts the hint
     # line too, so this erases it.
     Set-ExakitTableTicks -Rows @($sel) -Table $Table
     $Table.Lines = $drawn
     Update-ExakitTable -Table $Table -Cursor 0
+    $Table.Remove("Radio"); $Table.Remove("Hidden")
     return @($sel | Sort-Object)
+}
+
+# Read-ExakitPickMenu -Rows <string[]> [-Title] [-Head] [-Start] [-Enter] - one
+# choice by the arrows and Enter, for a menu whose answer is an action, not a
+# set of ticks (Invoke-ExakitTableMenu). Each row drawn as given (plain text; a
+# tick or cross glyph in it is coloured) and cut to the console, so every row is
+# one line and the redraw is exact. With a title the rows sit in a box under
+# it, the head a dim first line nobody can pick; without one they are a list
+# under the question the caller printed. Taller than the console, the rows
+# scroll in a window that follows the cursor. Returns the row chosen (1-based),
+# 0 for q, Esc or the end of the input, -1 with nothing drawn when there is no
+# fancy console to ask on (the caller prints its plain answer instead).
+# Twin of ui_pick_menu in ui.sh.
+function Read-ExakitPickMenu {
+    param([string[]]$Rows = @(), [string]$Title = "", [string]$Head = "", [int]$Start = 1, [string]$Enter = "Enter to choose")
+    $n = @($Rows).Count
+    if ($n -eq 0 -or -not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return -1 }
+    $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    if ($cols -lt 20) { $cols = 80 }
+    $tall = 24; try { $tall = [Console]::WindowHeight } catch { }
+    if ($tall -lt 10) { $tall = 24 }
+    $chrome = 7; if ($Title) { $chrome = 9 }
+    $fit = {
+        param([string]$Text, [int]$Chrome)
+        if (($Text.Length + $Chrome) -gt $cols) {
+            $keep = $cols - $Chrome - 1; if ($keep -lt 1) { $keep = 1 }
+            return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+        }
+        return $Text
+    }
+    $list = @(); foreach ($r in $Rows) { $list += (& $fit ("" + $r) $chrome) }
+    if ($Head) { $Head = & $fit $Head $chrome }
+    $w = $Head.Length; foreach ($r in $list) { if ($r.Length -gt $w) { $w = $r.Length } }
+    $top = ""; $bot = ""; $tw = 0
+    if ($Title) {
+        $t = " $Title "
+        $tw = $w + 4
+        if (($t.Length + 1) -gt $tw) { $tw = $t.Length + 1 }
+        if ($tw -gt ($cols - 5)) { $tw = $cols - 5 }
+        $w = $tw - 4
+        $fill = $tw - $t.Length - 1; if ($fill -lt 0) { $fill = 0 }
+        $top = "  " + $script:UiAccent + $script:UiTL + $script:UiHr + $script:UiReset + $script:UiBold + $t + $script:UiReset + $script:UiAccent + ($script:UiHr * $fill) + $script:UiTR + $script:UiReset
+        $bot = "  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $tw) + $script:UiBR + $script:UiReset
+    }
+    $vb = $script:UiAccent + $script:UiVB + $script:UiReset
+    $view = $tall - 8; if ($view -lt 5) { $view = 5 }; if ($view -gt $n) { $view = $n }
+    $cur = $Start; if ($cur -lt 1 -or $cur -gt $n) { $cur = 1 }
+    $off = 0; $drawn = 0; $pick = 0
+    $e = $script:UiEsc
+    while ($true) {
+        if ($cur -le $off) { $off = $cur - 1 }
+        if ($cur -gt ($off + $view)) { $off = $cur - $view }
+        $lines = New-Object System.Collections.Generic.List[string]
+        if ($Title) {
+            [void]$lines.Add($top)
+            if ($Head) { [void]$lines.Add("  $vb   " + $script:UiDim + $Head.PadRight($w) + $script:UiReset + " $vb") }
+        }
+        for ($i = $off; $i -lt ($off + $view); $i++) {
+            $r = $list[$i]
+            $pad = " " * [Math]::Max(0, $w - $r.Length)
+            $r = $r.Replace($script:UiTick, $script:UiOk + $script:UiTick + $script:UiReset).Replace($script:UiCross, $script:UiErr + $script:UiCross + $script:UiReset)
+            if (($i + 1) -eq $cur) { $r = $script:UiAccent + [string][char]0x276F + $script:UiReset + " " + $script:UiBold + $r + $script:UiReset }
+            else { $r = "  " + $r }
+            if ($Title) { [void]$lines.Add("  $vb $r$pad $vb") } else { [void]$lines.Add("    $r") }
+        }
+        if ($Title) { [void]$lines.Add($bot) }
+        $more = ""
+        if ($view -lt $n) { $more = " " + $script:UiMidDot + (" {0}-{1} of {2}" -f ($off + 1), ($off + $view), $n) }
+        $hint = & $fit ([string][char]0x2191 + "/" + [string][char]0x2193 + " to move " + $script:UiMidDot + " $Enter " + $script:UiMidDot + " q to quit$more") 6
+        [void]$lines.Add("      " + $script:UiDim + $hint + $script:UiReset)
+        $frame = ($lines.ToArray() -join "`r`n") + "`r`n"
+        if ($drawn -gt 0) { [Console]::Write("`r$($e)[${drawn}A$($e)[0J" + $frame) } else { [Console]::Write("`r" + $frame) }
+        $drawn = $lines.Count
+        $key = Read-ExakitMenuKey
+        if ($key.Name -eq 'Enter') { $pick = $cur; break }
+        if ($key.Name -eq 'Escape') { $pick = 0; break }
+        if ($key.Name -eq 'Up') { $cur-- }
+        elseif ($key.Name -eq 'Down') { $cur++ }
+        elseif ($key.Name -eq 'Char') {
+            if ($key.Char -match '^[qQ]$') { $pick = 0; break }
+            if ($key.Char -match '^[kK]$') { $cur-- }
+            if ($key.Char -match '^[jJ]$') { $cur++ }
+        }
+        if ($cur -lt 1) { $cur = $n }
+        if ($cur -gt $n) { $cur = 1 }
+    }
+    # The hint goes: the choice is made. The rows stay, as a record of it.
+    [Console]::Write("`r$($e)[1A$($e)[0J")
+    return $pick
+}
+
+# --- full-window reader -----------------------------------------------------
+# Start-ExakitDetached <target> - hand a file or a web address to Windows'
+# own handler WITHOUT this console. Invoke-Item / Start-Process on the target
+# left the handler attached to the kit's console, so an Electron editor (VS
+# Code as the .md handler) or a browser wrote its stderr into the guide view:
+# "(node:23568) [DEP0169] DeprecationWarning ..." and "Unknown channel ..."
+# over the text until the next redraw (found live on Windows 11). cmd.exe's
+# `start` in a hidden window of its own detaches the handler from this one.
+function Start-ExakitDetached {
+    param([string]$Target)
+    $quoted = '"' + ($Target -replace '"', '') + '"'
+    Start-Process -FilePath "cmd.exe" -ArgumentList ('/d /c start "" ' + $quoted) -WindowStyle Hidden -ErrorAction Stop | Out-Null
+}
+
+# Open-ExakitPath <path> - a local file opened in this computer's own viewer:
+# Invoke-Item on Windows, open on macOS, xdg-open on Linux. $false when the file
+# is not there, there is no opener, or it failed; the caller then says the
+# path. Never an error. Twin of ui_open_path in ui.sh.
+function Open-ExakitPath {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+        if ($onWindows) { Start-ExakitDetached -Target $Path; return $true }
+        if ($IsMacOS) {
+            if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+            & open $Path 2>$null | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        if (-not (Get-Command xdg-open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+        Start-Process -FilePath "xdg-open" -ArgumentList @($Path) -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# Open-ExakitUrl <url> - a web page in this computer's browser: Start-Process on
+# Windows, open on macOS, xdg-open on Linux. $false when there is no opener or
+# it failed; the caller then says the address. Never an error. Twin of
+# ui_open_url in ui.sh.
+function Open-ExakitUrl {
+    param([string]$Url)
+    if (-not $Url -or -not $Url.StartsWith("https://")) { return $false }
+    try {
+        $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+        if ($onWindows) { Start-ExakitDetached -Target $Url; return $true }
+        if ($IsMacOS) {
+            if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+            & open $Url 2>$null | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        if (-not (Get-Command xdg-open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+        Start-Process -FilePath "xdg-open" -ArgumentList @($Url) -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] [-OpenUrl] - a full-window reader, for
+# a guide: the lines (one console row each, colour included - the caller cuts
+# them to the width) in the console's alternate screen, so the screen under it
+# comes back exactly as it was. Longer than the window, Up/Down (j/k),
+# PgUp/PgDn (b), Space, Home and End scroll it; the footer, always on the last
+# row, says the keys and where in the text the window is. Enter, q and Esc
+# return; so does each letter in -Keys. With -OpenPath, o opens that file in
+# place (Open-ExakitPath) and the line above the footer says it was opened - or
+# where it is. With -OpenUrl, g opens that web page (Open-ExakitUrl) the same
+# way; without one, g goes to the top. Returns the key that closed it: enter, q, esc, or the letter;
+# "" with nothing drawn without a fancy console. A console without virtual
+# terminal sequences (old conhost), or EXAKIT_NO_ALTSCREEN=1, clears the window
+# instead, and clears it again on the way out for the caller to redraw. Ctrl-C
+# leaves it through the finally block. Twin of ui_pager in ui.sh.
+function Show-ExakitPager {
+    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "", [string]$OpenUrl = "")
+    if (-not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return "" }
+    $e = $script:UiEsc
+    $rows = @($Lines)
+    $n = $rows.Count
+    $alt = [bool]$script:UiVt -and $env:EXAKIT_NO_ALTSCREEN -ne "1"
+    $result = "eof"
+    $top = 0; $note = ""
+    $updown = "Up/Down"
+    if ($script:UiFancy) { $updown = ([string][char]0x2191) + "/" + ([string][char]0x2193) }
+    try {
+        if ($alt) { [Console]::Write("$e[?1049h$e[2J$e[H$e[?25l") }
+        else { try { [Console]::Clear() } catch { [Console]::Write("$e[2J$e[H") }; [Console]::Write("$e[?25l") }
+        while ($true) {
+            $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+            if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+            if ($cols -lt 20) { $cols = 80 }
+            $tall = 24; try { $tall = [Console]::WindowHeight } catch { }
+            if ($tall -lt 4) { $tall = 24 }
+            # Every row the footer needs is kept: the note above it (a path is
+            # said whole, over as many rows as it takes), the keys, and - when
+            # the text is longer than the window - where the window is, on the
+            # keys' row when it fits there, else on a row of its own.
+            $w = [Math]::Max(10, $cols - 3)
+            $noteRows = 0
+            if ($note) { $noteRows = [int][Math]::Ceiling($note.Length / $w) }
+            $view = $tall - 1 - $noteRows
+            $hint = $Footer; $hint2 = ""; $own = $false
+            if ($n -gt $view) {
+                $where = "{0} PgUp/PgDn scroll {1} {2}-{2} of {2}" -f $updown, $script:UiMidDot, $n
+                if (($Footer.Length + 3 + $where.Length) -gt $w) { $view--; $own = $true }
+            }
+            if ($view -lt 1) { $view = 1 }
+            $last = [Math]::Max(0, $n - $view)
+            if ($top -gt $last) { $top = $last }
+            if ($top -lt 0) { $top = 0 }
+            if ($n -gt $view) {
+                $end = [Math]::Min($n, $top + $view)
+                $where = "{0} PgUp/PgDn scroll {1} {2}-{3} of {4}" -f $updown, $script:UiMidDot, ($top + 1), $end, $n
+                if ($own) { $hint2 = $where } else { $hint = $hint + " " + $script:UiMidDot + " " + $where }
+            }
+            $fit = {
+                param([string]$Text)
+                if (($Text.Length + 3) -gt $cols) {
+                    $keep = [Math]::Max(1, $cols - 4)
+                    return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+                }
+                return $Text
+            }
+            $sb = New-Object System.Text.StringBuilder
+            [void]$sb.Append("$e[H")
+            for ($i = 0; $i -lt $view; $i++) {
+                $row = ""
+                if (($top + $i) -lt $n) { $row = "" + $rows[$top + $i] }
+                [void]$sb.Append($row + $script:UiReset + "$e[K`r`n")
+            }
+            for ($i = 0; $i -lt $noteRows; $i++) {
+                $at = $i * $w
+                [void]$sb.Append("  " + $note.Substring($at, [Math]::Min($w, $note.Length - $at)) + "$e[K`r`n")
+            }
+            [void]$sb.Append("  " + $script:UiDim + (& $fit $hint) + $script:UiReset + "$e[K")
+            if ($hint2) { [void]$sb.Append("`r`n  " + $script:UiDim + (& $fit $hint2) + $script:UiReset + "$e[K") }
+            [Console]::Write($sb.ToString())
+            $key = Read-ExakitMenuKey
+            $was = $note; $note = ""
+            $stop = $false
+            switch ($key.Name) {
+                "Enter"    { $result = "enter"; $stop = $true }
+                "Escape"   { $result = "esc"; $stop = $true }
+                "Space"    { $top += $view }
+                "Down"     { $top++ }
+                "Up"       { $top-- }
+                "PageDown" { $top += $view }
+                "PageUp"   { $top -= $view }
+                "Home"     { $top = 0 }
+                "End"      { $top = $last }
+                "Char" {
+                    $c = "" + $key.Char
+                    if ($c -ceq "G") { $top = $last }
+                    elseif ($c -ceq "g") {
+                        if ($OpenUrl) {
+                            if (Open-ExakitUrl -Url $OpenUrl) { $note = "Opened " + $OpenUrl }
+                            else { $note = "On GitHub: " + $OpenUrl }
+                        } else { $top = 0 }
+                    }
+                    else {
+                        $lc = $c.ToLowerInvariant()
+                        if ($lc -eq "q") { $result = "q"; $stop = $true }
+                        elseif ($lc -eq "j") { $top++ }
+                        elseif ($lc -eq "k") { $top-- }
+                        elseif ($lc -eq "b") { $top -= $view }
+                        elseif ($lc -eq "o") {
+                            if ($OpenPath) {
+                                # Said as the guides say a path: ~ for the home folder.
+                                $shown = $OpenPath
+                                if ($HOME -and $shown.StartsWith($HOME + [IO.Path]::DirectorySeparatorChar)) { $shown = "~" + $shown.Substring($HOME.Length) }
+                                if (Open-ExakitPath -Path $OpenPath) { $note = "Opened " + $shown }
+                                else { $note = "The full guide: " + $shown }
+                            } else { $note = $was }
+                        }
+                        elseif ($lc -match '^[a-z]$' -and $Keys.Contains($lc)) { $result = $lc; $stop = $true }
+                        else { $note = $was }
+                    }
+                }
+                default { $note = $was }
+            }
+            if ($stop) { break }
+        }
+    } finally {
+        if ($alt) { [Console]::Write("$e[?1049l") }
+        else { try { [Console]::Clear() } catch { [Console]::Write("$e[2J$e[H") } }
+        [Console]::Write("$e[?25h")
+    }
+    return $result
 }
 
 # Render the install banner + plan (used by install.ps1 after download).

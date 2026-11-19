@@ -245,11 +245,12 @@ exakit_pending_datasets() {
 TBL="$WORK/table"
 exakit_data_table_build "$TBL"
 
-check "a row per dataset, plus the group, the file row and Skip" "6" "$(grep -c '.' "$TBL")"
-check "the group row leads"        "group"      "$(sed -n 1p "$TBL" | cut -d'|' -f1)"
+check "a row per dataset, plus the parent, your file, the external source and Skip" "7" "$(grep -c '.' "$TBL")"
+check "the parent row leads"       "group|Sample datasets" "$(sed -n 1p "$TBL" | cut -d'|' -f1,2)"
 check "the last dataset corners"   "corner"     "$(sed -n 4p "$TBL" | cut -d'|' -f1)"
 check "the file row is 5"          "5"          "$EXAKIT_TABLE_ROW_LOCAL"
-check "Skip is 6, and exclusive"   "6"          "$EXAKIT_TABLE_EXCLUSIVE"
+check "the external source is 6, shown but disabled (no virtual-schema module here)" "Federation: Connect other data sources - unavailable|disabled" "$(sed -n 6p "$TBL" | cut -d'|' -f2,4)"
+check "Skip is 7, and exclusive"   "7"          "$EXAKIT_TABLE_EXCLUSIVE"
 check "the group is all-or-none"   "1:2:4:all"  "$EXAKIT_TABLE_GROUP"
 check "everything loadable is pre-ticked" "1,2,3,4" "$EXAKIT_TABLE_DEFAULTS"
 # A label with spaces in it is ONE row: an accumulator split on whitespace turned
@@ -262,6 +263,7 @@ check "and a non-dataset does not"       "0" "$(exakit_data_table_row nonesuch)"
 # only thing the screen can still do. Enter must never be a no-op.
 exakit_pending_datasets() { :; }
 exakit_data_table_build "$TBL"
+check "nothing pending: the parent stays, disabled, saying why" "Sample datasets - all of them are loaded already|disabled" "$(sed -n 1p "$TBL" | cut -d'|' -f2,4)"
 check "nothing pending: the file row is pre-ticked" "$EXAKIT_TABLE_ROW_LOCAL" "$EXAKIT_TABLE_DEFAULTS"
 lacks "...and Skip is not"  ",$EXAKIT_TABLE_ROW_SKIP," ",$EXAKIT_TABLE_DEFAULTS,"
 
@@ -398,7 +400,7 @@ has "...and stops it"                  'ui_table_end "$EXAKIT_TABLE_STATE"'   "$
 # A warning printed into a frame that is still being repainted lands inside the
 # box, so the installer collects them and speaks after the table has stopped.
 has "warnings wait for the table"      '_data_notes="${_data_notes}warn|'      "$COMMON_SH"
-has "...and are said afterwards"       'EXAKIT_DATA_NOTES_EOF'                "$COMMON_SH"
+has "...and are said afterwards"       'exakit_print_notes "$_data_notes"'    "$COMMON_SH"
 
 printf '\n== under a REAL terminal, one table is left, not three ==\n'
 
@@ -885,6 +887,52 @@ STUBEOF
 chmod +x "$EXAKIT_BIN_DIR/exapump"
 exakit_clear_table_listing
 check "a database of only-empty tables still answers" "EXAKIT.LISTING_ANSWERED" "$(exakit_table_listing)"
+
+# Enter on Skip skips. The pending datasets start ticked; a reader who moves to
+# Skip and presses Enter means Skip - the old menu loaded the ticked datasets.
+# The cursor starts on the first dataset; four Downs pass the other two, your
+# own file, and step over the disabled external source onto Skip. Enter anywhere
+# else still confirms what is ticked.
+if command -v python3 >/dev/null 2>&1; then
+    check "Enter on Skip answers Skip" "SELECTION=none" \
+        "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
+            "Data to load" 'jjjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+    check "Enter on a dataset loads the ticked ones" "SELECTION=tpch,energy,weather" \
+        "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
+            "Data to load" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+else
+    check "Enter on Skip answers Skip" "skipped" "skipped"
+fi
+
+# EXAKIT_PROGRESS_LOG: a program without a terminal (a notebook card) gets the
+# same live progress the bar and the table draw, one "pct|phase" line per
+# update - and nothing at all is written unless it asks.
+PLOG="$WORK/progress.log"
+(
+    . "$ROOT/setup/lib/ui.sh"
+    EXAKIT_PROGRESS_LOG="$PLOG"; export EXAKIT_PROGRESS_LOG
+    ui_progress_state "$WORK/pstate" 10 40 5 "reading 3 files"
+    ui_progress_phase "$WORK/pstate" "loaded 1 of 3 | data files"
+    printf 'a|b|c|idle||||||||\n' > "$WORK/ptable"
+    ui_table_set "$WORK/ptable" 1 running 55 80 3 "loading orders"
+    ui_table_set "$WORK/ptable" 1 done "" "" "" "" "1 table, 51,000 rows"
+    unset EXAKIT_PROGRESS_LOG
+    ui_progress_state "$WORK/pstate" 90 100 1 "not asked for"
+)
+check "progress log: the bar, its phase, a table row and its end" \
+    "10|reading 3 files~10|loaded 1 of 3   data files~55|loading orders~100|1 table, 51,000 rows" \
+    "$(tr '\n' '~' < "$PLOG" | sed 's/~$//')"
+if command -v pwsh >/dev/null 2>&1; then
+    rm -f "$PLOG"
+    EXAKIT_PROGRESS_LOG="$PLOG" pwsh -NoProfile -Command ". '$ROOT/setup/lib/ui.ps1'; \
+        Set-ExakitProgress -Pct 10 -Ceiling 40 -Secs 5 -Phase 'reading 3 files'; \
+        Set-ExakitProgressPhase -Phase 'loaded 1 of 3 | data files'; \
+        Set-ExakitTableRow -Row 1 -State running -Pct 55 -Phase 'loading orders'; \
+        Set-ExakitTableRow -Row 1 -State done -Final '1 table, 51,000 rows'" >/dev/null 2>&1
+    check "progress log (PowerShell twin)" \
+        "10|reading 3 files~|loaded 1 of 3   data files~55|loading orders~100|1 table, 51,000 rows" \
+        "$(tr -d '\r' < "$PLOG" | tr '\n' '~' | sed 's/~$//')"
+fi
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

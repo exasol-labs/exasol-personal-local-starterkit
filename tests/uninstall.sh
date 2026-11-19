@@ -42,7 +42,7 @@ exists() { [ -e "$1" ] && echo yes || echo no; }
 # Build the fake install tree and drive the engine inside one sandboxed bash.
 # All state (fake HOME, stubs, markers) lives under $SANDBOX.
 run_engine() { # run_engine <dry> ; prints nothing, side effects in $SANDBOX
-    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" bash <<'HARNESS'
+    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" UN_REGISTRY_NEEDS_KIT="${UN_REGISTRY_NEEDS_KIT:-}" bash <<'HARNESS'
 set -u
 HOME="$SANDBOX/home"
 export HOME
@@ -56,6 +56,7 @@ EXAKIT_BIN_DIR="$HOME/.local/bin"
 # the fallback landed in the sandbox only while nobody had set the variable.
 EXAKIT_EXAPUMP_CONFIG_DIR="$HOME/.exapump"
 export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
+. "$ROOT/setup/lib/common.sh"
 
 # --- stub the externals the engine calls ---------------------------------
 info(){ :; }; warn(){ :; }; ok(){ :; }; die(){ echo "die: $*" >&2; exit 1; }
@@ -73,6 +74,7 @@ _exakit_autostart_registered(){ return 1; }
 manifest_get(){
     case "$1" in
         runtime.type) echo personal ;;
+        runtime.ownership|components.personal.ownership|components.exapump.ownership|components.dash_server.ownership) echo kit ;;
         # What the install recorded — the only skills the kit may remove. Shaped
         # exactly as manifest_get renders a JSON list (json.dumps spacing).
         components.skills.installed) echo '["local-agent-ready-starter", "exasol-runtime"]' ;;
@@ -84,7 +86,14 @@ personal_teardown(){ printf '%s\n' "$*" > "$SANDBOX/marker_personal"; }
 exakit_mcp_operation(){ printf '%s\n' "$*" > "$SANDBOX/marker_mcp"; }
 # The engine sweeps add-on launchers by registry id; mirror the real registry
 # so a machine with the dash-server launcher gets it removed.
-exakit_marketplace_addons(){ printf '%s\n' "dash-server|x"; }
+# With UN_REGISTRY_NEEDS_KIT=1 it answers only while the kit home's manifest is
+# there, the way the real one answers only while the kit copy it reads
+# (marketplace/catalog.json) is: step 5 removes both before step 6 sweeps.
+exakit_marketplace_addons(){
+    if [ -n "${UN_REGISTRY_NEEDS_KIT:-}" ] && [ ! -f "$EXAKIT_HOME/manifest.json" ]; then return 1; fi
+    printf '%s\n' "dash-server|x"
+}
+exakit_marketplace_installed_addons(){ :; }
 
 # --- pull in only the functions under test --------------------------------
 # The engine plus the skills-removal helper it delegates to (shared with the
@@ -119,6 +128,10 @@ seed() { # (re)create the fake install artifacts
     : > "$SANDBOX/home/.exasol-starter-kit/manifest.json"
     # A bystander app must survive: exapump/kit removal must not touch it.
     : > "$SANDBOX/home/.local/bin/some-other-tool"
+    # The kit's skill folders carry its mark; a folder without one is never the kit's.
+    : > "$SANDBOX/home/.claude/skills/local-agent-ready-starter/.exakit-owned"
+    : > "$SANDBOX/home/.claude/skills/exasol-runtime/.exakit-owned"
+    : > "$SANDBOX/home/.agents/skills/local-agent-ready-starter/.exakit-owned"
     # A boot entry the kit owns that step 0a left behind, and one that is not.
     mkdir -p "$SANDBOX/home/Library/LaunchAgents"
     : > "$SANDBOX/home/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist"
@@ -145,15 +158,32 @@ check "real: db teardown called"  yes "$(exists "$SANDBOX/marker_personal")"
 check "real: teardown got --data" "--data" "$(cat "$SANDBOX/marker_personal" 2>/dev/null)"
 check "real: mcp removal called"  yes "$(exists "$SANDBOX/marker_mcp")"
 check "real: mcp got uninstall"   "uninstall" "$(cat "$SANDBOX/marker_mcp" 2>/dev/null)"
-check "real: kit home gone"       no  "$(exists "$H/.exasol-starter-kit")"
+# The dashboards (dash-server/instance) are the user's work: kept, and with them the home that holds them
+# (audit DAY-01; tests/notebook-addon.sh pins the whole rule). Everything else in it goes.
+check "real: kit home holds only the kept dashboards" "dash-server" "$(ls -A "$H/.exasol-starter-kit" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: pyexasol venv gone"  no  "$(exists "$H/.exasol-starter-kit/pyexasol-venv")"
-check "real: exapump gone"        no  "$(exists "$H/.exapump")"
+check "real: user's exapump profiles kept" yes "$(exists "$H/.exapump")"
 check "real: exasol bin gone"     no  "$(exists "$H/.local/bin/exasol")"
 check "real: exakit bin gone"     no  "$(exists "$H/.local/bin/exakit")"
 check "real: exapump bin gone"    no  "$(exists "$H/.local/bin/exapump")"
 check "real: dash-server venv gone" no "$(exists "$H/.exasol-starter-kit/dash-server-venv")"
-check "real: dash-server state gone" no "$(exists "$H/.exasol-starter-kit/dash-server")"
+check "real: dash-server keeps only its instance" "instance" "$(ls -A "$H/.exasol-starter-kit/dash-server" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: dash-server bin gone" no "$(exists "$H/.local/bin/dash-server")"
+# The add-on registry is read from the kit copy, which step 5 removes: asked
+# again at step 6 it answered nothing and the add-on launcher stayed behind.
+seed
+UN_REGISTRY_NEEDS_KIT=1 run_engine 0
+check "registry gone: kit manifest removed" no "$(exists "$H/.exasol-starter-kit/manifest.json")"
+check "registry gone: dash-server bin still swept" no "$(exists "$H/.local/bin/dash-server")"
+# The AI client config snapshots: only the newest is kept beside the home, readable by its owner alone (SEC-16).
+seed
+mkdir -p "$H/.exasol-starter-kit/backups/claude" "$H/.exasol-starter-kit-backups-20200101-000000"
+printf '{"EXA_PASSWORD": "x"}\n' > "$H/.exasol-starter-kit/backups/claude/config.json"
+run_engine 0
+kept="$(ls -d "$H"/.exasol-starter-kit-backups-* 2>/dev/null)"
+check "real: one config snapshot is kept" 1 "$(printf '%s\n' "$kept" | grep -c .)"
+check "real: ...the newest, not the older one" no "$(exists "$H/.exasol-starter-kit-backups-20200101-000000")"
+check "real: ...readable by its owner only" "" "$(find "$kept" -perm -g+r -o -perm -o+r 2>/dev/null | head -1)"
 check "real: skill A gone"        no  "$(exists "$H/.claude/skills/local-agent-ready-starter")"
 check "real: skill B gone"        no  "$(exists "$H/.claude/skills/exasol-runtime")"
 # The discovery folders also hold skills the user installed themselves. The kit
@@ -263,11 +293,17 @@ check "the home directory itself is refused"   "REFUSE" "$(_guard "$SANDBOX/guar
 # mcp-doctor) was written by earlier kits.
 echo
 echo "uninstall removes every permission rule the kit wrote, and no other:"
-_rules() { # _rules -> the allow+deny lists after the removal, one per line
-    SANDBOX="$SANDBOX" ROOT="$ROOT" bash <<'RULES'
+_rules() { # _rules [<kit manifest json>] -> the allow+deny lists after the removal, one per line
+    # Default manifest: an older kit (0.2.5) placed skills and recorded no rules,
+    # so the rules of its list in the file are taken as its own.
+    _rules_manifest='{"components": {"skills": {"installed": ["exakit"]}}}'
+    [ -n "${1:-}" ] && _rules_manifest="$1"
+    SANDBOX="$SANDBOX" ROOT="$ROOT" RULES_MANIFEST="$_rules_manifest" bash <<'RULES'
 set -u
 HOME="$SANDBOX/rules-home"; export HOME
 mkdir -p "$HOME/.claude"
+EXAKIT_MANIFEST="$SANDBOX/rules-manifest.json"; export EXAKIT_MANIFEST
+printf '%s\n' "$RULES_MANIFEST" > "$EXAKIT_MANIFEST"
 cat > "$HOME/.claude/settings.json" <<'JSON'
 {
   "model": "keep-me",
@@ -289,7 +325,9 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
 JSON
 exakit_can_run_python(){ return 0; }
 run_python(){ python3 "$@"; }
+manifest_set(){ :; }
 eval "$(awk '/^exakit_remove_readonly_allowlist\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+eval "$(awk '/^_exakit_readonly_allowlist\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 exakit_remove_readonly_allowlist
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("model="+d["model"]); [print(r) for r in d["permissions"]["allow"]+d["permissions"]["deny"]]' "$HOME/.claude/settings.json"
 RULES
@@ -302,6 +340,13 @@ for _gone in "Bash(exakit mcp-validate:*)" "Bash(~/.local/bin/exakit mcp-validat
 done
 for _kept in "Bash(git status:*)" "Bash(rm -rf:*)" "Bash(exakit-other mcp-validate:*)" "model=keep-me"; do
     check "user entry kept: $_kept" "1" "$(printf '%s\n' "$_r" | grep -cxF "$_kept")"
+done
+# MCP-04: once the kit records the rules it added, a rule of the kit's spelling
+# that the user had before the kit is theirs: uninstall leaves it.
+_r="$(_rules '{"components": {"skills": {"installed": ["exakit"], "claude_rules": ["Bash(~/.local/bin/exakit skills --json)", "Bash($HOME/.local/bin/exakit uninstall:*)"]}}}' 2>&1)"
+check "with a record: the recorded rules and the legacy ones go" "1" "$(printf '%s\n' "$_r" | grep -cx 'REMOVED 6')"
+for _kept in "Bash(exakit status:*)" "mcp__exasol" "Bash(git status:*)"; do
+    check "with a record: a rule the kit did not add is kept: $_kept" "1" "$(printf '%s\n' "$_r" | grep -cxF "$_kept")"
 done
 
 # --- MCP servers the open AI clients still run for the kit -----------------
@@ -492,6 +537,179 @@ eval "$_r"
 check "and pasted, it removes exactly that directory" "0" "$([ -e "$_qdir" ] && echo 1 || echo 0)"
 # The no-runtime branch in the engine builds the same remedy the same way.
 check "engine no-runtime remedy escapes quotes too" "1" "$(grep -c "EXAKIT_TEARDOWN_REMEDY=\"rm -rf '\$(printf '%s' \"\$_un_dd\" | sed \"s/'/'\\\\\\\\\\\\\\\\''/g\")'\"" "$ROOT/setup/lib/common.sh")"
+
+# --- an add-on's removed paths never reach the terminal --------------------
+# The add-on modules answer with the paths they removed, one per line on
+# stdout. Passed straight through, a real `exakit uninstall` printed them as
+# bare absolute paths: in the plan and again spliced into the spinner line.
+echo
+echo "an add-on uninstall keeps its paths off the screen (real run) and lists them (dry run):"
+_addon_paths() { # _addon_paths <dry 0|1> <rc>
+    SANDBOX="$SANDBOX" ROOT="$ROOT" D="$1" RC="$2" bash <<'ADDON'
+set -u
+HOME="$SANDBOX/addon-home"; export HOME
+EXAKIT_HOME="$HOME/.exasol-starter-kit"; EXAKIT_BIN_DIR="$HOME/.local/bin"
+export EXAKIT_HOME EXAKIT_BIN_DIR
+mkdir -p "$EXAKIT_HOME/logs"
+. "$ROOT/setup/lib/common.sh"
+EXAKIT_LOG_FILE="$EXAKIT_HOME/logs/addon.log"
+_exakit_marketplace_root() { printf '%s\n' "$ROOT"; }
+_exakit_marketplace_run_python() {
+    printf '%s\n' "$EXAKIT_HOME/dash-server-venv" "$EXAKIT_BIN_DIR/dash-server"
+    return "$RC"
+}
+_exakit_marketplace_python dash-server uninstall "$D"
+echo "RC=$?"
+echo "LOG:$(cat "$EXAKIT_LOG_FILE" 2>/dev/null | tr '\n' '|')"
+ADDON
+}
+_o="$(_addon_paths 0 0 2>&1)"
+check "real: no bare path line on screen" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
+check "real: the paths go to the log" "1" "$(printf '%s\n' "$_o" | grep '^LOG:' | grep -c 'dash-server-venv')"
+check "real: the module's answer is kept" "RC=0" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 0 3 2>&1)"
+check "real: a failing module still answers its code" "RC=3" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 1 0 2>&1)"
+check "dry: each path is a plan line" "1" "$(printf '%s\n' "$_o" | grep -v '^LOG:' | grep -c 'will remove: ~/.exasol-starter-kit/dash-server-venv')"
+check "dry: no bare path line" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
+
+echo
+echo "another exakit run of this kit blocks a full uninstall (named, never stopped):"
+# A stub `ps` lists the processes; docker/podman/exasol stubs fail, so even a
+# run that got past the check would stay inside the sandbox.
+_ob="$SANDBOX/ob"; mkdir -p "$_ob/bin" "$_ob/home/.local/bin" "$_ob/home/.exasol-starter-kit/kit/setup"
+printf '{"kit_version":"0.3.0"}\n' > "$_ob/home/.exasol-starter-kit/manifest.json"
+: > "$_ob/home/.local/bin/exakit"
+for _s in docker podman exasol launchctl systemctl; do printf '#!/bin/sh\nexit 1\n' > "$_ob/bin/$_s"; chmod +x "$_ob/bin/$_s"; done
+_ob_ps() { # _ob_ps <lines...>: the stub ps prints these as "pid ppid command"
+    { printf '#!/bin/sh\ncat <<'"'"'PSOUT'"'"'\n'; printf '%s\n' "$@"; printf 'PSOUT\n'; } > "$_ob/bin/ps"; chmod +x "$_ob/bin/ps"
+}
+_ob_run() { # _ob_run <args...>
+    HOME="$_ob/home" EXAKIT_HOME="$_ob/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_ob/home/.local/bin" \
+        EXAKIT_EXAPUMP_CONFIG_DIR="$_ob/home/.exapump" EXAKIT_NO_IP_LOOKUP=1 PATH="$_ob/bin:/usr/bin:/bin" \
+        /bin/bash "$ROOT/setup/exakit" uninstall "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+}
+_ob_ps "  1     0 /sbin/launchd" "  4242  1 /bin/bash $_ob/home/.local/bin/exakit connect --name pg" \
+       "  4243  1 vim $_ob/home/.local/bin/exakit"
+_o="$(_ob_run --dry-run)"
+check "dry run names the other run" "1" "$(printf '%s\n' "$_o" | grep -c 'exakit is still running in another window: exakit connect --name pg (pid 4242). Close it, then run exakit uninstall again.')"
+check "dry run says the uninstall would refuse" "1" "$(printf '%s\n' "$_o" | grep -c 'refuses to start until the exakit run named above is closed')"
+check "an editor with the file open is not a run" "0" "$(printf '%s\n' "$_o" | grep -c 'pid 4243')"
+_o="$(_ob_run --yes; printf 'RC=%s\n' "${PIPESTATUS[0]}")"
+_orc="$(HOME="$_ob/home" EXAKIT_HOME="$_ob/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_ob/home/.local/bin" EXAKIT_EXAPUMP_CONFIG_DIR="$_ob/home/.exapump" EXAKIT_NO_IP_LOOKUP=1 PATH="$_ob/bin:/usr/bin:/bin" /bin/bash "$ROOT/setup/exakit" uninstall --yes >/dev/null 2>&1; echo $?)"
+check "--yes refuses with exit 1" "1" "$_orc"
+check "--yes names the other run" "1" "$(printf '%s\n' "$_o" | grep -c 'pid 4242')"
+check "--yes removed nothing: the kit home stays" "yes" "$(exists "$_ob/home/.exasol-starter-kit/manifest.json")"
+check "--yes removed nothing: the command stays" "yes" "$(exists "$_ob/home/.local/bin/exakit")"
+check "the other run is never stopped" "0" "$(printf '%s\n' "$_o" | grep -c -i 'kill\|stopped 4242')"
+_ob_ps "  1     0 /sbin/launchd" "  4243  1 vim $_ob/home/.local/bin/exakit" "  4244  1 bash /somewhere/else/exakit connect"
+_o="$(_ob_run --dry-run)"
+check "no other run: nothing blocks" "0" "$(printf '%s\n' "$_o" | grep -c 'still running in another window')"
+check "another kit's exakit is not this kit's" "0" "$(printf '%s\n' "$_o" | grep -c 'pid 4244')"
+
+echo
+echo "an interrupted add-on install (receipt state=installing) is removed by exakit uninstall <id>:"
+# audit MKT-06: the gate answered "not installed - nothing to remove", so what
+# the interrupted install had made could not be removed with the kit. The real
+# CLI and the real add-on modules, in a sandbox: the editor's command-line tool
+# and the database client are stand-ins holding the partial state in files.
+_mi="$SANDBOX/interrupted"
+mkdir -p "$_mi/bin" "$_mi/home/.exasol-starter-kit/credentials"
+_mi_py="$(command -v python3)"
+ln -s "$_mi_py" "$_mi/bin/python3"
+printf '#!/bin/sh\nwhile [ $# -gt 0 ] && [ "$1" != python ]; do shift; done; shift\nexec "%s" "$@"\n' "$_mi_py" > "$_mi/bin/uv"
+for _t in docker podman exasol exapump launchctl systemctl; do
+    printf '#!/bin/sh\necho STUB-BLOCKED\nexit 97\n' > "$_mi/bin/$_t"
+done
+# The editor: lists the extension while $_mi/editor-has-it exists, removes it on --uninstall-extension.
+printf '#!/bin/sh\ncase "$*" in\n  *--list-extensions*) [ -f "%s/editor-has-it" ] && echo exasol.exasol-vscode@1.9.1; exit 0 ;;\n  *--uninstall-extension*) rm -f "%s/editor-has-it"; exit 0 ;;\nesac\nexit 97\n' "$_mi" "$_mi" > "$_mi/code"
+# The database: the pyexasol client the module runs, answering from $_mi/db.json.
+cat > "$_mi/fake-pyexasol" <<FAKEDB
+#!$_mi_py
+import json, sys
+path = "$_mi/db.json"
+db = json.load(open(path))
+answers = []
+for statement in json.loads(sys.stdin.read()):
+    db["log"].append(statement)
+    if "FROM SYS.EXA_SCHEMAS" in statement:
+        answers.append([[name] for name in db["schemas"]])
+    elif "FROM SYS.EXA_ALL_ROLES" in statement:
+        answers.append([["SEMANTIC_USER"]] if db["role"] else [])
+    elif "FROM SYS.EXA_DBA_TABLES" in statement:
+        answers.append([[1]] if db["models_table"] else [])
+    elif "COUNT(*) FROM SYS_SEMANTIC.MODELS" in statement:
+        sys.exit("models cannot be read")
+    elif statement.startswith("DROP SCHEMA IF EXISTS "):
+        db["schemas"].remove(statement.split()[4]); answers.append(0)
+    elif statement.startswith("DROP ROLE "):
+        db["role"] = False; answers.append(0)
+    else:
+        answers.append([])
+json.dump(db, open(path, "w"))
+print(json.dumps(answers))
+FAKEDB
+chmod +x "$_mi/bin/"* "$_mi/code" "$_mi/fake-pyexasol"
+printf 'not-a-real-password\n' > "$_mi/home/.exasol-starter-kit/credentials/exasol_password"
+_mi_receipt() { # _mi_receipt <components JSON> ; a fresh kit manifest
+    printf '{"kit": {"version": "0.3.0"}, "runtime": {"type": "personal", "dsn": "127.0.0.1:8563", "user": "sys", "password_file": "%s"}, "components": {"pyexasol": {"python": "%s"}%s}}\n' \
+        "$_mi/home/.exasol-starter-kit/credentials/exasol_password" "$_mi/fake-pyexasol" "$1" > "$_mi/home/.exasol-starter-kit/manifest.json"
+}
+_mi_run() { # _mi_run <args...> ; the real CLI, sealed in the sandbox
+    HOME="$_mi/home" EXAKIT_HOME="$_mi/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_mi/home/.local/bin" \
+        EXAKIT_EXAPUMP_CONFIG_DIR="$_mi/home/.exapump" EXAKIT_EXASOL_VSCODE_EXTDIR="$_mi/extensions" \
+        EXAKIT_NO_IP_LOOKUP=1 EXAKIT_NO_UPDATE_NOTICE=1 PATH="$_mi/bin:/usr/bin:/bin" \
+        /bin/bash "$ROOT/setup/exakit" "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+}
+_mi_manifest() { "$_mi_py" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d.get("components",{}).get(sys.argv[2])))' "$_mi/home/.exasol-starter-kit/manifest.json" "$1"; }
+_mi_db() { "$_mi_py" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(d["schemas"]), d["role"])' "$_mi/db.json"; }
+
+# The VS Code extension the interrupted install had already put in the editor.
+: > "$_mi/editor-has-it"
+_mi_receipt ", \"exasol_vscode\": {\"ownership\": \"kit\", \"state\": \"installing\", \"code_cli\": \"$_mi/code\"}"
+_o="$(_mi_run uninstall exasol-vscode --dry-run)"
+check "exasol-vscode installing, --dry-run: never says not installed" "0" "$(printf '%s\n' "$_o" | grep -c 'is not installed')"
+check "...names the interrupted install" "1" "$(printf '%s\n' "$_o" | grep -c 'Dry run — the exasol-vscode install was interrupted; removing what it created would:')"
+check "...previews the extension" "1" "$(printf '%s\n' "$_o" | grep -c 'will remove: exasol.exasol-vscode')"
+check "...and removes nothing" "yes" "$(exists "$_mi/editor-has-it")"
+_o="$(_mi_run uninstall exasol-vscode --yes)"
+check "exasol-vscode installing, --yes: the extension leaves the editor" "no" "$(exists "$_mi/editor-has-it")"
+check "...the receipt goes" "null" "$(_mi_manifest exasol_vscode)"
+check "...and it says what it removed" "1" "$(printf '%s\n' "$_o" | grep -c 'Removed what the interrupted exasol-vscode install had created: exasol.exasol-vscode\.')"
+# Interrupted before the editor took it: nothing to remove, and it says so.
+_mi_receipt ", \"exasol_vscode\": {\"ownership\": \"kit\", \"state\": \"installing\", \"code_cli\": \"$_mi/code\"}"
+_o="$(_mi_run uninstall exasol-vscode --yes)"
+check "exasol-vscode installing, nothing landed: says nothing was left" "1" "$(printf '%s\n' "$_o" | grep -c 'install had created: nothing was left\.')"
+check "...and the receipt goes" "null" "$(_mi_manifest exasol_vscode)"
+
+# Semantic Views: two of the five schemas and the role, then interrupted.
+_mi_sv=", \"semantic_views\": {\"ownership\": \"kit\", \"state\": \"installing\", \"role_created\": true}"
+printf '{"schemas": ["SEMANTIC_ADMIN", "SYS_SEMANTIC", "USER_DATA"], "role": true, "models_table": false, "log": []}\n' > "$_mi/db.json"
+_mi_receipt "$_mi_sv"
+_o="$(_mi_run uninstall semantic-views --dry-run)"
+check "semantic-views installing, --dry-run: names the interrupted install" "1" "$(printf '%s\n' "$_o" | grep -c 'Dry run — the semantic-views install was interrupted; removing what it created would:')"
+check "...previews the schemas and the role" "2" "$(printf '%s\n' "$_o" | grep -c 'will remove: the schemas SEMANTIC_AGENT.*where present\|will remove: the role SEMANTIC_USER')"
+check "...and asks the database nothing" "SEMANTIC_ADMIN,SYS_SEMANTIC,USER_DATA True" "$(_mi_db)"
+_o="$(_mi_run uninstall semantic-views --yes)"
+check "semantic-views installing, --yes: drops what the install made, and only that" "USER_DATA False" "$(_mi_db)"
+check "...the receipt goes" "null" "$(_mi_manifest semantic_views)"
+check "...and it says what it removed" "1" "$(printf '%s\n' "$_o" | grep -c 'Removed what the interrupted semantic-views install had created: schema SEMANTIC_ADMIN, schema SYS_SEMANTIC, role SEMANTIC_USER\.')"
+# Models that cannot be counted: nothing is dropped and the receipt stays (fail closed, 93c5fba0).
+printf '{"schemas": ["SEMANTIC_ADMIN", "SYS_SEMANTIC"], "role": true, "models_table": true, "log": []}\n' > "$_mi/db.json"
+_mi_receipt "$_mi_sv"
+_o="$(_mi_run uninstall semantic-views --yes; printf 'RC=%s\n' "${PIPESTATUS[0]}")"
+check "semantic-views installing, models unreadable: nothing is dropped" "SEMANTIC_ADMIN,SYS_SEMANTIC True" "$(_mi_db)"
+check "...the receipt stays" "installing" "$(_mi_manifest semantic_views | "$_mi_py" -c 'import json,sys; print(json.load(sys.stdin)["state"])')"
+check "...and it never claims a removal" "0" "$(printf '%s\n' "$_o" | grep -c 'Removed what')"
+# The whole-kit uninstall's add-on step names it too (it used to skip it and delete the receipt).
+_o="$(_mi_run uninstall --dry-run)"
+check "whole-kit --dry-run: the interrupted add-on is in the plan" "1" "$(printf '%s\n' "$_o" | grep -c 'will remove: the schemas SEMANTIC_AGENT')"
+# Truly not installed: still "not installed", and nothing runs.
+printf '{"schemas": ["SEMANTIC_ADMIN"], "role": false, "models_table": false, "log": []}\n' > "$_mi/db.json"
+_mi_receipt ""
+_o="$(_mi_run uninstall semantic-views --yes)"
+check "no receipt: still not installed" "1" "$(printf '%s\n' "$_o" | grep -c 'semantic-views is not installed — nothing to remove.')"
+check "...and the database is not touched" "SEMANTIC_ADMIN False" "$(_mi_db)"
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

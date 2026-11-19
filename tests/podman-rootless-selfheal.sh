@@ -98,6 +98,44 @@ has   "the reason is still given"         "a stubbed reason" "$OUT"
 check "sudo was never called"             "" "$(sudo_log)"
 
 echo
+echo "a missing pids controller is named, never 'fixed' with sudo:"
+# The container runs with a pids limit; with no pids controller delegated to
+# the user (a systemd that delegates none, or WSL 2.9+, which puts the distro
+# under a non-systemd cgroup subtree) crun refuses it and it sits in
+# "created". No command here can grant the controller, so it is advice only.
+OUT="$(heal pids pids EXAKIT_PODMAN_SELFHEAL=1)"
+has   "the reason is given"               "a stubbed reason" "$OUT"
+check "sudo was never called"             "" "$(sudo_log)"
+lacks "...and nothing claims it is ready" "Rootless Podman is ready" "$OUT"
+
+echo
+echo "the pids gap is read off podman itself, and only a real list counts:"
+PIDBIN="$WORK/pidbin"; mkdir -p "$PIDBIN"
+cat > "$PIDBIN/podman" <<'STUB'
+#!/bin/sh
+[ "$1 $2" = "info --format" ] || exit 0
+[ -n "${PODMAN_FAIL:-}" ] && exit 125
+printf '%s\n' "$PODMAN_CTL"
+STUB
+chmod +x "$PIDBIN/podman"
+pids_missing() {
+    env PATH="$PIDBIN:$PATH" ROOT="$ROOT" "$@" bash -c '
+        . "$ROOT/setup/lib/common.sh" 2>/dev/null
+        . "$ROOT/setup/lib/detect.sh" 2>/dev/null
+        _detect_podman_pids_missing && echo missing || echo fine'
+}
+check "no pids in the list -> missing"      "missing" "$(pids_missing PODMAN_CTL='[cpu io memory]')"
+check "an empty list -> missing"            "missing" "$(pids_missing PODMAN_CTL='[]')"
+check "pids in the list -> fine"            "fine"    "$(pids_missing PODMAN_CTL='[cpuset cpu io memory pids]')"
+check "podman cannot answer -> not evidence" "fine"   "$(pids_missing PODMAN_FAIL=1)"
+check "an unknown field -> not evidence"    "fine"    "$(pids_missing PODMAN_CTL='<no value>')"
+DETECT="$(cat "$ROOT/setup/lib/detect.sh")"
+has "the gap kind can be pids"              "printf 'pids\\n'" "$(sed -n '/^detect_rootless_podman_gap_kind()/,/^}/p' "$ROOT/setup/lib/detect.sh")"
+_gap="$(sed -n '/^detect_rootless_podman_gap()/,/^}/p' "$ROOT/setup/lib/detect.sh")"
+has "...its sentence names the WSL issue"   "podman-container-tools/podman#29909" "$_gap"
+has "...and the Linux delegation"           "Delegate=cpu cpuset io memory pids" "$_gap"
+
+echo
 echo "a missing package is the distribution's own command:"
 OUT="$(heal uidmap "" EXAKIT_PODMAN_SELFHEAL=1)"
 has   "apt-get is used where apt-get is"  "apt-get install -y uidmap" "$(sudo_log)"

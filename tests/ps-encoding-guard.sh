@@ -102,8 +102,8 @@ EOF
 # that let the commonest shape of all through untouched: `$v = & $python -c ...
 # 2>$null`, which is a probe whose whole purpose is to answer a question about
 # a possibly-broken thing. Six sites were hiding behind the anchor, among them
-# Get-PyexasolInstalledVersion and Get-DashServerPackageVersion (both read by
-# `exakit version`), where a probe writing to stderr is the ORDINARY case.
+# Get-PyexasolInstalledVersion (read by `exakit version`), where a probe
+# writing to stderr is the ordinary case.
 # Whole-line comments are
 # skipped so prose describing the trap does not trip it.
 while IFS= read -r file; do
@@ -168,6 +168,38 @@ for file in $(find "$ROOT/setup" -name '*.ps1' | sort); do
         fail "$rel redirects stderr and never reads it - a chatty probe deadlocks against WaitForExit"
     fi
 done
+
+# 7. A command the PowerShell side tells someone to type must be PowerShell.
+#
+# The .ps1 messages were copied from the bash twin, and three bash forms came
+# along: `exakit start && exakit update` (Windows PowerShell 5.1 answers "The
+# token '&&' is not a valid statement separator"), the same with ||, and the
+# one-shot environment prefix `EXAKIT_X=value exakit ...` ("The term
+# 'EXAKIT_X=value' is not recognized"). A remedy in `update --json` is run
+# verbatim by an agent, so a parse error there means nothing runs at all.
+# PowerShell's form is `$env:EXAKIT_X = 'value'; exakit ...` and `a; b`.
+#
+# The data-load hints name EXAKIT_ON_EXISTING as the thing to set, without a
+# command after it, so they are checked by name: any EXAKIT_ON_EXISTING=
+# is the bash form, except the "(EXAKIT_ON_EXISTING=replace)" note that says
+# which policy a run applied. Product code only: tests/ holds bash stubs.
+while IFS= read -r file; do
+    rel="${file#"$ROOT"/}"
+    hits="$(awk '
+        /^[[:space:]]*#/ { next }
+        /&&/                                                   { print NR; next }
+        /\|\|[[:space:]]*exakit|exakit [^"]*\|\|/              { print NR; next }
+        /[A-Z][A-Z0-9_]*=[^[:space:]"'"'"'`]+[[:space:]]+exakit/ { print NR; next }
+        /(^|[^(])EXAKIT_ON_EXISTING=/                          { print NR; next }
+    ' "$file" 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+    if [ -n "$hits" ]; then
+        fail "$rel tells the user a bash-only command (lines $hits) - write it as PowerShell: a; b and \$env:NAME = 'value'; exakit ..."
+    else
+        pass "$rel gives every command in PowerShell's own form"
+    fi
+done <<EOF
+$( { find "$ROOT/setup" -name '*.ps1'; [ -f "$ROOT/install.ps1" ] && printf '%s\n' "$ROOT/install.ps1"; } | sort)
+EOF
 
 printf '\n%d checks, %d failed\n' "$checks" "$fails"
 [ "$fails" -eq 0 ]

@@ -1,0 +1,110 @@
+{
+  "id": "snowflake",
+  "name": "Snowflake",
+  "profile": "java-jdbc",
+  "upstream": "exasol/snowflake-virtual-schema",
+  "adapter": {
+    "version": "1.0.2",
+    "asset": "virtual-schema-dist-14.1.0-snowflake-1.0.2.jar",
+    "url": "https://github.com/exasol/snowflake-virtual-schema/releases/download/1.0.2/virtual-schema-dist-14.1.0-snowflake-1.0.2.jar",
+    "size": 98188231,
+    "sha256": "42689c239a38fa1166916ed93059278a2296ec30280cbd39d1e36b046ada4d96",
+    "license": "MIT"
+  },
+  "driver": {
+    "version": "4.4.0",
+    "asset": "snowflake-jdbc-4.4.0.jar",
+    "url": "https://repo1.maven.org/maven2/net/snowflake/snowflake-jdbc/4.4.0/snowflake-jdbc-4.4.0.jar",
+    "size": 98569339,
+    "sha256": "eeabc114d2fd429365f8bdde0cb5dd00f0cf529b22aab754751bab1b09fc65c0",
+    "license": "Apache-2.0"
+  },
+  "etl": {
+    "drivername": "SNOWFLAKE_JDBC_DRIVER",
+    "prefix": "jdbc:snowflake:",
+    "main": "net.snowflake.client.api.driver.SnowflakeDriver",
+    "nosecurity": true,
+    "trust_store": "container"
+  },
+  "inputs": [
+    {
+      "name": "account",
+      "label": "Account identifier (orgname-account)",
+      "kind": "account",
+      "required": true
+    },
+    {
+      "name": "database",
+      "label": "Database",
+      "kind": "name",
+      "required": true,
+      "upper": true
+    },
+    {
+      "name": "schema",
+      "label": "Schema",
+      "kind": "name",
+      "default": "PUBLIC",
+      "upper": true
+    },
+    {
+      "name": "warehouse",
+      "label": "Warehouse",
+      "kind": "name",
+      "required": true,
+      "upper": true
+    },
+    {
+      "name": "role",
+      "label": "Role (Enter: the user's default role)",
+      "kind": "name"
+    },
+    {
+      "name": "user",
+      "label": "Username",
+      "kind": "text",
+      "required": true
+    },
+    {
+      "name": "password",
+      "label": "Programmatic access token",
+      "kind": "secret",
+      "required": true
+    }
+  ],
+  "paste": {
+    "credential": ["token", "password", "userinfo"],
+    "schemes": ["jdbc:snowflake", "https"],
+    "bare": true,
+    "host": "account",
+    "host_suffix": ".snowflakecomputing.com",
+    "params": {"db": "database", "database": "database", "warehouse": "warehouse", "schema": "schema", "role": "role", "user": "user"},
+    "implied": ["jdbc_query_result_format"],
+    "forms": ["jdbc:snowflake://<account>.snowflakecomputing.com/?db=...&warehouse=...", "https://<account>.snowflakecomputing.com"]
+  },
+  "auth": "pat",
+  "host": "{account}.snowflakecomputing.com",
+  "url": "jdbc:snowflake://{account}.snowflakecomputing.com/?db={database}&warehouse={warehouse}&JDBC_QUERY_RESULT_FORMAT=JSON{opt_role}",
+  "url_optional": {
+    "role": "&role={role}"
+  },
+  "tls": null,
+  "access": "USAGE on the warehouse, the database and the schema, and SELECT on its tables and views, granted to the role the token is restricted to",
+  "vs_properties": {
+    "CATALOG_NAME": "{database}",
+    "SCHEMA_NAME": "{schema}"
+  },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN COUNT(*) > 0 THEN 'ok' ELSE 'missing' END FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = {v}"
+  },
+  "tips": [
+    "Names arrive in upper case (CUSTOMER, C_NAME): no quotes needed.",
+    "NUMBER(38,0), Snowflake's default for integer columns, is wider than Exasol's DECIMAL(36) and reads as the text 'Number precision not supported'. To read such a column, give the reader a view at the source that casts it to NUMBER(36,0)."
+  ],
+  "notes": [
+    "JDBC_QUERY_RESULT_FORMAT=JSON is mandatory with driver 4.x.",
+    "Authenticates with a programmatic access token as the password; TLS with certificate, host name and revocation checks is always on.",
+    "The driver trusts only the JVM's default CA store, and the JDBC loader on Exasol Personal has none (measured: 'the trustAnchors parameter must be non-empty'). So the loader's main class is the kit's exakit.loader.TrustStoreDriver: it points the loader's JVM at the language container's own CA store, then hands every call to the Snowflake driver. Nothing is disabled; measured live, the loader then reached Snowflake's sign-in."
+  ]
+}

@@ -30,13 +30,18 @@ function Lacks($label, $needle, $haystack) {
 
 # --- the functions under test, lifted out of exakit.ps1 ----------------------
 $wanted = @("Resolve-ExakitServiceScope", "Get-ExakitServiceIds", "Get-ExakitServiceStatus",
-            "Start-ExakitService", "Stop-ExakitService", "Stop-ExakitDatabaseScoped",
+            "Start-ExakitService", "Start-ExakitServiceReported", "Stop-ExakitService", "Stop-ExakitDatabaseScoped",
             "Invoke-CmdStart", "Invoke-CmdStop")
-$tokens = $null; $errors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup\exakit.ps1"), [ref]$tokens, [ref]$errors)
-if ($errors.Count -gt 0) { throw "setup/exakit.ps1 does not parse: $($errors[0].Message)" }
-$defs = @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $n.Name) }, $true))
-Check "every function under test is defined in exakit.ps1" $wanted.Count $defs.Count
+# The service set itself lives in lib/exakit-common.ps1 (an add-on module stops
+# and starts services around a restart); the scoped commands stay in the CLI.
+$defs = @()
+foreach ($file in @("setup\exakit.ps1", "setup\lib\exakit-common.ps1")) {
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $file), [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw "$file does not parse: $($errors[0].Message)" }
+    $defs += @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $n.Name) }, $true))
+}
+Check "every function under test is defined in exakit.ps1 or lib/exakit-common.ps1" $wanted.Count $defs.Count
 foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 
 # --- the machine, replaced by echoes --------------------------------------------
@@ -44,6 +49,7 @@ $script:log = New-Object System.Collections.ArrayList
 function Note([string]$Text) { [void]$script:log.Add($Text) }
 function Assert-ExakitInstalled { param([switch]$Json) Note "require-install" }
 function Initialize-ExakitLogging { }
+function Confirm-ExakitTlsPinned { }   # the TLS pin (SEC-14) has its own suite: tls-pin-ps.ps1
 function Write-ExakitLog { param($Kind, $Text) }
 function Get-RuntimeType { return "personal" }
 function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "runtime.type") { return "personal" }; return $null }
@@ -61,11 +67,12 @@ function Get-ExakitMarketplaceAddon {
 }
 function Test-ExakitMarketplaceAddonInstalled { param([string]$Id) return ($Id -eq "zzfake") }
 function Invoke-ZzfakeStatus { if ($env:ZZ_STATUS) { return $env:ZZ_STATUS }; return "running" }
-function Invoke-ZzfakeStart { Note "START zzfake" }
+function Invoke-ZzfakeStart { Note "START zzfake"; if ($env:ZZ_START_FAILS -eq "1") { throw "zzfake: Service did not start on port 5100" } }
 function Invoke-ZzfakeStop { Note "STOP zzfake" }
 function Info([string]$Msg) { Note "INFO $Msg" }
 function Ok([string]$Msg) { Note "OK $Msg" }
 function Warn2([string]$Msg) { Note "WARN $Msg" }
+function Fail([string]$Msg) { Note "FAIL $Msg"; throw "DENY" }   # Fail exits 1; caught by Run like a refusal
 function Deny-ExakitInput { param([string]$Message, $Remedy = $null) Note "REJECT $Message"; throw "DENY" }
 # The question, answered the way a script answers it; no console is asked.
 function Confirm-ExakitEnvPrompt {
@@ -139,12 +146,31 @@ Has   "...naming the marketplace"                  "exakit marketplace exasol-sc
 Lacks "...and nothing was stopped"                 "STOP" $gone
 
 Write-Host "--- start"
+$env:ZZ_STATUS = "stopped"
 $bs = Run { Invoke-CmdStart -Scope @() }
 Has   "bare start starts the database"             "START database" $bs
 Has   "...and the add-on"                          "START zzfake"   $bs
+Has   "...and says so"                             "OK zzfake started" $bs
 $sa = Run { Invoke-CmdStart -Scope @("zzfake") }
 Has   "start <addon> starts that add-on"           "START zzfake"   $sa
 Lacks "...and does not start the database"         "START database" $sa
+# `exakit start exasol-scheduler` used to print nothing at all: never silent now.
+Has   "...and says it started"                     "OK zzfake started" $sa
+$env:ZZ_START_FAILS = "1"
+$sf = Run { Invoke-CmdStart -Scope @("zzfake") }
+Has   "a failed start fails the command, saying why" "FAIL zzfake did not start: zzfake: Service did not start on port 5100. Diagnose: exakit logs zzfake" $sf
+Lacks "...and never that it started"               "OK zzfake started" $sf
+$bf = Run { Invoke-CmdStart -Scope @() }
+Has   "a failed start in the bare form is a warning" "WARN zzfake did not start" $bf
+Lacks "...not a failure of the whole command"      "FAIL" $bf
+Remove-Item Env:ZZ_START_FAILS
+$env:ZZ_STATUS = "restarting (waiting for the database. Diagnose: exakit logs zzfake)"
+$sw = Run { Invoke-CmdStart -Scope @("zzfake") }
+Has   "start <addon> that is restarting starts it now" "START zzfake" $sw
+Remove-Item Env:ZZ_STATUS
+$sr = Run { Invoke-CmdStart -Scope @("zzfake") }
+Has   "start <addon> that already runs says so"    "OK zzfake is already running" $sr
+Lacks "...and starts nothing"                      "START" $sr
 $sd = Run { Invoke-CmdStart -Scope @("database") }
 Has   "start database starts the database"         "START database" $sd
 Lacks "...and not the add-on"                      "START zzfake"   $sd

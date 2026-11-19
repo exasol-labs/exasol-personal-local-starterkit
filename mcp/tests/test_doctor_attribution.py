@@ -194,3 +194,69 @@ class WindowsPermissionPostureTests(unittest.TestCase):
         result = self._stage("0644", os_name="posix")
         self.assertEqual([f.code for f in result.findings], ["permission_drift"])
         self.assertEqual(result.findings[0].evidence, ["0644"])
+
+
+class ClientRewrittenConfigPostureTests(unittest.TestCase):
+    """Claude Code rewrites ~/.claude.json itself, so its drift is INFO.
+
+    Seen on a live Windows 11 install: mcp-doctor --json warned
+    permission_drift / not-owner-only-acl for claude_code on every run, while
+    the six other client files read owner-only-acl. Claude Code replaces its
+    own state file constantly, and the replacement inherits the profile ACL,
+    so the kit's hardening is undone within seconds and a repair would be
+    undone the same way. The kit's entry there holds a URL and no secret.
+    """
+
+    def setUp(self) -> None:
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="mcp-rewritten-posture-"))
+        self.addCleanup(shutil.rmtree, self._temp_dir, True)
+        self.path = self._temp_dir / ".claude.json"
+
+    def _stage(self, entry, client="claude_code", posture="not-owner-only-acl"):
+        import json
+        from mcp.adapters.registry import AdapterRegistry
+        from mcp.core.models import ArtifactReference
+        from mcp.validator import service as svc
+
+        self.path.write_text(
+            json.dumps({"projects": {}, "mcpServers": {"exasol": entry}}), encoding="utf-8"
+        )
+        validator = svc.ValidatorService.__new__(svc.ValidatorService)
+        validator._environment = mock.Mock(os_name="win32")
+        validator._registry = AdapterRegistry()
+        from mcp.core.models import OwnershipState
+
+        artifact = ArtifactReference(
+            artifact_id="a1",
+            path=str(self.path),
+            kind="client_config",
+            ownership_state=OwnershipState.MANAGED,
+            client=client,
+            metadata={"entry_name": "exasol"},
+        )
+        with mock.patch.object(svc, "describe_protection", return_value=posture):
+            return svc.ValidatorService.validate_permission_posture(validator, [artifact])
+
+    def test_claude_code_url_entry_drift_is_info_without_a_repair(self) -> None:
+        result = self._stage({"type": "http", "url": "http://127.0.0.1:4896/mcp"})
+        self.assertEqual([f.code for f in result.findings], ["permission_drift"])
+        finding = result.findings[0]
+        self.assertEqual(finding.severity, Severity.INFO)
+        self.assertIn("Claude Code rewrites this file itself", finding.message)
+        self.assertIsNone(finding.recommended_action)
+        self.assertEqual(result.status, "pass")
+
+    def test_claude_code_entry_with_env_keeps_the_warning(self) -> None:
+        result = self._stage({"command": "uvx", "args": [], "env": {"EXA_PASSWORD": "x"}})
+        self.assertEqual([f.severity for f in result.findings], [Severity.WARNING])
+        self.assertEqual(result.findings[0].recommended_action, REPAIR_ACTION)
+        self.assertEqual(result.status, "pass_with_warnings")
+
+    def test_claude_code_posix_loose_mode_with_url_entry_is_info_too(self) -> None:
+        result = self._stage({"type": "http", "url": "http://127.0.0.1:4896/mcp"}, posture="0644")
+        self.assertEqual([f.severity for f in result.findings], [Severity.INFO])
+
+    def test_a_kit_owned_file_still_warns(self) -> None:
+        # Continue's block file is written and removed wholesale by the kit.
+        result = self._stage({"type": "http", "url": "http://127.0.0.1:4896/mcp"}, client="continue")
+        self.assertEqual([f.severity for f in result.findings], [Severity.WARNING])

@@ -88,21 +88,13 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
         cursor_doc = json.loads(cursor_path.read_text(encoding="utf-8"))
         codex_doc = codex_path.read_text(encoding="utf-8")
         self.assertIn("exasol", cursor_doc["mcpServers"])
-        self.assertEqual(cursor_doc["mcpServers"]["exasol"]["env"]["EXA_USER"], "mcp_readonly")
-        self.assertEqual(cursor_doc["mcpServers"]["exasol"]["env"]["EXA_SSL_CERT_VALIDATION"], "no")
-        cursor_settings = json.loads(
-            cursor_doc["mcpServers"]["exasol"]["env"]["EXA_MCP_SETTINGS"]
-        )
-        self.assertTrue(cursor_settings["enable_read_query"])
-        self.assertTrue(cursor_settings["enable_summarize_table"])
-        self.assertTrue(cursor_settings["enable_query_profiling"])
-        self.assertFalse(cursor_settings["enable_write_query"])
+        # The launcher's MCP sidecar: a URL and nothing secret in any client's config (the read-only user's
+        # password lives in the deployment's sidecar definition, and the sidecar enforces read-only itself).
+        self.assertEqual(cursor_doc["mcpServers"]["exasol"], {"url": "http://127.0.0.1:4896/mcp"})
         self.assertIn("[mcp_servers.exasol]", codex_doc)
-        self.assertIn("EXA_MCP_SETTINGS", codex_doc)
-        self.assertIn("enable_read_query", codex_doc)
-        self.assertIn("enable_summarize_table", codex_doc)
-        self.assertIn("enable_query_profiling", codex_doc)
-        self.assertIn("enable_write_query", codex_doc)
+        self.assertIn('url = "http://127.0.0.1:4896/mcp"', codex_doc)
+        self.assertNotIn("EXA_PASSWORD", codex_doc)
+        self.assertNotIn("readonly-secret", cursor_path.read_text(encoding="utf-8") + codex_doc)
         self.assertTrue(any(action["kind"] == "restart_client" for action in output["next_actions"]))
 
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -169,6 +161,98 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
         self.assertEqual(sorted(client_setup["configured_clients"]), ["codex", "cursor"])
         self.assertEqual(client_setup["skipped_clients"], ["vscode_copilot"])
 
+    def _run_setup_with_locked_folder(self, clients: list[str], locked: list[str]):
+        """setup-runtime-clients with the config folders of `locked` read-only."""
+
+        paths = {
+            "cursor": self._temp_dir / "cursor" / "mcp.json",
+            "codex": self._temp_dir / "codex" / "config.toml",
+            "vscode_copilot": self._temp_dir / "Code" / "User" / "mcp.json",
+        }
+        env_names = {
+            "cursor": "CURSOR_MCP_CONFIG_PATH",
+            "codex": "CODEX_MCP_CONFIG_PATH",
+            "vscode_copilot": "VSCODE_MCP_CONFIG_PATH",
+        }
+        env = os.environ.copy()
+        for client, path in paths.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            env[env_names[client]] = str(path)
+        self._write_manifest("exa-local")
+        for client in locked:
+            paths[client].parent.chmod(0o555)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "mcp", "setup-runtime-clients",
+                 "--runtime-root", str(self.runtime_root), "--clients", *clients],
+                cwd=Path(__file__).resolve().parents[2],
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            for client in locked:
+                paths[client].parent.chmod(0o755)
+        return result, paths
+
+    @unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                     "needs POSIX folder permissions that bind the current user")
+    def test_setup_skips_a_client_whose_folder_cannot_be_written(self) -> None:
+        """One read-only client folder must not abort the run: the other clients
+        are written AND recorded, the JSON names the skipped client and why."""
+
+        result, paths = self._run_setup_with_locked_folder(
+            ["vscode_copilot", "cursor", "codex"], locked=["vscode_copilot"]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual(output["status"], "success_with_warnings")
+        self.assertEqual(sorted(output["details"]["configured_clients"]), ["codex", "cursor"])
+        self.assertEqual(
+            sorted(artifact["client"] for artifact in output["artifacts"]), ["codex", "cursor"]
+        )
+        skipped = output["details"]["skipped_clients"]
+        self.assertEqual([item["client"] for item in skipped], ["vscode_copilot"])
+        self.assertEqual(skipped[0]["reason_code"], "client_config_not_writable")
+        self.assertEqual(
+            skipped[0]["reason"],
+            f"its settings file {paths['vscode_copilot']} cannot be written. "
+            "Fix the folder's permissions, then run: exakit mcp-setup",
+        )
+        self.assertIn("exasol", json.loads(paths["cursor"].read_text(encoding="utf-8"))["mcpServers"])
+        self.assertIn("[mcp_servers.exasol]", paths["codex"].read_text(encoding="utf-8"))
+        self.assertFalse(paths["vscode_copilot"].exists())
+
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        client_setup = manifest["components"]["mcp_server"]["client_setup"]
+        self.assertEqual(sorted(client_setup["configured_clients"]), ["codex", "cursor"])
+        self.assertEqual(client_setup["skipped_clients"], ["vscode_copilot"])
+        # The clients that were written are recorded, so mcp-status lists them
+        # and uninstall / mcp-remove can take their entries out again.
+        from mcp.runtime.manifest import ManifestRepository
+        from mcp.runtime.paths import RuntimePaths
+
+        records = ManifestRepository(RuntimePaths(self.runtime_root)).list_active_artifacts()
+        self.assertEqual({record["client"] for record in records}, {"codex", "cursor"})
+
+    @unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                     "needs POSIX folder permissions that bind the current user")
+    def test_setup_fails_with_json_when_no_client_can_be_written(self) -> None:
+        result, _paths = self._run_setup_with_locked_folder(
+            ["vscode_copilot", "cursor"], locked=["vscode_copilot", "cursor"]
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("Traceback", result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual(output["status"], "blocked")
+        self.assertEqual(output["details"]["configured_clients"], [])
+        self.assertEqual(
+            sorted(item["reason_code"] for item in output["details"]["skipped_clients"]),
+            ["client_config_not_writable", "client_config_not_writable"],
+        )
+
     def _write_manifest(self, dsn: str) -> None:
         manifest = {
             "manifest_version": 1,
@@ -182,6 +266,8 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
             },
             "components": {
                 "mcp_server": {
+                    "backend": "sidecar",
+                    "url": "http://127.0.0.1:4896/mcp",
                     "connection": {
                         "user": "mcp_readonly",
                         "password_file": str(self.mcp_password_file),

@@ -1,7 +1,290 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+**The first GA release with Federation, the SQL preprocessor framework and Semantic Views. It follows 0.2.5.**
+
+- Your local Exasol can query other databases and storage directly. `exakit connect` creates a virtual schema for Snowflake, Databricks, MongoDB, PostgreSQL, MySQL, Oracle, SQL Server, BigQuery, Amazon S3, Azure Blob Storage or a lakehouse catalog. You join it with your local tables in plain SQL, and `exakit source` manages it later.
+- Every install gets the SQL preprocessor framework. Semantic Views and JSON Tables plug into it as modules, so Semantic SQL and JSON paths work on every connection with no setup per session.
+- The MCP server runs once, beside the database, on `127.0.0.1:4896` with a read-only login. Every AI client points at that one URL.
+- New installs load the retail sales and bank transaction samples. TPC-H, energy and weather are hidden for new installs.
+- The install has four steps, connects every AI client it finds, and ends with one add-ons table.
+
+### Upgrading from 0.2.5
+
+- Run `exakit update` twice. The first run installs the 0.3.0 kit, and the second run updates its parts. Re-running the install one-liner once does the same job.
+- Your database, your data and your tables stay as they are. TPC-H from 0.2.5 stays loaded.
+- Your AI clients move to the new MCP URL. MCP entries you added yourself and your add-ons are kept.
+- On Windows, the 0.2.5 update check can wrongly say "Everything is already current" when one of GitHub's addresses does not answer. Run the install one-liner once in that case. From 0.3.0 on, a check that cannot reach GitHub says "Could not check for updates" instead.
+
+### Federation, the SQL preprocessor and Semantic Views, and nothing else
+
+- **The kit ships what 0.3.0 is: Federation (`exakit connect`, `exakit source`), the SQL preprocessor framework and the Semantic Views add-on.** The Data Scientist work that was hidden in this release is removed rather than shipped switched off: the notebook add-on and its documentation site, the UDF devkit, MLflow, the `exakit describe`, `semantic`, `board`, `docs`, `workflow`, `model`, `mlflow`, `rust-udf` and `udf-*` commands, the Data Scientist and ML Engineer personas and the two reference datasets only they loaded. Every install still applies the General persona (retail sales and bank transactions) without asking; `exakit guide`'s fourth panel shows dashboards and Federation. The download is back near 0.2.5's size.
+- **Semantic SQL works in every session, with nothing to switch on.** Semantic Views is a module of the SQL preprocessor framework now (`setup/preprocessor/modules/semantic-views`: one rule for every user, phase EXPAND, a thin entry that calls Semantic Views' own compiler), registered after the add-on's install and update and retired before its removal; its own preprocessor never takes the database's one slot. A framework that arrives after an add-on (an update from 0.2.5) registers every installed add-on with a module (`manage.py register-module` / `retire-module`); a declined or absent framework skips it and never fails the add-on. The skills and help no longer say to run `ENABLE_SEMANTIC_SQL` or set the preprocessor per session. A refused semantic statement fails with its own `SEMANTIC_QUERY_*` code.
+
+### Update
+
+- **`exakit update` also updates a uv or pyexasol the kit did not install, through the tool that owns it.** It used to print "Leaving uv as it is" and stop there. Behind the advertised version, a uv from Homebrew is updated with `brew upgrade uv`, from pipx with `pipx upgrade uv`, from the uv installer with `uv self update <version>`, and on Windows from winget or scoop with their own update command. A pyexasol in your own Python is updated with that Python's `pip`, only in a virtual environment, the user site or a site you can write to, never in a Python its operating system manages (PEP 668). The kit never writes those files itself and never moves a newer copy back. An owner it cannot name, or an owner update that does not work, keeps the component and says which command to run, as a warning row (`skipped`, with the command as `remedy`), never a failed update. Every other component the kit did not install is kept as before, and uninstall still never removes one.
+
+### Uninstall
+
+- **A full uninstall also removes the Federation images.** `exasol/mcp-server` (the MCP server beside the database) and `exasol/script-language-container` (the language containers a first connect installs, about 1 GB for Java) were left behind. They go now with `exasol/nano`, under the same rules: only these repositories, `rmi` without force, an image still in use is kept with the command that removes it later. `--dry-run` lists them with sizes.
+- **An uninstall waits for another exakit run to close.** An `exakit connect` left open in another window had the kit deleted from under it. A full uninstall now names every other exakit run of the kit that is still alive ("exakit is still running in another window: exakit connect (pid N). Close it, then run exakit uninstall again."), removes nothing and exits 1; it never stops that run. `--dry-run` lists it as the blocker.
+
+### A shorter install
+
+- **The samples load at once, in the data table.** After pyexasol, "Data to load" shows the samples as ONE row named by what it loads ("Sample datasets (Retail sales, Bank transactions)" on a new install), with no checkbox and no column heading: they load straight away, the bar to the right of the row. Then the same table asks about uploading a file or folder, an external source, or Skip (ticked, so Enter goes on). `exakit data-load` keeps the full tree.
+- **Loading a folder no longer prints "ignored: N of other kinds"** for files that were never data.
+- **"Supercharging Exasol with Add-ons": one table, no question.** Every add-on on offer is listed, one row each (no "Select All", no tree), the two the kit installs on top. Dash Server and JSON Tables install at once when missing, in that table, each row with its own bar from the start (no grey activity lines: the log keeps what each install did) - no checkbox on their rows, side by side, the bar to the right - and then the same table waits for the rest (Skip ticked, so Enter goes on). Descriptions come from the catalog's own copy, so the table opens without a lookup; the About cache refreshes in the background. Without a terminal the two are installed and nothing is asked.
+- **The AI bridge step connects every AI client found here without a table.** "Setting up AI bridge (MCP server, clients and skills)", the server and read-only lines, then a spinner while each client's file is written by a worker of its own, and one line naming the clients connected ("AI clients connected: Claude Code, Codex, ..."). The skills are placed without lines of their own (the log keeps them). `exakit mcp-setup` keeps its table.
+
+### Skills for every AI client, Federation, and clearer data failures
+
+- **The install no longer gives up on a database that is running (macOS).** The health check ran `openssl s_client` in a pipeline, and the installer runs with `pipefail`: macOS's own `openssl` (LibreSSL) exits 1 even after a handshake that succeeded, so on a Mac without another `openssl` first on `PATH` the kit said the database never answered. It then "repaired" the running database by deploying over it; the launcher refused ("VM is already running") and recorded the deployment as failed, and every re-run stopped at the same step.
+  - The health check now reads what the handshake printed, never the client's exit status.
+  - A database whose VM is still running is never deployed over: it is given a second wait, and a VM that still does not answer is stopped before the deploy that starts it again.
+  - A machine already in that state recovers on the next run: when the launcher's deploy answers "VM is already running", the leftover runner is stopped and the deploy run once more. A runner inside its start budget is never stopped, and a database that answers is stopped only when it has never held data; otherwise the kit names the process and the command (`kill <pid>`).
+- **A sample dataset loads on a kit installed from a private repository.** When its own release cannot be reached without a token, the kit fetches the same archive from the public kit's release; the SHA-256 checks it either way.
+
+- **Your own MCP entries are kept.** When an AI client already had an MCP entry named `exasol` (your own Exasol MCP server) or `dash-server` (your own Dash Server) that the kit did not write, `exakit mcp-setup` replaced it, recorded it as the kit's, and `exakit uninstall` then removed it - the snapshot taken before the write lived in the kit home the uninstall deletes. Now an entry of that name the kit did not write is never replaced: the kit's is added beside it as `exasol-starter-kit` (or `dash-server-starter-kit`), a later setup or repair keeps that name, and uninstall removes only the entries the kit wrote. An entry identical to the kit's own, and one the kit recorded on an earlier run, stay the kit's. A Dash Server of your own already moved the kit's to the next free port (it never shares one), and one on PATH is never installed over, updated or removed. Exapump profiles in `~/.exapump`, a launcher and a database you had before the kit were already kept (issues #40, #41).
+- **Without exapump, the MCP step says so.** When exapump was missing, setting up the AI clients' access ended with a generic failure. It now says that MCP initialisation failed because the read-only database user the AI clients sign in with could not be created, that exapump is what creates it, and how to fix it: `exakit update exapump`, then `exakit mcp-setup`. The same on Windows.
+- **A connect that failed is no longer called a certificate fault when the reason is unknown.** `exakit connect postgresql` with `verify` and a CA ended with *the source's certificate or host name did not verify* although the certificate was fine. A database message holds some 2,000 characters; the connection string with the CA certificate in it is longer (a 4096-bit root such as ISRG Root X1 is 2.1 KB once encoded), so the database cut its message before the reason, and the kit then read the word CERTIFICATE inside the connection string itself. The class of a failure is now read from what follows the connection string, never from the string. When the message ends inside the string the kit says so, names no class, and says how to read the reason: connect once with `--set tls=require`, which keeps the string short, fix what it names, then connect again with the CA.
+- **The scheduler starts on a kit that pinned its database certificate.** Its launcher waited for the database at `EXA_HOST`, which a pinned kit no longer sets (the connection is `EXA_DSN`), so it stopped with `KeyError: 'EXA_HOST'` before the engine ran: "installed but did not start: Scheduler stopped during startup". It now waits at the address it read from the kit. Past that, the engine signed in with no password ("User password can not be empty", and `exakit update exasol-scheduler` said it did not validate): with `EXA_DSN` set, the engine reads the password only from the DSN and ignores `EXA_PASSWORD`. The launcher now puts it there, in the engine's environment only, never printed. Both shells.
+- **An Exasol VS Code extension you installed yourself is never offered again.** The kit found it only through the editor's command-line tool, which is often not on PATH (a Mac app, Cursor, Windsurf, VSCodium, a Windows install), so the add-on table offered to install what was already there. It now also reads the editors' extension folders (VS Code, Insiders, VSCodium, Cursor, Windsurf; a folder the editor marked removed does not count) and lists the extension as *managed outside the kit*, greyed out: never installed, updated or removed by the kit. The folders are read first: an editor slow to start during an install (its tool timing out) once let the table offer the extension that the install then refused. Both shells.
+- **Skills reach every AI client that reads them.** Claude Code reads `~/.claude/skills`; Codex, Cursor, GitHub Copilot, Gemini CLI and OpenCode read `~/.agents/skills`; Continue reads `~/.continue/skills`, now placed when Continue is on the machine. Claude Desktop and claude.ai read no folder: a skill reaches them as an uploaded ZIP.
+- **A folder's JSON file loads from a private kit repository.** The JSON engine was fetched anonymously, which a private repository answers with 404. It now comes through the API with `GITHUB_TOKEN`, as the datasets do, or from the public kit repository's copy of the same release, which the pinned checksum makes as good as the original.
+- **Each file's failure gives its own reason.** A failed file's reason was the last error anywhere in the log: the MCP read-only check's refusal named a JSON file's. Only the lines that file's load wrote are read now, and the kit's own warning when the engine wrote none.
+- **"Some of the data is not installed".** A failed local file or external source was reported as "sample data is not installed", even when the sample data had loaded.
+- **A folder load says when it installs the JSON engine, and Enter no longer stacks its bar.** The first JSON file installs the engine (a download and a Python environment, about a minute, once); the bar said only the file's name and sat still. It now reads "installing the JSON engine (first JSON file only, about a minute)". Keys typed while the bar runs are no longer echoed: an Enter moved the cursor down, and every redraw after it printed a second bar under the first.
+
+**`exakit connect --url`: paste a connection string.** A JDBC URL, a
+`postgres://`, `mysql://` or `mongodb+srv://` URI, an S3, Azure or Glue
+address, or a bare `host:port/database` as a cloud console shows it fills the
+connector's inputs; `--set` still wins. Each value passes the same check a
+`--set` gets. A password or token inside the string is never used or echoed:
+the credential is asked for separately. Unknown parameters are dropped by
+name, never by value.
+
+**`exakit source describe`: tables, columns and DDL.** Lists a connected
+source's tables and columns as Exasol sees them, from the local catalog, so
+nothing reaches the source (a Databricks warehouse is not woken). `--ddl`
+prints a `CREATE TABLE` per table and the `INSERT ... SELECT` that copies it,
+with `--schema` for the target; only the statements go to standard output.
+
+**Sources move to the adapter a kit update pins.** After an update changes a
+connector's adapter or driver, `exakit source check` (or `--all`) re-creates
+the source's adapter script on the new files, refreshes the virtual schema,
+records the new pins and deletes old files no source uses any more. A refresh
+that fails is said, with `exakit source refresh <name>`, and kept as
+`needs_refresh` until one succeeds.
+
+**The schema is checked before anything is created.** PostgreSQL, MySQL, SQL
+Server, Oracle and Snowflake: connect asks the source whether the schema (MySQL:
+the database) exists and the account may use it, before any script or virtual
+schema. Exasol would otherwise create an empty virtual schema and report
+success. A name in the wrong case is answered with the source's spelling.
+
+**After connect: a first query on a real table, and the connector's tips.**
+How each source's names arrive (quote MySQL's lower-case `"actor"`) and which
+types change on the way, measured on live sources: a Snowflake `NUMBER(38,0)`
+reads as text, a PostgreSQL domain or vector column cannot be read. `exakit
+source show` lists them too.
+
+**Lakehouse over Iceberg REST and Unity Catalog.** `exakit connect
+iceberg-rest` and `exakit connect unity` use the same pinned lakehouse engine
+and scripts as the AWS Glue route, and are GA like every other connector.
+Neither has been run against a live catalog yet.
+
+**Snowflake: an optional `role`.**
+
+**The database clock is named when a signed store refuses a read.** S3, Glue
+and Azure refuse a request signed more than 15 minutes off; the lakehouse
+engine reports that as a 403. `source check` now names the clock and the
+restart instead of pointing at the log.
+
+**Re-running the installer without a terminal no longer reports a failed
+data-load step.** With every bundled dataset already loaded, the data-load
+table pre-ticks the local-file row so Enter still does something; with no
+terminal that default stood, the loader asked for a path nobody could give,
+and the install ended with "one step did not complete". Without a person at
+the table that row is now dropped and the run says how to name a file
+unattended (`EXAKIT_DATA_FILE`). Same on Windows.
+
+**`exakit status` no longer waits forever on a database that stops
+answering.** Its dataset check asked the database without a time limit, after
+a probe that only proves the TLS handshake. A database that accepted logins
+and then answered nothing (seen live: a deadlocked loader) held status, and
+any agent calling it, for as long as it hung. The check now gives up after
+`EXAKIT_STATUS_SQL_TIMEOUT` seconds (default 20) and reports the manifest's
+answer, as it does for a database that is down. Same on Windows. Other callers
+keep waiting: under load a login alone can take seconds, and the installer must
+not read that as "down".
+
+**The database-password prompt hides input from the first keystroke.** It
+printed itself and only then turned terminal echo off, so a password pasted or
+typed by a password manager the moment the prompt appeared was echoed in clear
+(reproduced by typing at once). A shared `exakit_read_hidden` turns echo off
+first, restores the terminal's exact state afterwards and on Ctrl-C, and
+refuses to read where echo cannot be turned off.
+
+### The install's tables
+
+- **The add-ons table.** While you choose it shows each add-on's Version and Description; once Enter starts the install it shows Version and Status, with the step above the active row. A spinner covers the pause before it opens. That pause is shorter: each add-on's state is asked once per command instead of once per check, and the GitHub names and Abouts are looked up together, not one after another.
+- **Datasets say what they are.** The data table shows a short description beside each dataset.
+
+- **A running row says what it is doing.** In the data and add-on tables the bar is led by its step - `downloading 8.1 MB`, `loading`, `installing`, `validating` - in both shells; a narrow terminal shows the bar alone.
+
+#### The marketplace, tidied
+
+- **Tests.** `test_marketplace_rules.py` (the parser on present, absent and malformed answers; the apply skip; idempotent skills and login entries; the record writer) and `test_marketplace_blackbox.py` (the real `exakit` as a subprocess on bash, pwsh and powershell: stdin absent, a pipe and closed; `NO_COLOR`, `TERM=dumb`, `EXAKIT_NO_FANCY` and ANSI stripped; `COLUMNS=60`; every env answer; every command twice), both on Linux, macOS and Windows PowerShell 5.1 in CI.
+
+#### Audit fixes: every Critical and High from the audit of 705d2f2
+
+- **Codex keeps its own settings.** Registering the exasol server re-writes `~/.codex/config.toml`, and the kit used to save every decimal number in it as text: the ChatGPT app's `startup_timeout_sec = 120.0` became `"120.0"`, and ChatGPT then refused to start (*invalid type: string "120.0", expected f64*). Numbers, dates, inline tables and lists of tables now come back exactly as they were, and the kit checks the file it is about to write against the one it read: if any existing value would change, it leaves config.toml alone and says so.
+- **The other AI clients' configs too.** Checked every client the kit writes to. Claude, Claude Code, Cursor, GitHub Copilot, Gemini CLI and OpenCode already kept every value; they now also keep your keys in your order (three of them used to sort the whole file) and write names like Müller as they are, not as `\u00fc` escapes. A file with comments is still refused and left untouched. Continue's block file could misread a value the kit wrote into it: `0x1F`, `1_000`, a date or `.inf` came back as a number or date, a newline as a space, and a value starting with `@` (an npm `@scope/package`) made the file unreadable. Anything that is not a plain word starting with a letter is now quoted.
+- **Updating an existing install works again (LCY-01, Critical).** This branch made `exakit update`, the launcher update, repair and uninstall act only on components with an ownership record, and no kit before it ever wrote one, so every install from 0.2.0 to 0.2.4 had its launcher, database and exapump skipped while `update --json` said `current`. A component with no record at all now counts as the kit's when the kit's own manifest says the kit installed it: the launcher recorded at the kit's own path, exapump at the kit's own path, the database that launcher deployed in the folder the kit recorded, the MCP server it set up. A launcher recorded anywhere else is never claimed. Re-running the installer writes the missing record (it used to write "user", for good: LCY-02), the MCP update writes its own (LCY-04), and uninstall removes an upgraded install's database again (LCY-05). A skipped row in `update --json` now says why, and the top-level `remedy_hint` names any component kept behind its advertised version (LCY-03). Tested on both twins with a 0.2.3-shaped manifest.
+- **A failed launcher download leaves the working launcher (LCY-06).** The old launcher is replaced only once the new one is downloaded and verified.
+- **`info --json` and `mcp-doctor --json` say installing and interrupted (AGK-01)** like `status --json`, instead of "stopped, run `exakit start`". While the installer runs, `remedies.database` is to wait, never `repair-runtime` (AGK-03), and a deployment refused for the WSL kernel or a stopped Docker gets that refusal's own remedy (AGK-02).
+- **Every environment answer is checked before anything is installed (AGK-10).** A typo in `EXAKIT_DATASETS`, `EXAKIT_MCP_CLIENTS`, `EXAKIT_MARKETPLACE_ADDONS`, `EXAKIT_ON_EXISTING`, `EXAKIT_CONTAINER_ENGINE` or a yes/no answer such as `EXAKIT_REUSE_DB=maybe` now stops the dry run and the real install with exit 2, naming the known values; an unreadable yes/no answer is refused instead of waiting on the terminal.
+- **`setup/exakit.env` lists `EXAKIT_CONTAINER_ENGINE` and `EXAKIT_WSL_CHECKED` (QAT-02)**, which PR 55 added; `tests/env-file.sh` is green again.
+- **The kit archive can be pinned (SEC-01, partly).** `EXAKIT_KIT_SHA256` makes `install.sh` and `install.ps1` refuse any other archive before unpacking it. The default install from `main` is still unverified: closing that needs a release that publishes the archive digest. The code comment that claimed the kit copy "came from a release" now says what is true.
+- **Windows: non-ASCII user names (WIN-01, WIN-02).** The login entry and every add-on `.cmd` launcher are written for cmd.exe as the `exakit.cmd` shim already was: the profile folded into `%USERPROFILE%`, the rest in the console's code page. A step after an add-on install can only warn, never crash. The login entry's comment names `exakit autostart`, which exists.
+- **Windows PowerShell 5.1 now runs the ownership suite (QAT-07).**
+
+#### Settings
+
+- **One settings file.** `~/.exasol-starter-kit/exakit.env` lists every setting the kit reads with its default; uncomment a line to change it. A value on the command line still wins, nothing in the file is run, and secrets are refused.
+
+#### Changed
+
+- **Exasol MCP server 2.4.0** (was 2.3.0), for the launcher's sidecar and the kit's own server alike: FastMCP 4, pooled connections kept when the database rejects a query, fixed BucketFS tools on Windows. The SQL-preprocessor tools are off: Semantic SQL is a framework module in every session, so a semantic query is an ordinary SELECT, and no tool can take the framework out of the server's session. With the Semantic Views add-on installed, the read-only login also holds `SEMANTIC_USER` and still cannot write a table of yours. `exakit update` gives a server set up by an earlier kit the new settings.
+- **Updating the launcher's MCP server.** Its image is pinned by digest in the kit, so `exakit update` offers exactly that image's version and `exasol start` recreates only the MCP container (the database stays up, the client entries keep their URL). A newer image arrives with the kit update that pins it - never from the fetched version list - and asking for a version with no pinned image (`EXAKIT_MCP_VERSION`) is refused instead of reported as done.
+- **An add-on's first import may take its time.** The marketplace asked a freshly installed add-on to import itself with a ten-second budget, and a Dash Server install ended with `Command ... timed out after 10 seconds` on a machine where that first import (bytecode compiled on the spot, macOS checking each new native library) took longer. The probe now allows two minutes, a probe that still does not answer is "not answered" (said, and checked again at the next `exakit update`) rather than the end of the install, and the add-on environments are installed with their bytecode compiled, so the first import and every start are quick.
+- **A deploy or start that fails says why.** On Linux, WSL and Windows the kit reads the error the engine recorded for the database container (`inspect --format {{.State.Error}}`), shows the launcher's last lines, and names the cause and the manual fix when it recognises it (a missing `pids` cgroup controller, a machine that cannot resolve the image registry). A deployment the kit made that never answered is offered for replacement, default yes (`EXAKIT_REPLACE_DB=0` keeps it); `exakit status` says why a stopped deployment is stopped. The kit never changes a Podman machine on Windows: as in 0.2.4 below, the fix is named, not applied.
+
+### Core setup, the preprocessor framework and Federation
+
+**The SQL preprocessor framework is a core component, and `exakit update`
+can now finish setup that only the installer can do.**
+
+- The installer sets the framework up in **Step 3/4 Setup Utilities**,
+  right after exapump and before any data is loaded. It installs the pinned
+  [preprocessor framework](https://github.com/exasol-labs/preprocessor-framework)
+  (`components.preprocessor` in versions.json) as a **core-only package**: the
+  downloaded `release.sql` is verified against its SHA-256, its one `PYTHON3`
+  script (the registry resolver behind `PREPROC INSTALL MODULE ... FROM <url>`)
+  is left out because local deployments ship no script language container,
+  and the result is verified against a second pin (`sha256.core-only`). The
+  dispatcher, rules, refresh and `PREPROC` commands are Lua and complete; the
+  kit registers add-on modules itself. The step then tries
+  `PREPROC_RT.MASTER` in one session with ordinary SQL and
+  a module scoped to the kit's admin user, then makes it the database default
+  and verifies again in fresh connections. A failure after the default
+  changed puts the previous setting back. A slot holding another script, or a
+  framework the kit did not install, is left exactly as it is and reported in
+  the closing summary. The step runs on every installer pass: an installed
+  framework is verified, never reinstalled (`release.sql` is clean-install
+  only); only the kit's own interrupted install is ever dropped.
+- **Core tasks.** `setup/core/tasks.json` names setup a release adds that only
+  the installer can do; `core_tasks.completed` in the laptop's manifest
+  records what passed its checks. `exakit update` reruns the downloaded
+  installer once when a task is pending - without asking the first install's
+  questions again and with every component pinned to what is installed - and
+  defers a database task while the database is stopped. `--json` reports it
+  as the `core-setup` component.
+- **Handover.** An `exakit update` that downloads a newer kit hands the rest
+  of the run to the new updater, so one run is usually enough from 0.3.0 on.
+  When it cannot (the new `exakit` is missing or not executable, or on
+  Windows, where the kit swap is usually staged for the moment the command
+  exits), the run stops after the kit: every later component is deferred
+  with remedy `exakit update`, and the new-setup check waits for that run
+  too, so it never reruns the old installer. Under `--json` a handed-over
+  run is a `--json` run, so a failed updater is a row and the rest are still
+  tried; it writes the `error` and `remedy_hint` fields only to a kit that
+  declares it reads them (`EXAKIT_UPDATE_ROW_FIELDS=7`), so an older kit's
+  five-field reader still parses its rows. Coming from 0.2.5, run
+  `exakit update` twice (the 0.2.5 updater cannot hand over), or re-run the
+  installer once.
+- `setup/preprocessor/` holds the package description, the dispatch probe,
+  the (empty) list of tested upgrade paths and the folder add-ons will
+  register their modules from. Semantic Views and JSON Tables register
+  their modules from it.
+- CI: versions.json requires the `preprocessor` block, hashes the pinned
+  `release.sql`, and runs `tests/core-setup.{sh,ps1}` and
+  `tests/preprocessor-lifecycle.{sh,ps1}`.
+
+**External sources as virtual schemas: `exakit connect` and `exakit source`.**
+
+- `exakit connect [source]` queries a remote PostgreSQL, MySQL, SQL Server,
+  Oracle, Snowflake or BigQuery - or JSON, CSV and Parquet files in Amazon S3
+  or Azure Blob Storage, mapped to tables by an EDML file - from the local
+  database through an Exasol virtual schema. Search by
+  name or alias; on a terminal it asks for each input and shows the plan
+  (downloads, objects, the MCP exposure) before changing anything; unattended
+  it takes `--set KEY=VALUE` and the credential on stdin or `--password-file`,
+  never as an argument. Adapters and JDBC drivers are pinned, fetched from
+  their publishers and SHA-256 verified; the credential lives only in the
+  database's `EXAKIT_SRC_<NAME>`, the tables appear as `VS_<NAME>`. TLS
+  verifies certificate and host name by default. A failed connect leaves
+  nothing behind.
+- `exakit source list|issues|catalog|show|check|reauth|refresh|disconnect|
+  remove`: disconnect drops only the CONNECTION; remove drops the owned
+  objects and the downloaded files no other source uses.
+- BigQuery's driver reads its service-account key only from a file, so the
+  kit writes the key to BucketFS as the source's own file (owner-only on this
+  computer); the CONNECTION names its path, never the key. Any database user
+  who may create scripts can read BucketFS, so connect and check name such
+  users other than administrators. disconnect and remove delete the key file;
+  reauth replaces it and keeps the previous one when the new one is refused.
+- Snowflake: the JDBC loader on Exasol Personal trusts no certificate (its
+  Java's CA store is a dangling symlink), and Snowflake's driver reads trust
+  only from that store. The loader's main class is now the kit's
+  `exakit.loader.TrustStoreDriver`, which points it at the language
+  container's own CA store and hands over to the Snowflake driver; nothing
+  is disabled.
+- Lakehouse (Profile D): `exakit connect lakehouse` maps one AWS Glue database
+  - its Iceberg tables, and plain Hive Parquet ones - read in place from S3
+  by exasol-labs' lakehouse-engine-rs 0.57.3 (Apache DataFusion in the Rust
+  language container MongoDB already uses). The release archive and the
+  library inside it are both pinned per CPU; only the library is staged.
+  Its four scripts are shared by every lakehouse source. The credential is
+  an IAM key pair (the `aws iam create-access-key` JSON), held as the
+  CONNECTION's JSON password. Measured against Athena-written Iceberg v2
+  tables with a DELETE and an UPDATE: every answer equals Athena's.
+  The engine's companion scripts generalize the import script: a
+  connector can now name several, created and dropped together.
+- Databricks (Profile C, a Lua adapter): `exakit connect databricks` maps one
+  Unity Catalog schema through exasol/databricks-virtual-schema 1.0.2, with
+  the rows read over IMPORT FROM JDBC by the Databricks JDBC driver 3.4.3
+  (Apache-2.0, Maven Central). Upstream calls the REST API with certificate
+  verification off (its issue 4): the database's LuaSec refuses every CA
+  file. The kit keeps the dist file byte for byte and appends a suffix that
+  verifies the chain against a pinned Mozilla CA bundle (curl.se
+  2026-10-20) and the host name, in memory, before any request is sent.
+  A personal access token only (M2M would put its secret in the URL);
+  join pushdown is off (1.0.2 writes a three-table join Databricks refuses);
+  the samples catalog is named as unreadable (its metadata has no columns).
+- MongoDB (Profile D, a native adapter): `exakit connect mongodb` maps one
+  collection to a root table plus a child table per nested object and array,
+  through exasol-labs' exasol-mongodb-vs 0.1.3 in the Rust language container
+  (language-container-rs 0.33.0). Both are pinned per CPU (aarch64, x86_64)
+  and checksum-verified; the container is installed on first use with
+  consent and one restart (exit 23 asks for it). The library's entry points
+  are bound to its script names, so all MongoDB sources share
+  `EXAKIT_VS.MONGODB_ADAPTER` and `MONGODB_SCAN`. A URI with credentials is
+  refused; reauth tries the new password on a throwaway schema first.
+- Windows: the credential reaches the engine base64-encoded, because Windows
+  PowerShell 5.1 re-encodes what it pipes to a native program (non-ASCII
+  characters arrived as '?').
+- `exakit data-load` offers "Connect an external source".
+- Exasol Personal's language containers ship an empty DNS configuration, so
+  Java in the database could resolve no host name. Every database start now
+  points them at the deployment's DNS (macOS through the launcher VM; Linux,
+  WSL and Windows through the host's Podman). A loader driver needs no
+  restart on Personal 2.3.0; the first connect installs the Java language
+  container if it is missing (asked; one restart).
+- New skill `exasol-virtual-schemas`. Tests: `tests/virtual-schemas.{sh,ps1}`,
+  `tests/personal-slc-dns.sh`.
 ## 0.2.5
 
 **A hotfix release: the macOS install, a complete uninstall, and Windows MCP.**

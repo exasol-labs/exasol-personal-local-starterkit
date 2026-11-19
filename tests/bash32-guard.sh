@@ -36,7 +36,10 @@ for f in "$ROOT"/tests/*.sh "$ROOT"/setup/*.sh "$ROOT"/setup/lib/*.sh "$ROOT"/se
     # This file quotes the construct in its own comments and fixtures.
     case "$f" in */bash32-guard.sh) continue ;; esac
     while IFS= read -r line; do
-        _stripped="$(printf '%s' "$line" | sed 's/^[[:space:]]*//')"
+        # Leading whitespace stripped in-process: a printf | sed pipeline per
+        # line forked twice for every line of every script, four minutes on
+        # the macOS runner for a guard that reads text.
+        _stripped="${line#"${line%%[![:space:]]*}"}"
         case "$_stripped" in \#*) continue ;; esac
         # Only lines that build a sed RANGE with a brace in an address.
         case "$_stripped" in *sed*"{/,"*) ;; *) continue ;; esac

@@ -39,7 +39,8 @@ _fn_body() {
     ' "$CLI"
 }
 
-_defined_in_cli() { grep -qE "^function $1([ ({]|$)" "$CLI"; }
+# A helper defined inside the uninstall run itself (Test-PreservedEntry) counts as defined.
+_defined_in_cli() { grep -qE "^[[:space:]]*function $1([ ({]|$)" "$CLI"; }
 _stubbed_in_test() { grep -qE "function $1([ ({]|$)" "$TEST"; }
 
 ALL="${TMPDIR:-/tmp}/ps-uninst-all.$$"

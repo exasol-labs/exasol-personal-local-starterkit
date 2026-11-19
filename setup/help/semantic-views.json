@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "id": "semantic-views",
+  "kind": "addon",
+  "role": "A semantic layer inside the database: business entities, dimensions, facts and governed metrics defined once in Exasol, then queried by SQL users, BI tools and AI agents through one compiler. Everything it installs lives in the database: Lua scripts and catalog tables in SYS_SEMANTIC, SEMANTIC_CATALOG, SEMANTIC_ADMIN, SEMANTIC_AGENT and SEMANTIC_SOURCE, and the role SEMANTIC_USER.",
+  "docs": "https://github.com/exasol-labs/exasol-semantic-views#readme",
+  "installed_by": "Never by the installer. Only through exakit marketplace.",
+  "platforms": "Wherever the kit's database runs: it installs into the database, not onto this computer.",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace semantic-views",
+      "note": "The kit downloads the release it pins, checks its SHA-256, and runs the release's own installer against the local database as the kit's administrator. Running it again is safe: models already defined are kept."
+    },
+    {
+      "step": "Check what is installed",
+      "run": "exakit sql 'SELECT DISPLAY_VERSION, INSTALLED_AT FROM SEMANTIC_CATALOG.PRODUCT_VERSION'"
+    },
+    {
+      "step": "Query with Semantic SQL",
+      "run": "exakit sql 'SELECT <dimension>, <metric> FROM SEMANTIC_<MODEL>.<OBJECT> GROUP BY <dimension> LIMIT 100'",
+      "note": "Semantic SQL works in every session of every user with nothing to switch on: the kit registers Semantic Views with its SQL preprocessor framework. There is nothing to switch on per session, and nothing should be: switching a session's preprocessor takes the framework out of that session. Create a model and its metrics first: the exasol-semantic-modeler skill and the project's docs/creating-metrics.md walk through it."
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit marketplace",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Install it.",
+      "examples": [
+        "exakit marketplace exasol-scheduler",
+        "exakit marketplace --list --json"
+      ],
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "[<component>] [--yes] [--json]",
+      "summary": "Install the release versions.json pins now; the database keeps its models.",
+      "examples": [
+        "exakit update semantic-views"
+      ],
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. For this add-on, use semantic-views.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
+      "summary": "Remove its schemas and role, only when no model is defined.",
+      "examples": [
+        "exakit uninstall semantic-views --dry-run",
+        "exakit uninstall semantic-views"
+      ],
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "The admin APIs are Lua scripts: call them with EXECUTE SCRIPT SEMANTIC_ADMIN.<name>(...), never as SELECT SEMANTIC_ADMIN.<name>(...).",
+    "Your AI clients ask metric questions in Semantic SQL through the kit's MCP server: the add-on grants the kit's read-only AI login the SEMANTIC_USER role (uninstall takes it back), and its semantic queries run as written, since Semantic SQL is on for every session. The login still cannot change any table of yours. The exasol-semantic-analyst, -modeler and -reviewer skills arrive with the add-on.",
+    "Uninstall never deletes a model: with one defined it stops and says so. Drop each one first with EXECUTE SCRIPT SEMANTIC_ADMIN.DROP_MODEL('<model name>')."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "Semantic Views is already in the database and was not installed by the kit",
+      "fix": "It was installed with its own tools/install.py. The kit leaves it to that owner: update it the same way, or remove it there."
+    },
+    {
+      "symptom": "A semantic query fails with SEMANTIC_SURFACE_001, or with 'not a valid GROUP BY expression', or is refused for privileges",
+      "fix": "SEMANTIC_SURFACE_001 or the GROUP BY error: the Semantic Views module is not registered with the kit's SQL preprocessor framework (the framework is not active, or the database's slot holds your own preprocessor); run exakit update, which sets the framework up and registers the module. Refused: exakit update semantic-views grants the AI login SEMANTIC_USER again. A model granted to roles with GRANT_MODEL_ROLE is private: grant it to the AI login too, EXECUTE SCRIPT SEMANTIC_ADMIN.GRANT_MODEL_ROLE('<model>', 'MCP_READONLY')."
+    },
+    {
+      "symptom": "Checksum mismatch",
+      "fix": "The downloaded archive is not the release the kit pins. Nothing was installed. Try again; if it persists, report it."
+    }
+  ]
+}

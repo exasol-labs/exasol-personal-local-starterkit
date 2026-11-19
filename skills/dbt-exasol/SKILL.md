@@ -20,7 +20,9 @@ credentials and no launcher.
 dbt-exasol debug        dbt-exasol run        dbt-exasol test
 ```
 
-Everything after the name is dbt's own command line. The kit deliberately does
+Everything after the name is dbt's own command line. The launcher turns dbt's
+anonymous usage stats off (`DBT_SEND_ANONYMOUS_USAGE_STATS=false`) unless the
+user set that variable. The kit deliberately does
 **not** install a `dbt` command: a user with dbt-snowflake or dbt-postgres
 already relies on that name, and taking it over would break their other
 warehouse. If `dbt` on PATH already carries the Exasol adapter, the marketplace

@@ -269,11 +269,9 @@ lacks "the launcher is not streamed to the screen" \
     "install local 2>&1 | exakit_stream_foreign" "$RP"
 has "the launcher is piped into the collector" \
     '_personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"' "$RP"
-ADDONS="$(cat "$ROOT/setup/lib/exasol-vscode.sh" "$ROOT/setup/lib/dash-server.sh" \
-    "$ROOT/setup/lib/json-tables.sh")"
-lacks "no add-on redirects a fetch by hand" "( fetch " "$ADDONS"
-lacks "the VS Code install is not a bare redirect" \
-    '_exasol_vscode_code --install-extension "$(_exasol_vscode_host_path "$_evi_vsix")" --force' "$ADDONS"
+lacks "no add-on redirects a fetch by hand" "( fetch " "$(cat "$ROOT/marketplace/addons/dash_server.py")"
+has "the VS Code install uses the logged Python runner" \
+    'ctx.run_logged("Installing Exasol for VS Code"' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 
 printf '\n== an add-on install reports its own stages ==\n'
 
@@ -338,7 +336,7 @@ for _dup_sh in "$ROOT"/setup/lib/*.sh; do
     check "$(basename "$_dup_sh") defines each function once" "" "$_dup_shnames"
 done
 
-printf '\n== all three platforms install in the same six steps ==\n'
+printf '\n== all three platforms install in the same four steps ==\n'
 
 MAC_SH="$(cat "$ROOT/setup/setup-macos.sh")"
 WSL_SH="$(cat "$ROOT/setup/setup-linux.sh")"
@@ -358,23 +356,30 @@ done
 # Counted as DECLARATIONS, not as label text: the two shell installers declare
 # their first two steps and delegate the remaining four to kit_shared_steps, so
 # a raw count of 'Step n/6' strings would differ by platform for a reason that
-# has nothing to do with the shape being the same.
+# has nothing to do with the shape being the same. The third step, Setup
+# Utilities, holds exapump and the database features, which the core-setup
+# module declares on both sides.
 check "macOS declares two, then delegates" "2" \
     "$(printf '%s\n' "$MAC_SH" | grep -c '^if begin_step ')"
 check "WSL declares two, then delegates" "2" \
     "$(printf '%s\n' "$WSL_SH" | grep -c '^if begin_step ')"
-check "Windows declares all six itself" "6" \
+check "Windows declares its steps and Setup Utilities items itself" "6" \
     "$(printf '%s\n' "$WIN_PS" | grep -c 'Begin-ExakitStep "')"
-# The shared tail must be told the right start and total, or the four steps it
-# owns would number themselves against the old five.
-check "macOS hands over at 3 of 6" "1" \
-    "$(printf '%s\n' "$MAC_SH" | grep -c 'kit_shared_steps 3 6')"
-check "WSL hands over at 3 of 6"   "1" \
-    "$(printf '%s\n' "$WSL_SH" | grep -c 'kit_shared_steps 3 6')"
-# And no installer still advertises a five-step run.
-lacks "macOS has no stale total"   "/5  " "$MAC_SH"
-lacks "WSL has no stale total"     "/5  " "$WSL_SH"
-lacks "Windows has no stale total" "/5  " "$WIN_PS"
+check "...and hands the fourth to the core-setup module" "1" \
+    "$(printf '%s\n' "$WIN_PS" | grep -c 'Invoke-ExakitCoreDatabaseStep -Label "Database features"')"
+has "...under Setup Utilities, the third of four" '"Step 3/4  Setup Utilities"' "$WIN_PS"
+# The shared tail must be told the right start and total, or the five steps it
+# owns would number themselves against the old six.
+check "macOS hands over at 3 of 4" "1" \
+    "$(printf '%s\n' "$MAC_SH" | grep -c 'kit_shared_steps 3 4')"
+check "WSL hands over at 3 of 4"   "1" \
+    "$(printf '%s\n' "$WSL_SH" | grep -c 'kit_shared_steps 3 4')"
+# And no installer still advertises a five-, six- or seven-step run.
+for _stale in "/5  " "/6  " "/7  "; do
+    lacks "macOS has no stale total ($_stale)"   "$_stale" "$MAC_SH"
+    lacks "WSL has no stale total ($_stale)"     "$_stale" "$WSL_SH"
+    lacks "Windows has no stale total ($_stale)" "$_stale" "$WIN_PS"
+done
 
 # --- Linux is a served platform ----------------------------------------------
 echo
@@ -385,6 +390,27 @@ COMMON_SH_7="$(cat "$ROOT/setup/lib/common.sh")"
 # starter that hands off must not be declared as a service that crashed.
 has "autostart is a systemd user unit" 'EXAKIT_SYSTEMD_USER_DIR' "$COMMON_SH_7"
 has "...as a oneshot where the command hands off" 'Type=oneshot' "$COMMON_SH_7"
+# LNX-08: the database's handoff unit retries a transient boot failure - but
+# only where systemd loads Restart= on a oneshot (244+); 239 (RHEL 8) refuses
+# the whole unit if it is there.
+_lnx08_unit() {
+    _lu="$(mktemp -d)"; mkdir -p "$_lu/bin" "$_lu/units"
+    printf '#!/bin/sh\n[ "$1" = --version ] && echo "systemd %s (x)"\nexit 0\n' "$1" > "$_lu/bin/systemctl"
+    chmod +x "$_lu/bin/systemctl"
+    HOME="$_lu" EXAKIT_HOME="$_lu/kh" EXAKIT_SYSTEMD_USER_DIR="$_lu/units" PATH="$_lu/bin:/usr/bin:/bin" bash -c '
+        . "$1/setup/lib/common.sh" 2>/dev/null
+        detect_os() { echo linux; }
+        _exakit_service_autostart_command() { printf "%s\n" /x/exakit start database; }
+        loginctl() { :; }
+        _exakit_autostart_register database >/dev/null 2>&1' _ "$ROOT"
+    cat "$_lu"/units/*.service 2>/dev/null
+    rm -rf "$_lu"
+}
+_lnx08_new="$(_lnx08_unit 255)"; _lnx08_old="$(_lnx08_unit 239)"
+has "...which retries a failed boot start on systemd 244+" 'Restart=on-failure' "$_lnx08_new"
+has "...within a start limit" 'StartLimitBurst=5' "$_lnx08_new"
+has "...and on systemd 239 it is still a oneshot" 'Type=oneshot' "$_lnx08_old"
+check "...without the Restart= that would stop it loading" "0" "$(printf '%s\n' "$_lnx08_old" | grep -c '^Restart=')"
 # LNX-12: a user unit dies at logout without lingering; the kit enables it or
 # says what an admin has to run.
 has "lingering is attempted" 'loginctl enable-linger' "$COMMON_SH_7"

@@ -45,22 +45,37 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 This kit sets up an analytics database on your own machine and connects your AI assistant to it. Everything runs locally, so your data stays with you. You see every SQL statement before it runs and can check each answer yourself.
 
-The install command sets up four components and connects them:
+The install command sets up five components and connects them:
 
 | Component | What it does |
 |---|---|
-| [MCP server](https://github.com/exasol/mcp-server) | Let Claude, Cursor or other supported MCP clients query your database through a dedicated read-only login |
+| [MCP server](https://github.com/exasol/mcp-server) | Let Claude, Cursor or other supported MCP clients query your database through a dedicated read-only login. One server runs beside the database at `http://127.0.0.1:4896/mcp`, and every AI client uses that URL |
 | [Exasol&nbsp;Personal&nbsp;Local](https://github.com/exasol/exasol-personal) | An in-memory analytics database that runs on your machine |
 | [exapump](https://github.com/exasol-labs/exapump) | Loads CSV and Parquet files and runs SQL from your terminal |
 | [pyexasol](https://github.com/exasol/pyexasol) | The official Exasol Python driver, installed in its own environment |
+| [SQL&nbsp;preprocessor&nbsp;framework](https://github.com/exasol-labs/preprocessor-framework) | Lets add-ons such as Semantic Views and JSON Tables extend SQL in every session, with no setup per session |
 
-It also gives your AI agent eight skills, one for each part of the kit. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
+It also gives your AI agent a skill for each part of the kit and for each Federation connector. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
 
 ## What's new
 
+### Federation: query your other data
+
+`exakit connect <connector>` makes a remote database, warehouse or bucket queryable from your local Exasol as a virtual schema, `VS_<NAME>`. You join it with your local tables in plain SQL. The data stays at the source, and each query reads only what it needs. There are 11 connectors: Snowflake, Databricks, MongoDB, PostgreSQL, MySQL, Oracle, SQL Server, BigQuery, Amazon S3, Azure Blob Storage and lakehouse catalogs (Iceberg and Delta).
+
+1. Prepare the source: a read-only user, and your computer's IP allowed in.
+2. Run `exakit connect` and pick the source, or `exakit connect postgresql`.
+3. Talk to your data: ask your AI client in plain words, for example "Which customers in VS_SALES ordered the most?". Or query it yourself: `exakit sql "SELECT * FROM VS_SALES.ORDERS LIMIT 10"`.
+
+Two commands are all you need: **`exakit connect`** adds a source, and **`exakit source`** shows your sources and everything you can do with them next. The [Federation guide](docs/virtual-schemas/README.md) has a page for each connector.
+
+### Semantic Views and the SQL preprocessor
+
+Every install now gets the SQL preprocessor framework. Semantic Views and JSON Tables plug into it, so Semantic SQL and JSON paths work in every session, from every client, with nothing to switch on. Install Semantic Views from `exakit marketplace`, define your metrics once, and query them from any client. Another database user who should run Semantic SQL needs `GRANT SEMANTIC_USER TO <user>`.
+
 ### Add-ons through `exakit marketplace`
 
-The base install stays small. When you want more, you pick an add-on by the outcome you want, and the kit installs it, checks that it works, and keeps it current with `exakit update`. The installer asks once at the end of a successful install, and `exakit marketplace` opens the same list at any time.
+The base install stays small. When you want more, you pick an add-on by the outcome you want, and the kit installs it, checks that it works, and keeps it current with `exakit update`. Dash Server and JSON Tables come with the install (on Windows, from the add-ons table at the end). The install ends with one table of the other add-ons, and `exakit marketplace` opens the same list at any time.
 
 | Add-on | What you get |
 |---|---|
@@ -69,11 +84,12 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [JSON&nbsp;Tables](https://github.com/exasol-labs/exasol-json-tables) | JSON files, nested ones included, turned into tables you can query |
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
+| [Semantic&nbsp;Views](https://github.com/exasol-labs/exasol-semantic-views) | Metrics and dimensions defined once in the database, then queried in Semantic SQL from any client |
 
 
 ### JSON support
 
-`exakit data-load` now takes JSON files, including nested documents, and loads them as regular tables. The load goes through the JSON Tables add-on, which the kit offers the first time you need it.
+`exakit data-load` now takes JSON files, including nested documents, and loads them as regular tables. The load goes through the JSON Tables add-on, which comes with the install. JSON paths then work in plain SQL.
 
 ### Bulk upload
 
@@ -95,9 +111,13 @@ If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts
 
 ## Upgrade path for the starter kit
 
-To upgrade to 0.2.5, run `exakit update`. On Windows with Podman, WSL 2.7 or newer is recommended for Exasol Personal 2.4: if `exakit start` then fails with an nftables error, run `wsl --update`.
+0.3.0 is a major upgrade. From 0.2.5, run `exakit update` twice. The first run installs the 0.3.0 kit, and the second run updates its parts. Re-running the install command from the top of this page once does the same job.
 
-To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On macOS `exakit update` does the same job.
+Your database, your data and your tables stay as they are. TPC-H from 0.2.5 stays loaded. Your AI clients move to the new MCP URL. MCP entries you added yourself and your add-ons are kept.
+
+On Windows, `exakit update` from 0.2.5 may wrongly say "Everything is already current" when one of GitHub's addresses does not answer. Then run `irm https://www.exasol.com/install/starter-kit.ps1 | iex` once instead.
+
+On Windows with Podman, WSL 2.7 or newer is recommended for Exasol Personal 2.4: if `exakit start` then fails with an nftables error, run `wsl --update`.
 
 ## Connect your AI client and ask
 
@@ -105,9 +125,9 @@ To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this pag
 exakit mcp-setup
 ```
 
-The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
+The install connects every AI client it finds on your machine, without asking. Run `exakit mcp-setup` any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-Three sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+Two sample datasets are loaded for you: retail sales in `RETAIL_SALES` and bank transactions in `BANK_TRANSACTION`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 21 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 
@@ -121,9 +141,12 @@ exakit stop            # stop it (your data is kept)
 exakit data-load       # load more data
 exakit mcp-setup       # connect AI clients
 exakit mcp-doctor      # AI connection health check
+exakit connect         # query another database or bucket (Federation)
+exakit source          # manage your connected sources: list, check, refresh, reauth, remove
 exakit version         # what is installed, and what is newer
 exakit update          # apply what is pending (asks before it stops the database)
 exakit marketplace     # optional add-ons (dashboards & more)
+exakit whats-new       # what changed in this version
 exakit help            # the commands it offers
 ```
 
@@ -166,10 +189,12 @@ The whole flow, from install to the first query: -->
 | How&nbsp;can&nbsp;I&nbsp;learn&nbsp;more<br>about&nbsp;an&nbsp;`exakit`&nbsp;command? | Run `exakit help <command>`. For example, `exakit help marketplace`. |
 | The&nbsp;install&nbsp;failed&nbsp;partway&nbsp;through? | Re-run the install command. It skips what is already done and picks up where it left off. |
 | `exakit` not recognized after<br>a Windows install? | Re-run the install command. It adds `~\.local\bin` to your user PATH and fixes the command. |
-| Port&nbsp;8563&nbsp;already&nbsp;taken? | If an Exasol database is on it, the kit adopts that database. If another program is on it, the kit says which program and leaves it running. Stop that program and re-run. `exakit info` shows the port your database uses. |
+| Port&nbsp;8563&nbsp;already&nbsp;taken? | If an Exasol database is on it, the kit adopts that database. If Exasol's own runner from an interrupted install still holds it, the installer waits for it and clears it; one it cannot use is named with the command that frees the port (`kill <pid>`). If another program is on it, the kit says which program and leaves it running. Stop that program and re-run. `exakit info` shows the port your database uses. |
 | Behind&nbsp;a&nbsp;corporate&nbsp;proxy? | Set `HTTPS_PROXY` before installing so the kit can download through your proxy. Use `export HTTPS_PROXY=http://proxy.example.com:8080` on macOS and Linux, or `$env:HTTPS_PROXY = 'http://proxy.example.com:8080'` in PowerShell. For proxies that require a login, the Windows installer uses your signed-in Windows account. Podman image pulls may need separate proxy and certificate settings inside its machine. See the [Podman troubleshooting guide](quickstarts/podman.md). |
 | Installing&nbsp;over&nbsp;a&nbsp;database<br>I&nbsp;already&nbsp;have? | The kit adopts your existing database, running or stopped, and reuses it with its data intact. The installer replaces a database only if it cannot start at all, and it warns you first. |
-| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Run `exakit update` (from 0.1.x, re-run the install command). See [Upgrade](#upgrade-path-for-the-starter-kit). |
+| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | From 0.2.5, run `exakit update` twice, or re-run the install command once. See [Upgrade](#upgrade-path-for-the-starter-kit). |
+| Windows,&nbsp;0.2.5:&nbsp;update&nbsp;says<br>everything&nbsp;is&nbsp;current? | `exakit update` from 0.2.5 may wrongly say "Everything is already current" when one of GitHub's addresses does not answer. Then run `irm https://www.exasol.com/install/starter-kit.ps1 \| iex` once instead. |
+| Does&nbsp;Federation<br>copy&nbsp;my&nbsp;data? | No. A connected source stays where it is. Each query reads only what it needs from the source. |
 | How&nbsp;do&nbsp;I&nbsp;remove&nbsp;everything? | Run `exakit uninstall`. |
 
 ---

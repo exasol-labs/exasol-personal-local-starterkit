@@ -170,144 +170,34 @@ else
     fail "the PowerShell twin cannot tell which clients to filter out"
 fi
 
-# 9. A handshake that fails says what it said. This is the AI-bridge step: a
-#    user whose assistant cannot see the database starts here, and the answer
-#    ("authentication failed", a bad DSN, a package that would not install) is
-#    in this process's own hands when it happens. It used to be spent on "see
-#    log", which sends the reader into a different program to look for
-#    something this run already knew.
-#
-#    The trap for a future change is that the log line still exists, so losing
-#    the SCREEN line looks like tidying. These checks are on the rendered
-#    output for that reason, and on the twin's source, which cannot run here.
-. "$ROOT/setup/lib/mcp.sh" 2>/dev/null || fail "could not source mcp.sh"
-
-EXAKIT_LOG_FILE="$WORK/handshake.log"
-cat > "$EXAKIT_LOG_FILE" <<'HANDSHAKELOG'
-INFO  a step that ran long before this validation
-CMD   uvx exasol-mcp-server@1.10.1 --help
-uvx: building the environment
-uvx: resolved 41 packages
-uvx: installed exasol-mcp-server
-
-Traceback (most recent call last):
-  File "/opt/mcp/exasol/driver.py", line 88, in connect
-    connect(dsn="127.0.0.1:8563", user="mcp_readonly", password="SUPERSECRET123")
-pyexasol.exceptions.ExaAuthError: [08004] Connection exception - authentication failed
-  during handling of the above exception another occurred
-  raise ExaAuthError(message)
-no initialize result in server output
-HANDSHAKELOG
-# What mcp_validate sets before it starts: where in the log this validation's
-# own output begins, and the password the server was handed.
-_mcp_handshake_log_mark=2
-_password="SUPERSECRET123"
-detail="$(mcp_print_handshake_detail 2>&1)"
-
-case "$detail" in
-    *"authentication failed"*) pass "the failure shows what the handshake said" ;;
-    *) fail "the handshake's own reason never reaches the screen" ;;
-esac
-case "$detail" in
-    *"no initialize result in server output"*) pass "...including its last word" ;;
-    *) fail "the last line of the handshake is not shown" ;;
-esac
-# The password is in the server's environment and a driver traceback can echo
-# its connection arguments back out. Redaction is not optional here.
-case "$detail" in
-    *"SUPERSECRET123"*) fail "the database password was printed to the screen" ;;
-    *) pass "the password is not printed" ;;
-esac
-case "$detail" in
-    *"<redacted>"*) pass "...it is redacted in place, so the line still reads" ;;
-    *) fail "the secret's line was dropped instead of redacted" ;;
-esac
-# Only the tail of the slice: uvx narrates its own environment build first and
-# the reason is always last.
-case "$detail" in
-    *"uvx: building the environment"*) fail "the whole slice is dumped, not its tail" ;;
-    *) pass "only the tail of the slice is shown" ;;
-esac
-shown="$(printf '%s\n' "$detail" | grep -c .)"
-if [ "$shown" -le 8 ]; then
-    pass "the detail is capped at a few lines ($shown)"
-else
-    fail "$shown lines were printed - a failure must not dump a screenful"
-fi
-
-# Only this validation's slice of the log, from the mark taken before the first
-# attempt: an earlier step's noise must never be presented as this failure's
-# cause. The mark earns its keep exactly when this validation said LITTLE - a
-# tail taken over the whole file then reaches back into the step before it and
-# quotes that instead, which is why the fixture here is short on purpose.
-EXAKIT_LOG_FILE="$WORK/handshake-short.log"
-cat > "$EXAKIT_LOG_FILE" <<'SHORTLOG'
-OK    an earlier step, long since finished
-OK    a second earlier step
-OK    a third earlier step
-OK    a fourth earlier step
-OK    a fifth earlier step
-OK    a sixth earlier step
-uvx: nothing to install
-handshake timed out
-SHORTLOG
-_mcp_handshake_log_mark=6
-short="$(mcp_print_handshake_detail 2>&1)"
-case "$short" in
-    *"handshake timed out"*) pass "a short slice is shown whole" ;;
-    *) fail "a short slice is not shown at all" ;;
-esac
-case "$short" in
-    *"an earlier step, long since finished"*)
-        fail "the tail reached back into a previous step and quoted it as the reason" ;;
-    *) pass "the tail never reaches back into a previous step" ;;
-esac
-# The detail is only half of it: the reassurance and the deeper check travel
-# with the reason, or a red block is all the reader gets.
+# 9. A server that does not start says what it said. This is the AI-bridge
+#    step: a user whose assistant cannot see the database starts here, and the
+#    launcher's own words for the failure (an image that would not pull, a
+#    container that keeps crashing) are in this process's hands. Both halves
+#    quote them and name the next step on screen, never "see log". The behaviour
+#    itself is driven in tests/mcp-sidecar.sh and tests/mcp-sidecar-ps.ps1.
 MCP_SH="$(cat "$ROOT/setup/lib/mcp.sh")"
-case "$MCP_SH" in
-    *"        mcp_print_handshake_detail"*) pass "mcp_validate prints the detail when it fails" ;;
-    *) fail "mcp_validate no longer prints the handshake detail" ;;
-esac
-case "$MCP_SH" in
-    *"For a deeper check, run: exakit mcp-doctor"*)
-        pass "the failure says the database and configs are unchanged, and names the deeper check" ;;
-    *) fail "the failure leaves the reader with no next step" ;;
-esac
-case "$MCP_SH" in
-    *"MCP stdio validation failed (see log)"*) fail "the shell still sends the reader to the log" ;;
-    *) pass "the shell no longer answers with (see log)" ;;
-esac
-
-# 10. The PowerShell twin decides the same way; it cannot be executed here.
-#     Windows is where the server is most likely not to start at all, so the
-#     side that CI cannot run is the side that had kept the "(see log)" answer.
 MCP_PS="$(cat "$ROOT/setup/lib/mcp.ps1")"
-case "$MCP_PS" in
-    *"function Show-McpHandshakeDetail"*) pass "the PowerShell twin has the handshake-detail printer" ;;
-    *) fail "the PowerShell twin has no handshake-detail printer - Windows keeps (see log)" ;;
+case "$MCP_SH" in
+    *'_mcp_sidecar_field "$_msa_status" detail'*) pass "the shell half quotes the launcher's reason" ;;
+    *) fail "the shell half drops the launcher's reason for a server that did not start" ;;
+esac
+case "$MCP_SH" in
+    *'Fix: exakit mcp-doctor'*) pass "...and names the next step" ;;
+    *) fail "the shell half leaves the reader with no next step" ;;
 esac
 case "$MCP_PS" in
-    *'$handshakeDetail = "$_"'*) pass "the twin keeps what the handshake said, not just the log line" ;;
-    *) fail "the twin throws the reason away and only logs it" ;;
+    *'Get-McpSidecarStatusDetail'*) pass "the PowerShell twin quotes the launcher's reason" ;;
+    *) fail "the PowerShell twin drops the launcher's reason" ;;
 esac
 case "$MCP_PS" in
-    *'Show-McpHandshakeDetail -Text $handshakeDetail'*) pass "...and prints it on the failure path" ;;
-    *) fail "the twin captures the reason and never shows it" ;;
+    *'"Fix: $Fix"'*'"exakit mcp-doctor"'*) pass "...and names the next step" ;;
+    *) fail "the PowerShell twin leaves the reader with no next step" ;;
 esac
-case "$MCP_PS" in
-    *'ConvertTo-McpRedactedText -Text $Text -Secrets @($Password)'*)
-        pass "the twin redacts the password before printing" ;;
-    *) fail "the twin can print the database password to the screen" ;;
-esac
-case "$MCP_PS" in
-    *"MCP stdio validation failed (see log)"*) fail "the twin still sends the reader to the log" ;;
-    *) pass "the twin no longer answers with (see log)" ;;
-esac
-case "$MCP_PS" in
-    *"For a deeper check, run: exakit mcp-doctor"*)
-        pass "the twin says the database and configs are unchanged, and names the deeper check" ;;
-    *) fail "the twin leaves the reader with no next step" ;;
+# The sidecar's own failures, on the shell side (the module is that and little else).
+case "$MCP_SH" in
+    *"(see log)"*) fail "a failure still sends the reader to the log" ;;
+    *) pass "no failure answers with (see log)" ;;
 esac
 
 
@@ -345,6 +235,109 @@ for _half in sh ps; do
         *) fail "$_name leaves the reader with no next step" ;;
     esac
 done
+
+# A removal that left a client file untouched (the kit could not parse it) names
+# the file and the entry to delete by hand: the whole-kit uninstall hides the
+# operation's summary, so these lines are all the user sees of it.
+cat > "$WORK/uninstall.json" <<'JSON'
+{"operation": "uninstall", "status": "blocked", "summary": "x",
+ "findings": [{"code": "client_config_left_untouched", "severity": "warning", "message": "m",
+               "scope": {"client": "cursor", "path": "/home/u/.cursor/mcp.json", "entry": "exasol"}},
+              {"code": "something_else", "severity": "warning", "message": "n", "scope": {"path": "/x"}}]}
+JSON
+untouched="$(_exakit_mcp_result_untouched "$WORK/uninstall.json")"
+case "$untouched" in
+    "Left /home/u/.cursor/mcp.json untouched (the kit could not parse it): delete its MCP entry 'exasol' by hand.")
+        pass "a removal left untouched names the file and the entry, one line, nothing else" ;;
+    *) fail "untouched-file line wrong: $untouched" ;;
+esac
+case "$(_exakit_warn_lines "$untouched" 2>&1)" in
+    *"/home/u/.cursor/mcp.json untouched"*) pass "the uninstall prints it as a warning" ;;
+    *) fail "the untouched-file line is not printed" ;;
+esac
+grep -q '_exakit_warn_lines "${EXAKIT_MCP_LAST_UNTOUCHED:-}"' "$ROOT/setup/lib/common.sh" &&
+    check_set_e="$(bash -ec '. "$1/setup/lib/ui.sh"; . "$1/setup/lib/common.sh"; _exakit_warn_lines ""; echo survived' _ "$ROOT" 2>/dev/null)"
+[ "$check_set_e" = survived ] && pass "nothing to warn about never stops a caller running under set -e" ||
+    fail "an empty untouched list stops a set -e caller (the whole uninstall)"
+[ "$(grep -c '_exakit_warn_lines "${EXAKIT_MCP_LAST_UNTOUCHED:-}"' "$ROOT/setup/lib/common.sh")" -eq 2 ] &&
+    pass "both whole-kit uninstall paths print the untouched files" ||
+    fail "a whole-kit uninstall path hides the untouched files"
+[ "$(grep -c 'foreach ($untouched in @($script:McpLastUntouched))' "$ROOT/setup/exakit.ps1")" -eq 2 ] &&
+    pass "the PowerShell twin prints them on both uninstall paths" ||
+    fail "the PowerShell uninstall hides the untouched files"
+
+# THE REAL WRITERS, driven the way the install drives them. A client whose
+# config folder cannot be written is skipped on its own: the run still answers
+# with its JSON, the other clients are written and recorded, and the skip names
+# the client and the file. It used to end in a Python traceback with no JSON,
+# the shell's one generic "Could not write the MCP entry" line, and clients
+# already written left unrecorded. Codex's config.toml keeps the user's comments:
+# only the kit's own [mcp_servers.exasol] table is written, and taken out again.
+if [ "$(id -u)" != 0 ] && _exakit_has_system_python3 2>/dev/null; then
+    W="$WORK/writers"
+    mkdir -p "$W/cursor" "$W/codex" "$W/Code/User" "$W/kh/credentials"
+    printf 'readonly-secret\n' > "$W/kh/credentials/mcp_password"
+    printf 'starter-secret\n' > "$W/kh/credentials/db_password"
+    cat > "$W/kh/manifest.json" <<JSON
+{"manifest_version": 1, "kit_level": 1,
+ "runtime": {"type": "personal", "dsn": "exa-local", "user": "sys",
+             "password_file": "$W/kh/credentials/db_password", "tls": "self-signed"},
+ "components": {"mcp_server": {"backend": "sidecar", "url": "http://127.0.0.1:4896/mcp",
+   "connection": {"user": "mcp_readonly", "password_file": "$W/kh/credentials/mcp_password", "validated": true}}},
+ "steps_completed": ["runtime", "mcp_server"]}
+JSON
+    cat > "$W/codex/config.toml" <<'TOML'
+# Codex settings -- the model is pinned on purpose
+model = "gpt-5"  # do not bump
+
+# proxy for the office network
+[proxy]
+url = "http://proxy.example:3128"   # keep
+TOML
+    cp "$W/codex/config.toml" "$W/codex.before"
+    chmod 555 "$W/Code/User"
+    (
+        export EXAKIT_HOME="$W/kh" EXAKIT_MCP_READONLY_READY=1 EXAKIT_LOG_FILE="$W/log"
+        export CURSOR_MCP_CONFIG_PATH="$W/cursor/mcp.json" CODEX_MCP_CONFIG_PATH="$W/codex/config.toml"
+        export VSCODE_MCP_CONFIG_PATH="$W/Code/User/mcp.json"
+        exakit_run_mcp_setup_cli "vscode_copilot,cursor,codex" "$W/result.json"
+    ) > "$W/run.out" 2>&1
+    rc=$?
+    chmod 755 "$W/Code/User"
+    [ "$rc" -eq 0 ] && pass "one unwritable client folder does not fail the run" ||
+        fail "one unwritable client folder failed the run (rc=$rc): $(cat "$W/run.out")"
+    grep -q "Could not write the MCP entry" "$W/run.out" &&
+        fail "the generic could-not-write line is printed although two clients were written" ||
+        pass "no generic could-not-write line when other clients were written"
+    grep -q '"exasol"' "$W/cursor/mcp.json" 2>/dev/null && grep -q '^\[mcp_servers.exasol\]' "$W/codex/config.toml" &&
+        pass "the writable clients got their entry" || fail "a writable client has no entry"
+    reason="its settings file $W/Code/User/mcp.json cannot be written. Fix the folder's permissions, then run: exakit mcp-setup"
+    summary="$(exakit_print_mcp_setup_summary "$W/result.json" 2>&1)"
+    case "$summary" in
+        *"Skipped GitHub Copilot: $reason"*) pass "the setup summary names the skipped client and its file" ;;
+        *) fail "setup summary does not name the unwritable client: $summary" ;;
+    esac
+    opsum="$(exakit_print_mcp_operation_summary "$W/result.json" 2>&1)"
+    case "$opsum" in
+        *"  Skipped clients:"*"  - GitHub Copilot: $reason"*) pass "the operation summary lists it under Skipped clients" ;;
+        *) fail "operation summary lacks the Skipped clients line: $opsum" ;;
+    esac
+    states="$(_exakit_mcp_result_states "$W/result.json" | sort | tr '\n' ' ')"
+    [ "$states" = "codex configured cursor configured vscode_copilot skipped " ] &&
+        pass "the client table gets configured, configured, skipped" || fail "client states wrong: $states"
+
+    toml_body="$(sed '/^\[mcp_servers\.exasol\]/,$d' "$W/codex/config.toml")"
+    [ "$toml_body" = "$(cat "$W/codex.before")" ] &&
+        pass "Codex config.toml keeps every comment and line; only the kit's table is added" ||
+        fail "Codex config.toml lost the user's text: $(cat "$W/codex/config.toml")"
+    (
+        export EXAKIT_HOME="$W/kh" EXAKIT_LOG_FILE="$W/log" CODEX_MCP_CONFIG_PATH="$W/codex/config.toml"
+        exakit_run_mcp_operation_cli uninstall codex "$W/remove.json"
+    ) > "$W/remove.out" 2>&1
+    cmp -s "$W/codex/config.toml" "$W/codex.before" &&
+        pass "removing the kit from Codex gives back the user's config.toml byte for byte" ||
+        fail "Codex config.toml after removal differs: $(diff "$W/codex.before" "$W/codex/config.toml") $(cat "$W/remove.out")"
+fi
 
 printf '\n%d checks, %d failed\n' "$checks" "$fails"
 [ "$fails" -eq 0 ]

@@ -13,12 +13,8 @@ This subsystem now has a working Python implementation plus lifecycle tests.
 ## Read In Order
 
 1. [AGENT.md](AGENT.md)
-2. [requirements.md](docs/requirements.md)
-3. [architecture.md](docs/architecture.md)
-4. [design.md](docs/design.md)
-5. [api-design.md](docs/api-design.md)
-6. [service.py](service.py)
-7. [test_service.py](tests/test_service.py)
+2. [service.py](service.py)
+3. [test_service.py](tests/test_service.py)
 
 ## Test Command
 

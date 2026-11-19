@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Profile A: a Java adapter JAR plus the vendor's JDBC driver, run by the",
+    "Java language container. Most connectors push queries down as IMPORT FROM",
+    "JDBC, which the database's loader runs with a separately registered copy",
+    "of the driver; a connector with \"etl\": null (BigQuery) returns VALUES.",
+    "",
+    "On Exasol Personal the deployment exposes /exa at",
+    "<deploymentDir>/local/runtime/exa: files written under bucketfs/<service>/",
+    "<bucket>/ are read by SQL at /buckets/<service>/<bucket>/, and a loader",
+    "driver lives in jdbc/<DRIVERNAME>/ with its settings.cfg. Registering a NEW",
+    "loader driver takes effect on the next database start, so a plan that adds",
+    "one asks for one restart and batches everything else into it."
+  ],
+  "id": "java-jdbc",
+  "label": "A",
+  "slc": {
+    "alias": "java",
+    "language": "JAVA",
+    "needs_dns": true
+  },
+  "bucket": {
+    "service": "bfsdefault",
+    "bucket": "default",
+    "dir": "exakit/vs"
+  },
+  "loader_dir": "jdbc",
+  "adapter_script": {
+    "scriptclass": "com.exasol.adapter.RequestDispatcher",
+    "env": [
+      "EXASOL_TELEMETRY_DISABLE=1"
+    ]
+  }
+}

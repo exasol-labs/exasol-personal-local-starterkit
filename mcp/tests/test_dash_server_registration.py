@@ -102,6 +102,8 @@ class _DashServerFixture(unittest.TestCase):
         """
         components: dict = {
             "mcp_server": {
+                "backend": "sidecar",
+                "url": "http://127.0.0.1:4896/mcp",
                 "connection": {
                     "user": "mcp_readonly",
                     "password_file": str(self.mcp_password_file),
@@ -335,28 +337,20 @@ class DashServerRegistrationCLITests(_DashServerFixture):
         import tomllib
         codex_document = tomllib.loads(self.client_paths["codex"].read_text(encoding="utf-8"))
         self.assertEqual(codex_document["mcp_servers"]["dash-server"], {"url": url})
-        self.assertEqual(codex_document["mcp_servers"]["exasol"]["env"]["EXA_USER"], "mcp_readonly")
+        self.assertEqual(codex_document["mcp_servers"]["exasol"], {"url": "http://127.0.0.1:4896/mcp"})
         dash_block = self._continue_block_file("dash-server").read_text(encoding="utf-8")
         self.assertIn("name: dash-server", dash_block)
         self.assertIn("type: streamable-http", dash_block)
         self.assertIn('url: "' + url + '"', dash_block)
 
         # The second pass must merge, not replace: the exasol entry the first
-        # pass wrote is still there, still pointing at the read-only user.
-        self.assertEqual(
-            self._read_json("cursor")["mcpServers"]["exasol"]["env"]["EXA_USER"],
-            "mcp_readonly",
-        )
-        self.assertEqual(
-            self._read_json("claude_code")["mcpServers"]["exasol"]["env"]["EXA_USER"],
-            "mcp_readonly",
-        )
-        self.assertEqual(self._read_json("vscode_copilot")["servers"]["exasol"]["type"], "stdio")
-        self.assertEqual(
-            self._read_json("gemini_cli")["mcpServers"]["exasol"]["env"]["EXA_USER"],
-            "mcp_readonly",
-        )
-        self.assertEqual(self._read_json("opencode")["mcp"]["exasol"]["type"], "local")
+        # pass wrote is still there, still pointing at the launcher's MCP sidecar.
+        sidecar = "http://127.0.0.1:4896/mcp"
+        self.assertEqual(self._read_json("cursor")["mcpServers"]["exasol"], {"url": sidecar})
+        self.assertEqual(self._read_json("claude_code")["mcpServers"]["exasol"], {"type": "http", "url": sidecar})
+        self.assertEqual(self._read_json("vscode_copilot")["servers"]["exasol"], {"type": "http", "url": sidecar})
+        self.assertEqual(self._read_json("gemini_cli")["mcpServers"]["exasol"], {"httpUrl": sidecar})
+        self.assertEqual(self._read_json("opencode")["mcp"]["exasol"]["type"], "remote")
         self.assertIn("name: exasol", self.client_paths["continue"].read_text(encoding="utf-8"))
 
     def test_setup_reports_clients_without_remote_support_as_skipped_not_failed(self) -> None:
@@ -431,6 +425,42 @@ class DashServerRegistrationCLITests(_DashServerFixture):
             {"url": "http://127.0.0.1:5199/mcp"},
         )
 
+    def _register_connected(self) -> dict:
+        result = self._run(
+            ["register-addon-servers", "--connected", "--runtime-root", str(self.runtime_root)]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_connected_registration_reaches_only_the_clients_already_connected(self) -> None:
+        """What an add-on install runs (audit MKT-01): the clients connected at the
+        AI-bridge step get the endpoint the moment the add-on is in; a client the
+        user never connected gets no config file at all."""
+        self._write_manifest()
+        self._setup("cursor")
+        # The add-on's receipt lands later, beside the client records setup kept.
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["components"]["dash_server"] = {"version": "0.4.0", "port": 5137, "ownership": "kit"}
+        self.manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        payload = self._register_connected()
+        self.assertEqual(payload["selected_clients"], ["cursor"])
+        self.assertEqual(payload["dash_server"]["configured_clients"], ["cursor"])
+        self.assertEqual(
+            sorted(self._read_json("cursor")["mcpServers"]), ["dash-server", "exasol"]
+        )
+        self.assertEqual(
+            self._read_json("cursor")["mcpServers"]["dash-server"],
+            {"url": "http://127.0.0.1:5137/mcp"},
+        )
+        self.assertFalse(self.client_paths["gemini_cli"].exists())
+
+    def test_connected_registration_with_no_client_connected_writes_nothing(self) -> None:
+        self._write_manifest(dash_server={"version": "0.4.0", "port": 5137, "ownership": "kit"})
+        payload = self._register_connected()
+        self.assertEqual(payload["status"], "no_change")
+        self.assertEqual(payload["dash_server"]["configured_clients"], [])
+        self.assertFalse(any(path.exists() for path in self.client_paths.values()))
+
     def test_targeted_uninstall_removes_only_the_dash_server_entry(self) -> None:
         """Removing the add-on must not take the database connection with it."""
         self._write_manifest(dash_server={"version": "0.4.0", "port": 5137})
@@ -454,8 +484,8 @@ class DashServerRegistrationCLITests(_DashServerFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(list(self._read_json("cursor")["mcpServers"]), ["exasol"])
         self.assertEqual(
-            self._read_json("cursor")["mcpServers"]["exasol"]["env"]["EXA_USER"],
-            "mcp_readonly",
+            self._read_json("cursor")["mcpServers"]["exasol"],
+            {"url": "http://127.0.0.1:4896/mcp"},
         )
 
     def test_untargeted_uninstall_removes_both_managed_entries(self) -> None:

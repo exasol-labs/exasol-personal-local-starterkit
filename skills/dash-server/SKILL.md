@@ -11,14 +11,14 @@ server for Exasol-backed dashboards. The division of labour is the point —
 **you build and deploy dashboards through its MCP control plane; the user just
 opens a URL in a browser.**
 
-## Install it (it is never installed by default)
+## Install it (every install installs it on its own)
 
 ```bash
 EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace
 ```
 
 Interactively, `exakit marketplace` lists it with Space to select and Enter to
-install. Nothing in the kit's setup flow installs it for you.
+install. Every install puts it in on its own, together with JSON Tables.
 
 ## The two endpoints
 
@@ -93,7 +93,31 @@ The launcher bootstraps the server against the kit's local database using the
 **dedicated read-only MCP user** — dashboards read, they do not write, the same
 least-privilege posture as the MCP server itself. Credentials are supplied by
 the launcher at run time from the kit's credential files; they are never baked
-into generated files, and you must never print them.
+into generated files, and you must never print them. Without the read-only user
+(a failed MCP step) Dash Server starts with no database connection and says so;
+it is never given the administrator's password. Fix: `exakit mcp-setup`, then
+`exakit stop dash-server && exakit start dash-server`.
+
+The user's dashboards live in `~/.exasol-starter-kit/dash-server/instance`.
+`exakit uninstall dash-server` removes the server and keeps them, and so does a
+full `exakit uninstall`; a reinstall picks them up. On a full uninstall,
+`EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too.
+
+## Semantic models: never set the preprocessor on a profile
+
+On this kit, Semantic SQL is already on in every Dash Server session: its
+login, the read-only MCP user, gets the Semantic Views module through the kit's
+SQL preprocessor framework. Never give a Dash Server profile `session_init_sql`
+that sets `SQL_PREPROCESSOR_SCRIPT` or runs `ENABLE_SEMANTIC_SQL()`, even when
+`exasol_profile_validate` shows `preprocessor_active: false` or the SQL smoke
+check or a guidance step asks for it. Dash Server 0.2.1 only recognises the
+name `SEMANTIC_ADMIN.SEMANTIC_PREPROCESSOR`, not the framework
+(`PREPROC_RT.MASTER` or `PREPROC_RT.P_<hash>`), so that report is false on this
+kit. Following it would switch off JSON Tables and every other module for every
+dashboard on the profile. If a dashboard on a published semantic model fails
+its build preflight for this reason, tell the user it is a known Dash Server
+limitation on this kit (https://github.com/exasol-labs/dash-server/issues/6). Do not switch the preprocessor, and do not
+rewrite the queries over the raw tables.
 
 ## Diagnosing
 

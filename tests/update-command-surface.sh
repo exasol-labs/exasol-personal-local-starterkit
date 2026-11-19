@@ -15,6 +15,12 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Offline, for every child below. exakit_update asks upstream for versions.json
+# before it applies anything (_exakit_update_run, force), so each stubbed
+# `exakit_update --json` run fetched it from raw.githubusercontent.com. A
+# non-https URL is refused without a request, as in tests/versions-manifest.sh.
+EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+export EXAKIT_VERSIONS_URL
 PASS=0; FAIL=0
 pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
@@ -82,8 +88,10 @@ printf '\n== a repair remedy names the component it repairs ==\n'
 # the guard above would happily pass.
 _repair_ok=0
 _repair_missing=""
+# The add-ons are Python now (marketplace/addons/, and the Scheduler's launcher
+# beside them); the remedy is wherever the add-on's code lives.
 for _rc in json-tables exasol-scheduler; do
-    if grep -rq "exakit update $_rc" "$ROOT/setup/lib/$_rc.sh" 2>/dev/null; then
+    if grep -rq "exakit update $_rc" "$ROOT/marketplace" "$ROOT/setup/lib/$_rc.sh" 2>/dev/null; then
         _repair_ok=$((_repair_ok + 1))
     else
         _repair_missing="$_repair_missing $_rc"
@@ -208,6 +216,113 @@ case "$_ucs_out" in
     *)                                 fail "...but does not name the Personal form" ;;
 esac
 
+# Several component ids (#47): `exakit update exapump dbt-exasol` updates both,
+# as `exakit marketplace` installs several; a second id is never read as an
+# option. Only the run is stubbed: the parsing is the real exakit_update.
+_ucs_multi() { # _ucs_multi <args...> -> the targets the run was handed, or the refusal; sets _ucs_rc
+    bash -c '. "$1/setup/lib/common.sh" >/dev/null 2>&1
+        exakit_init_logging() { :; }
+        exakit_marketplace_installed_addons() { :; }
+        _exakit_addon_registered() { [ "$1" = dbt-exasol ] || [ "$1" = dash-server ]; }
+        _exakit_update_run() { printf "target=%s|targets=%s|rest=%s\n" "$1" "$(printf "%s" "$2" | tr "\n" " ")" "$*"; }
+        shift; exakit_update "$@"' _ "$ROOT" "$@" 2>&1
+}
+_ucs_out="$(_ucs_multi exapump dbt-exasol)"; _ucs_rc=$?
+case "$_ucs_out" in
+    *"targets=exapump dbt-exasol|"*) pass "update with two ids updates both" ;;
+    *) fail "update exapump dbt-exasol did not hand both to the run: $_ucs_out" ;;
+esac
+case "$_ucs_out" in
+    *"Update options"*) fail "...and still blames options" ;;
+    *) pass "...and no longer blames options" ;;
+esac
+_ucs_out="$(_ucs_multi exapump dbt-exasol exapump --yes)"; _ucs_rc=$?
+case "$_ucs_out" in
+    *"targets=exapump dbt-exasol|"*) pass "...each once, with --yes anywhere" ;;
+    *) fail "a repeated id or --yes changed the targets: $_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi exapump nonsense)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "an unknown second id is refused with exit 2" || fail "an unknown second id exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"Unknown update target 'nonsense'"*) pass "...naming the id" ;;
+    *) fail "...but does not name it: $_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi exapump dbt-exasol --plan)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "an option behind several ids is still refused with exit 2" || fail "ids plus --plan exited $_ucs_rc"
+
+# The kit moves first, then the NEW kit finishes the run (#45): the same shell
+# kept the old code and manifest and built a download URL the new release does
+# not have. The new kit is handed the run (core-setup.sh's handover): `all`
+# stays all - the new kit's list may hold components the old one does not know -
+# and named ids hand over the kit and the ids after it. The new run skips the kit
+# (EXAKIT_UPDATE_HANDOVER=1), updates the rest, makes its own new-setup check,
+# and under --json writes its rows into the same results file, so the one
+# object lists what it did - nothing is deferred. Only the updaters are stubbed;
+# _exakit_update_run and the handover are the real ones.
+_ucs_handoff() { # _ucs_handoff <json 0|1> <target> <targets> -> what ran here, what the new kit was asked, the rows
+    _ucs_bin="$(mktemp -d)"
+    cat > "$_ucs_bin/exakit" <<'UCS_FAKE'
+#!/bin/sh
+printf 'new-kit:%s handover=%s\n' "$*" "${EXAKIT_UPDATE_HANDOVER:-0}"
+# The new run's own rows, as its _exakit_update_note writes them under --json.
+if [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] && [ "${EXAKIT_UPDATE_JSON:-0}" = 1 ]; then
+    shift
+    for _id in "$@"; do
+        [ "$_id" = exakit ] && continue
+        [ "$_id" = all ] && _id="exasol-scheduler dbt-exasol"
+        for _one in $_id; do printf '%s|updated|1.0|2.0|\n' "$_one" >> "$EXAKIT_UPDATE_RESULTS"; done
+    done
+fi
+exit 0
+UCS_FAKE
+    chmod +x "$_ucs_bin/exakit"
+    EXAKIT_BIN_DIR="$_ucs_bin" EXAKIT_UPDATE_JSON="$1" EXAKIT_UPDATE_RESULTS="$_ucs_bin/results" bash -c '
+        . "$1/setup/lib/common.sh" >/dev/null 2>&1
+        . "$1/setup/lib/core-setup.sh" >/dev/null 2>&1
+        EXAKIT_BIN_DIR="$2"; EXAKIT_VERSION_POLICY=pinned
+        exakit_print_versions_source_line() { :; }
+        exakit_component_min_kit() { :; }
+        exakit_component_is_managed() { return 0; }
+        exakit_core_update_check() { :; }
+        exakit_update_actual_target() { printf "%s\n" "$1"; }
+        exakit_component_current() { case "$1" in exakit) cat "$EXAKIT_BIN_DIR/kit" 2>/dev/null || echo 0.2.0 ;; *) echo 1.0 ;; esac; }
+        exakit_component_available() { case "$1" in exakit) echo 0.2.3 ;; *) echo 2.0 ;; esac; }
+        exakit_update_component() { printf "this-shell:%s\n" "$1"; [ "$1" = exakit ] && echo 0.2.3 > "$EXAKIT_BIN_DIR/kit"; return 0; }
+        _exakit_update_run "$3" "$4"
+        [ -f "$EXAKIT_UPDATE_RESULTS" ] && cat "$EXAKIT_UPDATE_RESULTS"' _ "$ROOT" "$_ucs_bin" "$2" "$3" 2>&1
+    rm -rf "$_ucs_bin"
+}
+_ucs_all="exakit
+exasol-scheduler
+dbt-exasol"
+_ucs_out="$(_ucs_handoff 0 all "$_ucs_all")"
+case "$_ucs_out" in
+    *"this-shell:exakit"*"new-kit:update all handover=1"*) pass "after the kit moves, the new kit is handed the run: all stays all" ;;
+    *) fail "the run was not handed to the new kit as all: $_ucs_out" ;;
+esac
+case "$_ucs_out" in
+    *"this-shell:exasol-scheduler"*|*"this-shell:dbt-exasol"*) fail "...and this shell still updated an add-on with the old code" ;;
+    *) pass "...and the old shell updates nothing after the kit" ;;
+esac
+_ucs_out="$(_ucs_handoff 1 all "$_ucs_all")"
+case "$_ucs_out" in
+    *"exasol-scheduler|updated|1.0|2.0|"*"dbt-exasol|updated|1.0|2.0|"*) pass "under --json the handed-over run's rows are the answer" ;;
+    *) fail "under --json the new run's rows are missing: $_ucs_out" ;;
+esac
+case "$_ucs_out" in
+    *"|deferred|"*) fail "...and nothing is deferred, yet a row was: $_ucs_out" ;;
+    *) pass "...and nothing is deferred" ;;
+esac
+# Named ids: the ones before the kit are done here, so only the kit and the ids
+# after it are handed over - none is listed as both updated and current.
+_ucs_out="$(_ucs_handoff 0 "exasol-scheduler exakit dbt-exasol" "exasol-scheduler
+exakit
+dbt-exasol")"
+case "$_ucs_out" in
+    *"this-shell:exasol-scheduler"*"this-shell:exakit"*"new-kit:update exakit dbt-exasol handover=1"*) pass "named ids: the kit and the ids after it are handed over" ;;
+    *) fail "named ids were not handed over as the kit and the ids after it: $_ucs_out" ;;
+esac
+
 _ucs_out="$(_ucs_run --bogus)"; _ucs_rc=$?
 [ "$_ucs_rc" -eq 2 ] && pass "an unknown option is still refused with exit 2" || fail "update --bogus exited $_ucs_rc, expected 2"
 case "$_ucs_out" in
@@ -232,7 +347,7 @@ printf '\n== update --json reports what happened, one object, nothing else ==\n'
 # is deferred (no --yes under --json means no prompt and no stop), exakit and
 # pyexasol are current. The object has to say all of that, and the exit code
 # has to be 1 because one updater failed.
-mkdir -p "$_UCS_HOME/kit" && printf '{"runtime":{"type":"personal"},"kit":{"version":"0.2.0"}}\n' > "$_UCS_HOME/kit/manifest.json"
+mkdir -p "$_UCS_HOME/kit" && printf '{"runtime":{"type":"personal","ownership":"kit"},"kit":{"version":"0.2.0"},"components":{"personal":{"ownership":"kit"},"exapump":{"ownership":"kit"},"mcp_server":{"ownership":"kit"},"pyexasol":{"ownership":"kit"}}}\n' > "$_UCS_HOME/kit/manifest.json"
 _ucs_json="$(HOME="$_UCS_HOME" EXAKIT_HOME="$_UCS_HOME/kit" EXAKIT_BIN_DIR="$_UCS_HOME/bin" bash -c '
 . "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
 exakit_print_versions_source_line() { info "versions: stubbed"; }
@@ -295,6 +410,210 @@ check "...and an unreadable answer defaults to no, never to a prompt" \
     "failed ['exapump'] ['personal']" "$(_ucs_answer_run maybe)"
 check "the PowerShell twin keeps the caller's answer the same way" "1" \
     "$(grep -c 'confirmAnswer -cnotmatch' "$ROOT/setup/exakit.ps1")"
+
+printf '\n== a v-prefixed pin is the same version as the bare one it installed ==\n'
+# versions.json pins semantic-views v0.6.1 (a git tag) and its probe answers
+# 0.6.1. Compared as strings, every `exakit update` "updated" it 0.6.1 ->
+# v0.6.1 (retiring and re-registering its module), never said everything was
+# current, and the update notice returned after every command. Twin:
+# tests/update-targets-ps.ps1.
+mkdir -p "$_UCS_HOME/kit" && printf '{"kit":{"version":"0.2.0"},"components":{}}\n' > "$_UCS_HOME/kit/manifest.json"
+_ucs_v="$(HOME="$_UCS_HOME" EXAKIT_HOME="$_UCS_HOME/kit" EXAKIT_BIN_DIR="$_UCS_HOME/bin" bash -c '
+. "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
+exakit_print_versions_source_line() { :; }
+exakit_update_targets() { printf "%s\n" semantic-views json-tables exapump; }
+exakit_component_supported() { return 0; }
+exakit_component_is_managed() { return 0; }
+exakit_component_min_kit() { return 1; }
+_exakit_addon_needs_update() { return 1; }
+exakit_component_current()   { case "$1" in semantic-views) echo 0.6.1;; json-tables) echo v0.4.1;; exapump) echo 0.14.0;; esac; }
+exakit_component_available() { case "$1" in semantic-views) echo v0.6.1;; json-tables) echo 0.4.1;; exapump) echo v0.14.0;; esac; }
+exakit_update_component() { echo "updater for $1"; return 0; }
+exakit_update --json' 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["status"], [e["component"] for e in d["updated"]], d["current"])' 2>/dev/null)"
+check "0.6.1 against v0.6.1 (and v0.4.1 against 0.4.1) is current, nothing is updated" \
+    "current [] ['semantic-views', 'json-tables', 'exapump']" "$_ucs_v"
+_ucs_v="$(HOME="$_UCS_HOME" EXAKIT_HOME="$_UCS_HOME/kit" EXAKIT_BIN_DIR="$_UCS_HOME/bin" bash -c '
+. "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
+exakit_component_is_managed() { return 0; }
+exakit_component_current() { case "$1" in mcp) echo 2.4.0;; exapump) echo 0.13.0;; esac; }
+_exakit_notice_still_behind "mcp:v2.4.0,exapump:v0.14.0"' 2>/dev/null)"
+# (The cached notice re-reads only the cheap components, never an add-on's module: mcp stands in here.)
+check "the cached update notice drops a v-spelled match and keeps a real one" "exapump" "$_ucs_v"
+_ucs_v="$(bash -c '. "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
+for p in "0.6.1 v0.6.1" "v0.6.1 0.6.1" "v0.6.1 v0.6.1" "0.6.1 0.6.2" "vNext Next" " 0.6.1"; do
+  set -- $p; if exakit_version_same "$1" "${2:-}"; then printf "y"; else printf "n"; fi; done')"
+check "exakit_version_same ignores a leading v before a digit, and nothing else" "yyynnn" "$_ucs_v"
+
+printf '\n== a component the kit did not install is updated through its owner, or kept ==\n'
+# Product owner, 0.3.0: `exakit update` updates a uv or pyexasol the kit did
+# not install THROUGH THE TOOL THAT OWNS IT (brew, pipx, the uv installer,
+# that Python's pip), never by writing its files. An owner it cannot name, or
+# an owner update that did not work, keeps it with one line naming the command
+# (a warning row, exit 0). Equal or newer: nothing runs. Every owner below is a
+# stub that records its argv; PATH holds only the stubs and python3, so no
+# real brew, pipx, uv or pip is ever reached. Twin: tests/update-targets-ps.ps1.
+_UCS_PY3="$(command -v python3)"
+_ucs_sandbox() { # _ucs_sandbox -> a fresh $_UCS_S with stub owners
+    _UCS_S="$(mktemp -d "${TMPDIR:-/tmp}/exakit-ucs-own.XXXXXX")"
+    mkdir -p "$_UCS_S/bin" "$_UCS_S/brew/bin" "$_UCS_S/kit" "$_UCS_S/kitbin" "$_UCS_S/cfg"
+    ln -s "$_UCS_PY3" "$_UCS_S/bin/python3"
+    printf '{"kit":{"version":"0.3.0"},"components":{}}\n' > "$_UCS_S/kit/manifest.json"
+    cat > "$_UCS_S/brew/bin/uv" <<UVSTUB
+#!/bin/sh
+case "\$1" in
+  --version) echo "uv \$(cat "$_UCS_S/uvver")" ;;
+  self) echo "uv \$*" >> "$_UCS_S/calls"; [ -f "$_UCS_S/owner-fails" ] && exit 1; echo "\$3" > "$_UCS_S/uvver" ;;
+esac
+UVSTUB
+    cat > "$_UCS_S/bin/brew" <<BREWSTUB
+#!/bin/sh
+case "\$1" in
+  --prefix) echo "$_UCS_S/brew" ;;
+  list) [ -f "$_UCS_S/brew-owns" ] ;;
+  *) echo "brew \$*" >> "$_UCS_S/calls"; [ -f "$_UCS_S/owner-fails" ] && exit 1; echo 0.13.8 > "$_UCS_S/uvver" ;;
+esac
+BREWSTUB
+    cat > "$_UCS_S/bin/pipx" <<PIPXSTUB
+#!/bin/sh
+case "\$1" in
+  environment) echo "$_UCS_S/pipx" ;;
+  *) echo "pipx \$*" >> "$_UCS_S/calls"; echo 0.13.9 > "$_UCS_S/uvver" ;;
+esac
+PIPXSTUB
+    # A user Python with pyexasol: the probe word comes from pymode.
+    mkdir -p "$_UCS_S/venv/bin"
+    rm -f "$_UCS_S/venv/bin/python"
+    cat > "$_UCS_S/venv/bin/python" <<PYSTUB
+#!/bin/sh
+case "\$*" in
+  *"-m pip"*) echo "python \$*" >> "$_UCS_S/calls"; [ -f "$_UCS_S/owner-fails" ] && exit 1; echo 2.5.0 > "$_UCS_S/pyxver" ;;
+  *EXTERNALLY-MANAGED*) cat "$_UCS_S/pymode" ;;
+  *) cat "$_UCS_S/pyxver" ;;
+esac
+PYSTUB
+    chmod +x "$_UCS_S/brew/bin/uv" "$_UCS_S/bin/brew" "$_UCS_S/bin/pipx" "$_UCS_S/venv/bin/python"
+    : > "$_UCS_S/calls"
+}
+_ucs_own() { # _ucs_own <component> <advertised> [--json] -> output of exakit update
+    _ucs_c="$1"; _ucs_a="$2"; shift 2
+    env -u EXAKIT_UV_BIN HOME="$_UCS_S" EXAKIT_HOME="$_UCS_S/kit" EXAKIT_BIN_DIR="$_UCS_S/kitbin" \
+        XDG_CONFIG_HOME="$_UCS_S/cfg" PATH="$_UCS_S/bin:$_UCS_S/brew/bin:/usr/bin:/bin" \
+        UCS_C="$_ucs_c" UCS_A="$_ucs_a" EXAKIT_LOG_FILE="$_UCS_S/log" bash -c '
+. "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
+exakit_print_versions_source_line() { :; }
+exakit_versions_update_cache() { :; }
+exakit_update_targets() { printf "%s\n" "$UCS_C"; }
+exakit_component_supported() { return 0; }
+exakit_component_ownership() { printf unknown; }
+exakit_component_min_kit() { return 1; }
+exakit_component_available() { echo "$UCS_A"; }
+exakit_update_component() { echo "KIT UPDATER RAN for $1"; return 0; }
+exakit_update "$@"' _ "$@" 2>&1
+}
+_ucs_row() { # _ucs_row <output> -> "status|ok|bucket comp from to remedy|hint"
+    _json_range='/^{/,$p'      # assigned first: bash 3.2
+    printf '%s\n' "$1" | sed -n "$_json_range" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for b in ("updated", "skipped", "ahead"):
+    for e in d[b]:
+        print("%s|%s|%s %s %s %s %s|%s" % (d["status"], d["ok"], b, e["component"], e["from"], e["to"], e.get("remedy"), e.get("remedy_hint")))
+if d["current"]: print("%s|%s|current %s" % (d["status"], d["ok"], " ".join(d["current"])))' 2>&1
+}
+
+_ucs_sandbox; echo 0.13.2 > "$_UCS_S/uvver"; : > "$_UCS_S/brew-owns"
+_ucs_out="$(_ucs_own uv 0.13.8)"; _ucs_rc=$?
+check "a Homebrew uv behind the advertised version is updated with brew upgrade uv" "brew upgrade uv" "$(cat "$_UCS_S/calls")"
+check "...the screen says which owner and which command" "1" \
+    "$(printf '%s\n' "$_ucs_out" | grep -cF 'uv was installed with Homebrew. Updating it with: brew upgrade uv')"
+check "...and the version it reached" "1" "$(printf '%s\n' "$_ucs_out" | grep -cF 'uv updated to 0.13.8 (Homebrew)')"
+check "...the kit's own updater never runs on it, and the update exits 0" "0 0" \
+    "$(printf '%s\n' "$_ucs_out" | grep -c 'KIT UPDATER RAN') $_ucs_rc"
+echo 0.13.2 > "$_UCS_S/uvver"; : > "$_UCS_S/calls"
+check "...the --json row is updated, with the owner" \
+    "updated|True|updated uv 0.13.2 0.13.8 None|updated through its owner, Homebrew: brew upgrade uv" \
+    "$(_ucs_row "$(_ucs_own uv 0.13.8 --json)")"
+
+echo 0.13.8 > "$_UCS_S/uvver"; : > "$_UCS_S/calls"
+_ucs_out="$(_ucs_own uv 0.13.8 --json)"
+check "an equal uv runs nothing and is current" "|current|True|current uv" "$(cat "$_UCS_S/calls")|$(_ucs_row "$_ucs_out")"
+echo 0.14.0 > "$_UCS_S/uvver"
+_ucs_out="$(_ucs_own uv 0.13.8 --json)"
+check "a newer uv runs nothing and is never moved back" "|current|True|ahead uv 0.14.0 0.13.8 None|None" \
+    "$(cat "$_UCS_S/calls")|$(_ucs_row "$_ucs_out")"
+
+echo 0.13.2 > "$_UCS_S/uvver"; : > "$_UCS_S/owner-fails"
+_ucs_out="$(_ucs_own uv 0.13.8)"; _ucs_rc=$?
+check "an owner update that fails is a warning, and the update still exits 0" "1 0" \
+    "$(printf '%s\n' "$_ucs_out" | grep -cF 'Updating uv with Homebrew did not work, so uv 0.13.2 stays as it is. Run it yourself: brew upgrade uv') $_ucs_rc"
+check "...its --json row is kept with the command as the remedy, ok stays true" \
+    "current|True|skipped uv 0.13.2 0.13.8 brew upgrade uv|kept as it is: updating it with Homebrew did not work. Run the remedy yourself" \
+    "$(_ucs_row "$(_ucs_own uv 0.13.8 --json)")"
+rm -f "$_UCS_S/owner-fails" "$_UCS_S/brew-owns"; : > "$_UCS_S/calls"
+
+_ucs_out="$(_ucs_own uv 0.13.8)"
+check "a uv whose owner cannot be found is kept, and nothing runs" "|1" \
+    "$(cat "$_UCS_S/calls")|$(printf '%s\n' "$_ucs_out" | grep -cF 'Leaving uv 0.13.2 as it is. The kit did not install it and could not tell which tool did, so update it with the tool you installed it with.')"
+check "...its --json row says why" \
+    "current|True|skipped uv 0.13.2 0.13.8 None|kept as it is: installed outside the kit, and the tool that installed it could not be found. Update it with that tool" \
+    "$(_ucs_row "$(_ucs_own uv 0.13.8 --json)")"
+check "...and the uv files are untouched" "0.13.2" "$(cat "$_UCS_S/uvver")"
+
+# The uv installer's receipt names the folder this uv is in: uv self update,
+# to the advertised version.
+mkdir -p "$_UCS_S/cfg/uv"
+printf '{"binaries":["uv","uvx"],"install_prefix":"%s","version":"0.13.2"}\n' "$_UCS_S/brew/bin" > "$_UCS_S/cfg/uv/uv-receipt.json"
+_ucs_out="$(_ucs_own uv 0.13.8)"
+check "a uv from the uv installer is updated with uv self update <advertised>" "uv self update 0.13.8|1" \
+    "$(cat "$_UCS_S/calls")|$(printf '%s\n' "$_ucs_out" | grep -cF 'uv updated to 0.13.8 (the uv installer)')"
+rm -rf "$_UCS_S"
+
+# pipx: the uv on PATH is a link into pipx's own venvs/uv.
+_ucs_sandbox; echo 0.13.2 > "$_UCS_S/uvver"
+mkdir -p "$_UCS_S/pipx/venvs/uv/bin"; mv "$_UCS_S/brew/bin/uv" "$_UCS_S/pipx/venvs/uv/bin/uv"
+ln -s "$_UCS_S/pipx/venvs/uv/bin/uv" "$_UCS_S/bin/uv"
+_ucs_out="$(_ucs_own uv 0.13.8)"
+check "a pipx uv is updated with pipx upgrade uv" "pipx upgrade uv|1" \
+    "$(cat "$_UCS_S/calls")|$(printf '%s\n' "$_ucs_out" | grep -cF 'uv updated to 0.13.9 (pipx)')"
+rm -rf "$_UCS_S"
+
+# pyexasol in the user's own Python: that Python's pip, only where it may.
+_ucs_sandbox; echo 2.3.0 > "$_UCS_S/pyxver"; echo venv > "$_UCS_S/pymode"
+printf '{"kit":{"version":"0.3.0"},"components":{"pyexasol":{"python":"%s"}}}\n' "$_UCS_S/venv/bin/python" > "$_UCS_S/kit/manifest.json"
+_ucs_out="$(_ucs_own pyexasol 2.4.1)"
+check "a user pyexasol in a venv is updated with that Python's pip" \
+    "python -m pip install --upgrade pyexasol|1" \
+    "$(cat "$_UCS_S/calls")|$(printf '%s\n' "$_ucs_out" | grep -cF 'pyexasol updated to 2.5.0 (pip)')"
+echo 2.3.0 > "$_UCS_S/pyxver"; echo managed > "$_UCS_S/pymode"; : > "$_UCS_S/calls"
+_ucs_out="$(_ucs_own pyexasol 2.4.1)"
+check "a PEP 668 (externally managed) Python is kept: no pip, no --break-system-packages" "|1" \
+    "$(cat "$_UCS_S/calls")|$(printf '%s\n' "$_ucs_out" | grep -c 'Leaving pyexasol 2.3.0 as it is. Its Python (.*) is managed by the operating system or a package manager (PEP 668), so the kit does not install into it. Update it with that package manager.')"
+echo readonly > "$_UCS_S/pymode"
+_ucs_out="$(_ucs_own pyexasol 2.4.1 --json)"
+check "a Python the user cannot write to is kept, and nothing runs" \
+    "|current|True|skipped pyexasol 2.3.0 2.4.1 None|kept as it is: the kit cannot update it safely in that Python environment. Update it the way you installed it" \
+    "$(cat "$_UCS_S/calls")|$(_ucs_row "$_ucs_out")"
+rm -rf "$_UCS_S"
+
+# Everything else the kit did not install keeps the line it always had.
+_ucs_sandbox
+_ucs_out="$(HOME="$_UCS_S" EXAKIT_HOME="$_UCS_S/kit" EXAKIT_BIN_DIR="$_UCS_S/kitbin" PATH="$_UCS_S/bin:/usr/bin:/bin" bash -c '
+. "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
+exakit_print_versions_source_line() { :; }
+exakit_update_targets() { printf "%s\n" exapump; }
+exakit_component_supported() { return 0; }
+exakit_component_ownership() { printf user; }
+exakit_component_min_kit() { return 1; }
+exakit_component_current()   { echo 0.13.0; }
+exakit_component_available() { echo 0.14.0; }
+exakit_update_component() { echo "KIT UPDATER RAN for $1"; return 0; }
+exakit_update' 2>&1)"
+check "a user exapump keeps the line it always had, no owner command runs" "1|0|" \
+    "$(printf '%s\n' "$_ucs_out" | grep -cF 'Leaving exapump as it is (the kit did not install it, or has no record that it did).')|$(printf '%s\n' "$_ucs_out" | grep -c 'KIT UPDATER RAN')|$(cat "$_UCS_S/calls")"
+rm -rf "$_UCS_S"
 rm -rf "$_UCS_HOME"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"

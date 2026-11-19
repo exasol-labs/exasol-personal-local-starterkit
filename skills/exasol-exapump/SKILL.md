@@ -6,8 +6,9 @@ description: Use exapump, the starter kit's SQL and bulk-load CLI for the local 
 # exapump — SQL and bulk loading
 
 `exapump` is the kit's command-line path into the local database: one-off SQL,
-an interactive shell, and bulk file loading. It is installed by the kit and
-lives on `PATH` (`~/.local/bin/exapump`).
+an interactive shell, and bulk file loading. It reuses an existing compatible
+binary or installs one at `~/.local/bin/exapump`. `exakit version` reports the
+owner. A reused user binary and the user's existing profiles are preserved.
 
 ## Read this before you run anything
 
@@ -33,11 +34,21 @@ Two rules follow, and they are not negotiable:
 
 ## Running SQL
 
+`exakit sql` selects the kit's private profile automatically. Before direct
+exapump commands, select that profile store in the current shell:
+
 ```bash
-exakit sql 'SELECT CURRENT_TIMESTAMP'                      # prefer this
+export EXAPUMP_CONFIG="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/exapump/config.toml"
+```
+
+On PowerShell, set `$env:EXAPUMP_CONFIG` to `exapump/config.toml` beneath the
+kit home. The kit does not replace the user's shared `~/.exapump` profiles.
+
+```bash
+exakit sql 'SELECT CURRENT_DATE'                           # prefer this
 exakit sql --file ~/.exasol-starter-kit/workflows/q.sql    # a saved statement (or: exakit sql < q.sql)
-exakit sql --json 'SELECT COUNT(*) AS c FROM TPCH.NATION'  # one JSON object: {"ok": true, "rows": [...]}
-exapump sql -p starter-kit 'SELECT CURRENT_TIMESTAMP'      # one statement, raw
+exakit sql --json 'SELECT COUNT(*) AS c FROM RETAIL_SALES.RETAIL_SALES'  # one JSON object: {"ok": true, "rows": [...]}
+exapump sql -p starter-kit 'SELECT CURRENT_DATE'           # one statement, raw
 exapump sql -p starter-kit < script.sql                    # a multi-statement script
 exapump interactive -p starter-kit                         # interactive shell
 ```
@@ -85,11 +96,12 @@ quotes altogether.
 statement gate is a seatbelt against a typo. The enforced read-only boundary is
 the MCP user.
 
-`-p starter-kit` names the connection **profile** the kit created. Profiles
-live in `~/.exapump/config.toml`; `EXAPUMP_CONFIG` overrides that path.
+`-p starter-kit` names the connection **profile** the kit created. The kit keeps it in
+its own file, `~/.exasol-starter-kit/exapump/config.toml` (your `~/.exapump/config.toml` is
+left alone), so export `EXAPUMP_CONFIG` as above before calling exapump directly.
 
 > `starter-kit` is a *profile* name, not a schema. The bundled datasets each
-> live in their own **schema** — `TPCH`, `ENERGY`, `WEATHER` — and data the user
+> live in their own **schema** — `RETAIL_SALES` and `BANK_TRANSACTION` — and data the user
 > uploads defaults to the `STARTER_KIT` schema. Do not conflate the two or
 > "correct" one into the other.
 
@@ -112,22 +124,29 @@ names.
 
 ## Bulk loading files
 
+**`exakit data-load` comes first** — for a bundled dataset and for the user's
+own CSV, Parquet, JSON or folder alike (the order is set in the `exakit`
+skill). It checks the file, skips what is already loaded, and reports the
+rows each file landed:
+
+```bash
+exakit data-load ./sales.csv                                  # on a terminal it asks for SCHEMA.TABLE
+EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load ./sales.csv   # without one
+EXAKIT_SCHEMA=SALES exakit data-load ~/exports                # a folder: one table per file
+exakit data-load retail_sales                                 # a bundled dataset by id
+```
+
+Use exapump directly only when `exakit data-load` cannot take the file (it
+names the file and why):
+
 ```bash
 exapump upload data.csv --table STARTER_KIT.MYTABLE -p starter-kit
 exapump upload data.parquet --table STARTER_KIT.MYTABLE -p starter-kit
 ```
 
 exapump loads **CSV and Parquet**. It does *not* load JSON — JSON is a nested
-tree, not a table. For JSON, the kit offers the **JSON Tables** add-on, which
-shreds it into relational tables; `exakit data-load` offers it on the spot when
-you hand it a `.json` file.
-
-For the bundled sample data, prefer the kit's own menu over hand-rolled uploads:
-
-```bash
-exakit data-load           # bundled datasets or a local CSV/Parquet/JSON file
-exakit data-load --force   # reload the bundled sample directly
-```
+tree, not a table. `exakit data-load` sends a `.json` file through the
+**JSON Tables** add-on, which shreds it into relational tables.
 
 ## Profiles
 
@@ -165,6 +184,7 @@ Matching numbers is the whole point — the AI's answer becomes the user's
 | `Failed to connect to 127.0.0.1:8563` | the database is not running | `exakit start`, confirm with `exakit status` |
 | `syntax error, unexpected FETCH_` / `TOP_` | Exasol does not support those | rewrite with `LIMIT <n>` |
 | `object <NAME> not found` | wrong name or missing schema | describe it first, then fix the query |
+| `Parser error: Invalid timezone "UTC": only offset based timezones supported without chrono-tz feature` | exapump 0.14.0 cannot print a `TIMESTAMP WITH LOCAL TIME ZONE` value (`CURRENT_TIMESTAMP`, or a column of that type) | cast it with `CAST(x AS TIMESTAMP)`, or query it through MCP or pyexasol |
 
 Reinstall or update exapump itself with `exakit update`. Discover every
 command the kit knows with `exakit catalog` (searchable: `exakit catalog upload`).

@@ -177,6 +177,8 @@ _sk_home="$WORK/skillhome"
 mkdir -p "$_sk_home/.claude/skills" "$_sk_home/.agents/skills"
 for _sk in dash-server exasol-mcp json-tables; do
     mkdir -p "$_sk_home/.claude/skills/$_sk" "$_sk_home/.agents/skills/$_sk"
+    # The kit's folders carry its mark; one without it is never the kit's.
+    : > "$_sk_home/.claude/skills/$_sk/.exakit-owned"; : > "$_sk_home/.agents/skills/$_sk/.exakit-owned"
 done
 _sk_out="$(
     export HOME="$_sk_home"

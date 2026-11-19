@@ -75,6 +75,8 @@ exakit_component_is_ahead() { return 1; }
 exakit_component_is_heavy() { return 1; }
 exakit_component_min_kit() { :; }
 _exakit_addon_registered() { return 1; }
+# Every component here is the kit's own (ownership receipts).
+exakit_component_is_managed() { return 0; }
 exakit_update_component() {
     printf '%s\n' "$1" >> "$STATE/calls"
     case "$1" in
@@ -242,6 +244,8 @@ read_credential() { printf 'same-password-16c'; }
 exapump_create_profile() { :; }
 printf '{"dbPassword": "same-password-16c"}\n' > "$UPD/deploy/secrets.json"
 personal_engine_platform() { return 1; }
+# The launcher is the kit's own here (ownership receipt).
+exakit_component_is_managed() { return 0; }
 _out="$(personal_update 2>&1)"
 contains "macOS: the password result is said" "keeps its database password: the launcher did not change it" "$_out"
 lacks "  without an engine word" "keeps its engine" "$_out"
@@ -302,6 +306,7 @@ exakit_component_is_ahead() { return 1; }
 exakit_component_is_heavy() { return 1; }
 exakit_component_min_kit() { :; }
 _exakit_addon_registered() { return 1; }
+exakit_component_is_managed() { return 0; }
 exakit_update_component() {
     case "$1" in
         runtime) [ -f "$STATE/refuse" ] && _personal_start_network_die ;;

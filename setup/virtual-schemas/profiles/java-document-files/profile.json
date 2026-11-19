@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Profile B: a Java document-files adapter that reads objects from a store",
+    "(S3, Azure Blob) and maps them to tables with an EDML mapping. One JAR",
+    "holds both the adapter and the import UDF that loads rows; the UDF must",
+    "sit in the adapter's schema under the name the connector gives it. There",
+    "is no JDBC driver and no loader, so nothing is registered and nothing",
+    "restarts. The credential is JSON inside the CONNECTION, and the mapping",
+    "is staged in the kit's bucket folder, where the adapter reads it.",
+    "",
+    "Measured on Exasol Personal 2.3.0 against S3: %env before %scriptclass",
+    "fails to parse (\"Unexpected '<eof>'\"), so the options keep this order."
+  ],
+  "id": "java-document-files",
+  "label": "B",
+  "slc": {
+    "alias": "java",
+    "language": "JAVA",
+    "needs_dns": true
+  },
+  "bucket": {
+    "service": "bfsdefault",
+    "bucket": "default",
+    "dir": "exakit/vs"
+  },
+  "adapter_script": {
+    "scriptclass": "com.exasol.adapter.RequestDispatcher",
+    "env": [
+      "EXASOL_TELEMETRY_DISABLE=1"
+    ]
+  },
+  "import_script": {
+    "scriptclass": "com.exasol.adapter.document.UdfEntryPoint",
+    "env": [
+      "EXASOL_TELEMETRY_DISABLE=1"
+    ]
+  }
+}

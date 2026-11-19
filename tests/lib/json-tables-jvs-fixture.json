@@ -1,0 +1,178 @@
+{
+ "SAMPLE_ORDERS_VIEW_INTERNAL": {
+  "roots": [
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_SCHEMA": "SAMPLE_ORDERS_SRC",
+    "PUBLIC_SCHEMA": "SAMPLE_ORDERS_VIEW",
+    "PUBLIC_VIEW": "orders",
+    "HELPER_SCHEMA": "SAMPLE_ORDERS_VIEW_INTERNAL"
+   }
+  ],
+  "relationships": [
+   {
+    "ROOT_TABLE": "orders",
+    "PARENT_TABLE": "orders",
+    "CHILD_TABLE": "orders_customer",
+    "SEGMENT_NAME": "customer",
+    "RELATION_KIND": "object"
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "PARENT_TABLE": "orders",
+    "CHILD_TABLE": "orders_items_arr",
+    "SEGMENT_NAME": "items",
+    "RELATION_KIND": "array"
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "PARENT_TABLE": "orders",
+    "CHILD_TABLE": "orders_tags_arr",
+    "SEGMENT_NAME": "tags",
+    "RELATION_KIND": "array"
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "PARENT_TABLE": "orders_customer",
+    "CHILD_TABLE": "orders_customer_address",
+    "SEGMENT_NAME": "address",
+    "RELATION_KIND": "object"
+   }
+  ],
+  "members": [
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders",
+    "BASE_NAME": "customer",
+    "VISIBLE_NAME": "customer|object",
+    "MEMBER_NAME": "customer|object",
+    "MEMBER_KIND": "object",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": false
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders",
+    "BASE_NAME": "items",
+    "VISIBLE_NAME": "items|array",
+    "MEMBER_NAME": "items|array",
+    "MEMBER_KIND": "array",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": false
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders",
+    "BASE_NAME": "note",
+    "VISIBLE_NAME": "note",
+    "MEMBER_NAME": "note",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true,
+    "NULL_MASK_NAME": "note|n"
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders",
+    "BASE_NAME": "order_id",
+    "VISIBLE_NAME": "order_id",
+    "MEMBER_NAME": "order_id",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders",
+    "BASE_NAME": "tags",
+    "VISIBLE_NAME": "tags|array",
+    "MEMBER_NAME": "tags|array",
+    "MEMBER_KIND": "array",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": false
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_customer",
+    "BASE_NAME": "address",
+    "VISIBLE_NAME": "address|object",
+    "MEMBER_NAME": "address|object",
+    "MEMBER_KIND": "object",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": false
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_customer",
+    "BASE_NAME": "name",
+    "VISIBLE_NAME": "name",
+    "MEMBER_NAME": "name",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_customer_address",
+    "BASE_NAME": "city",
+    "VISIBLE_NAME": "city",
+    "MEMBER_NAME": "city",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_customer_address",
+    "BASE_NAME": "zip",
+    "VISIBLE_NAME": "zip",
+    "MEMBER_NAME": "zip",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_items_arr",
+    "BASE_NAME": "qty",
+    "VISIBLE_NAME": "qty",
+    "MEMBER_NAME": "qty",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "DECIMAL(18,0)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_items_arr",
+    "BASE_NAME": "sku",
+    "VISIBLE_NAME": "sku",
+    "MEMBER_NAME": "sku",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   },
+   {
+    "ROOT_TABLE": "orders",
+    "SOURCE_TABLE": "orders_tags_arr",
+    "BASE_NAME": "_value",
+    "VISIBLE_NAME": "_value",
+    "MEMBER_NAME": "_value",
+    "MEMBER_KIND": "primary",
+    "MEMBER_TYPE": "VARCHAR(2000000)",
+    "IS_VISIBLE": true,
+    "IS_PRIMARY": true
+   }
+  ]
+ }
+}

@@ -19,6 +19,11 @@
 # connection_panel below can use its glyphs and palette. If it is somehow
 # absent, install no-op stubs so nothing here breaks under `set -u`.
 _exakit_common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _exakit_common_dir=''
+# The settings file (~/.exasol-starter-kit/exakit.env) before anything else: ui.sh
+# and everything below read the environment it fills in.
+if [ -n "$_exakit_common_dir" ] && [ -f "$_exakit_common_dir/envfile.sh" ]; then
+    . "$_exakit_common_dir/envfile.sh" && exakit_load_env_file
+fi
 [ -n "$_exakit_common_dir" ] && [ -f "$_exakit_common_dir/ui.sh" ] && . "$_exakit_common_dir/ui.sh"
 if ! command -v ui_spin_begin >/dev/null 2>&1; then
     UI_FANCY=0; UI_RESET=''; UI_BOLD=''; UI_DIM=''; UI_ACCENT=''
@@ -30,6 +35,64 @@ if ! command -v ui_spin_begin >/dev/null 2>&1; then
     ui_panel_line()  { printf '   %s\n' "$1"; }
     ui_panel_end()   { printf '\n'; }
 fi
+
+# ---------------------------------------------------------------------------
+# Exasol usage telemetry: off unless the user chose otherwise
+# ---------------------------------------------------------------------------
+# pyexasol 3 reports one anonymous usage event per connect unless
+# EXASOL_TELEMETRY_DISABLE is present in its environment (any value disables
+# it). Every script that sources this file - exakit, the installers, data
+# loading, the upgrade - exports it before anything it runs can load pyexasol,
+# and never replaces a value the user already set (even an empty one). The
+# Python side of the same rule is marketplace/kit_telemetry.py; the PowerShell
+# twin is Set-ExakitTelemetryDefault in exakit-common.ps1.
+exakit_telemetry_default() {
+    : "${EXASOL_TELEMETRY_DISABLE=1}"
+    # dbt's anonymous usage stats and MLflow's telemetry, the same way (audit SEC-04).
+    : "${DBT_SEND_ANONYMOUS_USAGE_STATS=false}" "${MLFLOW_DISABLE_TELEMETRY=true}"
+    export EXASOL_TELEMETRY_DISABLE DBT_SEND_ANONYMOUS_USAGE_STATS MLFLOW_DISABLE_TELEMETRY
+}
+exakit_telemetry_default
+
+# ---------------------------------------------------------------------------
+# Python children write UTF-8
+# ---------------------------------------------------------------------------
+# A Python program whose output goes to a pipe or a file (the kit captures most
+# of them) writes it in the locale's code page: cp1252 on Windows, and on a
+# Unix machine whatever LANG says. The first character outside it - an
+# installer's U+2500 rule, a box line - ends the run in UnicodeEncodeError, which
+# the kit then reports as a failed install. Every Python the kit starts writes
+# UTF-8 instead, the encoding the kit reads it back in. Forced, not defaulted:
+# the kit decodes UTF-8 whatever the user's shell set. Twin of
+# Set-ExakitPythonUtf8 in exakit-common.ps1; marketplace/runtime.py does the
+# same for every child it starts, and the virtual-schema engine, run isolated
+# (-I ignores these), gets -X utf8 instead.
+exakit_python_utf8() {
+    PYTHONUTF8=1
+    PYTHONIOENCODING=utf-8
+    export PYTHONUTF8 PYTHONIOENCODING
+}
+exakit_python_utf8
+
+# ---------------------------------------------------------------------------
+# uv trusts the machine's certificate store
+# ---------------------------------------------------------------------------
+# uv verifies TLS against its own bundled roots unless told otherwise, so behind
+# a proxy that re-signs TLS (Zscaler, Fortinet and similar, with the company's
+# root CA in the system store) every uv download failed with "invalid peer
+# certificate" while curl, which uses the system store, worked. Every uv and
+# uvx the kit starts inherits UV_SYSTEM_CERTS=1 (uv 0.11+; the kit's floor is
+# 0.13.4); the system store holds the public roots too. A value the user set,
+# or the older UV_NATIVE_TLS, is left alone. Twin of Set-ExakitUvSystemCerts
+# in exakit-common.ps1; marketplace/runtime.py does the same for its children,
+# and mcp/runtime/exakit.py writes it into the Claude Desktop bridge entry.
+exakit_uv_system_certs() {
+    if [ -z "${UV_SYSTEM_CERTS:-}" ] && [ -z "${UV_NATIVE_TLS:-}" ]; then
+        UV_SYSTEM_CERTS=1
+        export UV_SYSTEM_CERTS
+    fi
+}
+exakit_uv_system_certs
 
 # ---------------------------------------------------------------------------
 # State locations
@@ -46,9 +109,374 @@ EXAKIT_CREDS_DIR="$EXAKIT_HOME/credentials"
 # step of the trust loop into an mkdir it has to guess at.
 EXAKIT_WORKFLOWS_DIR="$EXAKIT_HOME/workflows"
 EXAKIT_BIN_DIR="${EXAKIT_BIN_DIR:-$HOME/.local/bin}"
+# The PATH the run started with, before ensure_path_hint puts the bin folder on
+# it: the shell that ran `curl ... | sh` still has that one, so the install's
+# last line has to know whether `exakit` resolves there (audit MAC-04).
+EXAKIT_PATH_AT_START="${EXAKIT_PATH_AT_START:-$PATH}"
+export EXAKIT_PATH_AT_START
 EXAKIT_MANAGED_PYTHON_VERSION="${EXAKIT_MANAGED_PYTHON_VERSION:-3.12}"
 EXAKIT_MCP_READONLY_USER="${EXAKIT_MCP_READONLY_USER:-mcp_readonly}"
 EXAKIT_MCP_READONLY_SCHEMAS="${EXAKIT_MCP_READONLY_SCHEMAS:-STARTER_KIT}"
+
+# Component ownership is installation provenance, not a PATH/location guess.
+# A launcher and its deployment are separate resources. Missing receipts are
+# unknown and are preserved. Private legacy venvs remain recognizable as kit
+# resources; shared binaries/deployments never acquire ownership by inference.
+exakit_ownership_key() {
+    case "$1" in
+        database|runtime) printf runtime ;;
+        personal|launcher|exasol) printf components.personal ;;
+        mcp) printf components.mcp_server ;;
+        *) printf 'components.%s' "$(printf '%s' "$1" | tr '-' '_')" ;;
+    esac
+}
+
+exakit_component_ownership() {
+    case "$1" in exakit|kit2|skills) printf kit; return 0 ;; esac
+    _eco_key="$(exakit_ownership_key "$1")"
+    _eco_owner="$(manifest_get "$_eco_key.ownership" 2>/dev/null || true)"
+    if [ "$_eco_owner" = kit ]; then
+        _eco_file="$(manifest_get "$_eco_key.ownership_path" 2>/dev/null || true)"
+        _eco_digest="$(manifest_get "$_eco_key.ownership_sha256" 2>/dev/null || true)"
+        _eco_live=""
+        case "$1" in
+            personal|launcher|exasol)
+                if command -v personal_cli >/dev/null 2>&1; then _eco_live="$(personal_cli)"; fi ;;
+            exapump)
+                if command -v exapump_cli >/dev/null 2>&1; then _eco_live="$(exapump_cli)"; fi ;;
+            database|runtime) _eco_live="${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ;;
+        esac
+        if [ -n "$_eco_file" ] && [ -n "$_eco_live" ] && [ "$_eco_file" != "$_eco_live" ]; then _eco_owner=user; fi
+        # A user can replace a binary at the same path. A filename alone must
+        # not let an old receipt claim and remove that replacement.
+        if [ -n "$_eco_digest" ] && [ -f "$_eco_file" ]; then
+            _eco_now="$(sha256_of "$_eco_file" 2>/dev/null || true)"
+            [ "$_eco_now" = "$_eco_digest" ] || _eco_owner=user
+        fi
+    fi
+    case "$_eco_owner" in kit|user|unknown) printf '%s' "$_eco_owner"; return 0 ;; esac
+    # NO RECEIPT AT ALL: an install made before receipts existed (every kit up
+    # to 0.2.4). Answering "unknown" here made `exakit update` skip the launcher,
+    # the database and exapump of every existing install and say "current", and
+    # uninstall keep their database. The kit's own manifest says what it
+    # installed - see _exakit_legacy_kit_owned - so that answers instead.
+    if [ -z "$_eco_owner" ] && _exakit_legacy_kit_owned "$1"; then printf kit; return 0; fi
+    # Legacy package environments under the private kit home were created by
+    # the kit. This never applies to a shared binary or database directory.
+    # "engine": the Scheduler's 0.2.5 receipt names only its engine there. The
+    # VS Code extension's 0.2.5 receipt names nothing under the kit home, but
+    # version + extension_id + code_cli with no ownership key is a shape only
+    # the kit ever wrote (audit STA-01). Twin of _adopt_legacy_receipts in
+    # marketplace/runtime.py and Get-ExakitComponentOwnership.
+    case "$1" in
+        personal|launcher|exasol|database|runtime|exapump) ;;
+        *)
+            for _eco_field in venv home python path engine; do
+                _eco_path="$(manifest_get "$_eco_key.$_eco_field" 2>/dev/null || true)"
+                case "$_eco_path" in "$EXAKIT_HOME"/*) printf kit; return 0 ;; esac
+            done
+            if [ -z "$_eco_owner" ] && \
+               [ -n "$(manifest_get "$_eco_key.version" 2>/dev/null || true)" ] && \
+               [ -n "$(manifest_get "$_eco_key.extension_id" 2>/dev/null || true)" ] && \
+               [ -n "$(manifest_get "$_eco_key.code_cli" 2>/dev/null || true)" ]; then
+                printf kit; return 0
+            fi ;;
+    esac
+    printf unknown
+}
+
+# _exakit_legacy_kit_owned <id> - for a component with no ownership receipt at
+# all: did the kit install it? Read only from what the kit's own manifest
+# recorded when it installed it, never from PATH. A launcher the kit kept from
+# PATH was recorded at that path, not the kit's, so it is never claimed:
+#   personal  runtime.launcher is the kit's own launcher path, and it is there
+#   exapump   components.exapump.path is the kit's own exapump path, and it is there
+#   database  a Personal runtime the kit's own launcher deployed in the
+#             deployment folder the kit recorded
+#   mcp       the kit recorded the MCP server it set up
+#   uv        the kit recorded its own bin-folder uv (managed), and that file
+#             is byte for byte the uv binary of the pinned release the kit
+#             verified for the recorded version (kits 0.2.3 to 0.2.5 wrote no
+#             receipt for uv, so their uv read as "unknown" and `exakit update`
+#             never moved it again; audit UPG-06). A uv the user put at the
+#             same path is a different file and stays theirs.
+# Twin of Test-ExakitLegacyKitOwned in exakit-common.ps1.
+_exakit_legacy_kit_owned() {
+    case "$1" in
+        personal|launcher|exasol)
+            _elk="$(manifest_get runtime.launcher 2>/dev/null || true)"
+            [ -n "$_elk" ] && [ "$_elk" = "${EXAKIT_BIN_DIR:-}/exasol" ] && [ -x "$_elk" ] ;;
+        exapump)
+            _elk="$(manifest_get components.exapump.path 2>/dev/null || true)"
+            [ -n "$_elk" ] && [ "$_elk" = "${EXAKIT_EXAPUMP_BIN:-${EXAKIT_BIN_DIR:-}/exapump}" ] && [ -e "$_elk" ] ;;
+        database|runtime)
+            [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+            _exakit_legacy_kit_owned personal || return 1
+            _elk="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
+            [ -n "$_elk" ] && { [ -z "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || [ "$_elk" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; } ;;
+        mcp)
+            [ -n "$(manifest_get components.mcp_server.version 2>/dev/null || true)$(manifest_get components.mcp_server.backend 2>/dev/null || true)" ] ;;
+        uv)
+            _elk="$(manifest_get components.uv.path 2>/dev/null || true)"
+            [ -n "$_elk" ] && [ "$_elk" = "${EXAKIT_BIN_DIR:-}/uv" ] && [ -f "$_elk" ] && [ ! -L "$_elk" ] || return 1
+            [ "$(manifest_get components.uv.managed 2>/dev/null || true)" = true ] || return 1
+            _elk_want="$(exakit_uv_binary_sha256 "uv-$(manifest_get components.uv.version 2>/dev/null || true)-$(exakit_uv_platform 2>/dev/null || true)")"
+            [ -n "$_elk_want" ] && [ "$(sha256_of "$_elk" 2>/dev/null || true)" = "$_elk_want" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+exakit_record_ownership() {
+    _ero_key="$(exakit_ownership_key "$1")"
+    case "$2" in kit|user|unknown) ;; *) return 2 ;; esac
+    # Publish kit ownership last. An interrupted receipt write must leave the
+    # conservative state, never a kit claim over a previous user's path.
+    manifest_set "$_ero_key.ownership" unknown || return 1
+    if [ -n "${3:-}" ]; then manifest_set "$_ero_key.ownership_path" "$3" || return 1
+    else manifest_del "$_ero_key.ownership_path" || return 1; fi
+    if [ "$2" = kit ] && [ -f "${3:-}" ]; then
+        _ero_digest="$(sha256_of "$3")" || return 1
+        [ -n "$_ero_digest" ] || return 1
+        manifest_set "$_ero_key.ownership_sha256" "$_ero_digest" || return 1
+    else
+        manifest_del "$_ero_key.ownership_sha256" || return 1
+    fi
+    manifest_set "$_ero_key.ownership" "$2"
+}
+
+exakit_reuse_ownership() {
+    # Preserve an existing kit receipt on a repeat install. Reuse never turns
+    # an untracked/user installation into a kit installation.
+    _ero_existing="$(exakit_component_ownership "$1")"
+    _ero_receipt="$(manifest_get "$(exakit_ownership_key "$1").ownership_path" 2>/dev/null || true)"
+    if [ "$_ero_existing" = kit ] && [ -z "$(manifest_get "$(exakit_ownership_key "$1").ownership" 2>/dev/null || true)" ]; then
+        # The kit's own install from before receipts (_exakit_legacy_kit_owned):
+        # write the receipt it never had. Branding it "user" here made every
+        # later update, repair and uninstall leave it alone for good.
+        exakit_record_ownership "$1" kit "${2:-}"
+    elif [ "$_ero_existing" != kit ] || { [ -n "${2:-}" ] && [ "$_ero_receipt" != "$2" ]; }; then
+        exakit_record_ownership "$1" user "${2:-}"
+    fi
+}
+
+exakit_component_is_managed() {
+    [ "$(exakit_component_ownership "$1")" = kit ]
+}
+
+# Private paths of explicitly reused resources also survive a full kit-home
+# sweep. The returned paths are data, never shell commands.
+exakit_preserved_component_paths() {
+    # Include broken/unavailable add-ons too: a failed version probe must not
+    # make a recorded user resource disappear from the preservation set.
+    for _epc_id in database personal exapump pyexasol mcp $(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1); do
+        exakit_component_is_managed "$_epc_id" && continue
+        _epc_key="$(exakit_ownership_key "$_epc_id")"
+        for _epc_field in ownership_path deployment_dir path venv home python; do
+            _epc_path="$(manifest_get "$_epc_key.$_epc_field" 2>/dev/null || true)"
+            case "$_epc_path" in "$EXAKIT_HOME"/*) printf '%s\n' "$_epc_path" ;; esac
+        done
+    done
+}
+
+exakit_preserve_component() {
+    info "Leaving $1 as it is (the kit did not install it, or has no record that it did)."
+}
+
+# _exakit_resolve_link <path> - the file a symlink chain ends at, with its
+# folder made physical. readlink -f is not on every macOS this kit supports.
+_exakit_resolve_link() {
+    _erl="$1"; _erl_n=0
+    while [ -L "$_erl" ] && [ "$_erl_n" -lt 20 ]; do
+        _erl_t="$(readlink "$_erl" 2>/dev/null || true)"
+        [ -n "$_erl_t" ] || break
+        case "$_erl_t" in /*) _erl="$_erl_t" ;; *) _erl="$(dirname "$_erl")/$_erl_t" ;; esac
+        _erl_n=$((_erl_n + 1))
+    done
+    _erl_d="$(cd "$(dirname "$_erl")" 2>/dev/null && pwd -P)" || _erl_d="$(dirname "$_erl")"
+    printf '%s/%s\n' "$_erl_d" "$(basename "$_erl")"
+}
+
+# _exakit_path_under <path> <folder> - is <path> inside <folder>?
+_exakit_path_under() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    case "$1" in "${2%/}"/*) return 0 ;; esac
+    # The folder as the file system names it (/var is /private/var on macOS).
+    _epu="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    case "$1" in "${_epu%/}"/*) return 0 ;; esac
+    return 1
+}
+
+# The pyexasol probe for exakit_foreign_owner, run by the user's own Python.
+# One word: managed (PEP 668: its OS or package manager owns it), root, missing,
+# nopip, venv / user / site (pip may update it there), readonly.
+_EXAKIT_PIP_PROBE='
+import os, site, sys, sysconfig
+import importlib.util as u
+venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+if not venv and os.path.isfile(os.path.join(sysconfig.get_path("stdlib") or "", "EXTERNALLY-MANAGED")):
+    print("managed"); sys.exit(0)
+if hasattr(os, "geteuid") and os.geteuid() == 0:
+    print("root"); sys.exit(0)
+spec = u.find_spec("pyexasol")
+if spec is None or not spec.origin:
+    print("missing"); sys.exit(0)
+if u.find_spec("pip") is None:
+    print("nopip"); sys.exit(0)
+where = os.path.dirname(os.path.dirname(os.path.abspath(spec.origin)))
+user = site.ENABLE_USER_SITE and os.path.abspath(site.getusersitepackages()) == where
+if user:
+    print("user")
+elif os.access(where, os.W_OK):
+    print("venv" if venv else "site")
+else:
+    print("readonly")
+'
+
+# exakit_foreign_owner <id> <advertised> - for a component the kit did not
+# install, the tool that owns it. Sets _efo_kind (empty: no owner the kit can
+# name for sure), _efo_owner (its name on the screen), _efo_cmd (the command,
+# as shown and as the user can run it) and _efo_bin (the binary it acts on), or
+# _efo_why for a pyexasol the kit must not touch. Asks each owner read-only
+# questions only, never an update. uv and pyexasol only: every other component
+# has no owner command the kit can name, and keeps the line it always had.
+#   uv        Homebrew  its path is under `brew --prefix` and brew lists uv
+#             pipx      its path ends in pipx's own venvs/uv
+#             installer the uv installer's receipt names its folder
+#   pyexasol  pip of the Python it was found in, only in a venv, the user
+#             site or a site the user can write to, never a PEP 668 one
+# Twin of Get-ExakitForeignOwner in exakit-common.ps1.
+exakit_foreign_owner() {
+    _efo_kind=""; _efo_owner=""; _efo_cmd=""; _efo_bin=""; _efo_why=""
+    case "$1" in
+        uv)
+            _efo_bin="$(exakit_uv_report 2>/dev/null || true)"
+            _efo_bin="${_efo_bin#*|}"; _efo_bin="${_efo_bin%%|*}"
+            [ -n "$_efo_bin" ] && [ -x "$_efo_bin" ] || return 0
+            _efo_real="$(_exakit_resolve_link "$_efo_bin")"
+            if command -v brew >/dev/null 2>&1; then
+                _efo_at="$(brew --prefix 2>/dev/null || true)"
+                if { _exakit_path_under "$_efo_bin" "$_efo_at" || _exakit_path_under "$_efo_real" "$_efo_at"; } && \
+                   brew list --formula uv >/dev/null 2>&1; then
+                    _efo_kind=brew; _efo_owner=Homebrew; _efo_cmd="brew upgrade uv"; return 0
+                fi
+            fi
+            if command -v pipx >/dev/null 2>&1; then
+                _efo_at="$(pipx environment --value PIPX_HOME 2>/dev/null || true)"
+                if _exakit_path_under "$_efo_real" "$_efo_at/venvs/uv"; then
+                    _efo_kind=pipx; _efo_owner=pipx; _efo_cmd="pipx upgrade uv"; return 0
+                fi
+            fi
+            _efo_at="${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv-receipt.json"
+            if [ -f "$_efo_at" ] && [ -n "$2" ]; then
+                _efo_at="$(sed -n 's/.*"install_prefix"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_efo_at" 2>/dev/null | head -n 1)"
+                _efo_at="${_efo_at%/}"
+                _efo_dir="$(dirname "$_efo_bin")"
+                if [ -n "$_efo_at" ] && { [ "$_efo_dir" = "$_efo_at" ] || [ "$_efo_dir" = "$_efo_at/bin" ]; }; then
+                    _efo_kind=self; _efo_owner="the uv installer"; _efo_cmd="uv self update $2"; return 0
+                fi
+            fi
+            ;;
+        pyexasol)
+            _efo_bin="$(manifest_get components.pyexasol.python 2>/dev/null || true)"
+            [ -n "$_efo_bin" ] && [ -x "$_efo_bin" ] || { _efo_why=missing; return 0; }
+            _efo_why="$(cd / && "$_efo_bin" -c "$_EXAKIT_PIP_PROBE" 2>/dev/null | tail -n 1)"
+            case "$_efo_why" in
+                venv|site) _efo_kind=pip; _efo_cmd="$(ui_tilde "$_efo_bin") -m pip install --upgrade pyexasol" ;;
+                user) _efo_kind=pip-user; _efo_cmd="$(ui_tilde "$_efo_bin") -m pip install --user --upgrade pyexasol" ;;
+                managed) return 0 ;;
+                *) _efo_why=other; return 0 ;;
+            esac
+            _efo_owner=pip; _efo_why=""
+            ;;
+    esac
+    return 0
+}
+
+# _exakit_foreign_run - run the owner's update exakit_foreign_owner chose, its
+# output in the log, behind the spinner (it reaches the network).
+_exakit_foreign_run() {
+    _exakit_log_file "CMD   $_efo_cmd"
+    ui_spin_begin "Updating $1 with $_efo_owner"
+    case "$_efo_kind" in
+        brew) brew upgrade uv ;;
+        pipx) pipx upgrade uv ;;
+        self) "$_efo_bin" self update "$2" ;;
+        pip) "$_efo_bin" -m pip install --upgrade pyexasol ;;
+        pip-user) "$_efo_bin" -m pip install --user --upgrade pyexasol ;;
+        *) false ;;
+    esac >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 < /dev/null
+    _efr_rc=$?
+    ui_spin_end
+    return "$_efr_rc"
+}
+
+# exakit_update_foreign <id> <installed> <advertised> - the `exakit update` arm
+# for a component the kit did not install. Behind the advertised version, uv
+# and pyexasol are updated THROUGH THE TOOL THAT OWNS THEM, never by writing
+# their files. An owner the kit cannot name, or an owner update that did not
+# work, keeps the component as it is with one line that says what to run: a
+# warning, never a failed update. Equal or newer is left alone (no downgrade).
+# Everything else keeps the line it always had. Uninstall is not affected:
+# the kit never removes what it did not install. _euf_outcome is the row's
+# outcome. Twin of Update-ExakitForeignComponent in exakit-common.ps1.
+exakit_update_foreign() {
+    _euf_id="$1"; _euf_cur="$2"; _euf_avail="$3"; _euf_outcome=skipped
+    case "$_euf_id" in uv|pyexasol) _euf_known=1 ;; *) _euf_known=0 ;; esac
+    if [ "$_euf_known" = 1 ] && [ -n "$_euf_avail" ] && exakit_version_same "$_euf_cur" "$_euf_avail"; then
+        _euf_outcome=current
+        _exakit_update_note "$_euf_id" current "$_euf_cur" "$_euf_avail"
+        return 0
+    fi
+    if [ "$_euf_known" = 1 ] && [ -n "$_euf_avail" ] && exakit_version_newer "$_euf_cur" "$_euf_avail"; then
+        _euf_outcome=ahead
+        ok "$_euf_id $_euf_cur is newer than the tested $_euf_avail — keeping yours"
+        _exakit_update_note "$_euf_id" ahead "$_euf_cur" "$_euf_avail"
+        return 0
+    fi
+    if [ "$_euf_known" = 0 ] || [ -z "$_euf_avail" ] || ! exakit_version_newer "$_euf_avail" "$_euf_cur"; then
+        exakit_preserve_component "$_euf_id"
+        # The row says WHY, so an agent can tell "kept: not the kit's" from
+        # "no build for this machine" (which carries no hint).
+        _exakit_update_note "$_euf_id" skipped "$_euf_cur" "$_euf_avail" "" "" \
+            "kept as it is: the kit did not install it, or has no record that it did"
+        return 0
+    fi
+    exakit_foreign_owner "$_euf_id" "$_euf_avail"
+    if [ -z "$_efo_kind" ]; then
+        case "$_efo_why" in
+            managed)
+                info "Leaving pyexasol $_euf_cur as it is. Its Python ($(ui_tilde "$_efo_bin")) is managed by the operating system or a package manager (PEP 668), so the kit does not install into it. Update it with that package manager."
+                _euf_hint="kept as it is: its Python is externally managed (PEP 668), so the kit does not install into it. Update it with the package manager that manages that Python" ;;
+            "")
+                info "Leaving $_euf_id $_euf_cur as it is. The kit did not install it and could not tell which tool did, so update it with the tool you installed it with."
+                _euf_hint="kept as it is: installed outside the kit, and the tool that installed it could not be found. Update it with that tool" ;;
+            *)
+                info "Leaving pyexasol $_euf_cur as it is. The kit cannot update it safely in ${_efo_bin:+$(ui_tilde "$_efo_bin")}${_efo_bin:-its Python}, so update it the way you installed it."
+                _euf_hint="kept as it is: the kit cannot update it safely in that Python environment. Update it the way you installed it" ;;
+        esac
+        _exakit_update_note "$_euf_id" skipped "$_euf_cur" "$_euf_avail" "" "" "$_euf_hint"
+        return 0
+    fi
+    info "$_euf_id was installed with $_efo_owner. Updating it with: $_efo_cmd"
+    if _exakit_foreign_run "$_euf_id" "$_euf_avail"; then
+        _euf_now="$(exakit_component_current "$_euf_id" 2>/dev/null || true)"
+        if [ -n "$_euf_now" ] && exakit_version_newer "$_euf_now" "$_euf_cur"; then
+            _euf_outcome=updated
+            ok "$_euf_id updated to $_euf_now ($_efo_owner)"
+            _exakit_update_note "$_euf_id" updated "$_euf_cur" "$_euf_now" "" "" \
+                "updated through its owner, $_efo_owner: $_efo_cmd"
+            return 0
+        fi
+        warn "$_euf_id is still at $_euf_cur after updating it with $_efo_owner. There is no newer release there yet, so it stays as it is."
+        _exakit_update_note "$_euf_id" skipped "$_euf_cur" "$_euf_avail" "$_efo_cmd" "" \
+            "kept as it is: updating it with $_efo_owner found no newer release"
+        return 0
+    fi
+    warn "Updating $_euf_id with $_efo_owner did not work, so $_euf_id $_euf_cur stays as it is. Run it yourself: $_efo_cmd"
+    _exakit_update_note "$_euf_id" skipped "$_euf_cur" "$_euf_avail" "$_efo_cmd" "" \
+        "kept as it is: updating it with $_efo_owner did not work. Run the remedy yourself"
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # Component version policy
@@ -76,17 +504,18 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # 404 mid-install with the launcher half-downloaded. So this constant and
 # components.personal.version in versions.json move together, and they move to
 # a release that still exists - check before pinning, not after.
-# 2.3.0 FINAL since 2026-09-21, so no candidate is pinned here any more - the
-# two deletions above were both candidates, and a published release is not
-# removed the same way. Verified before pinning, as the note above demands:
-# v2.4.0 on exasol/exasol-personal is published, not a draft, not a
+# 2.4.0 since 2026-11-04 (2.3.0 FINAL before it), so no candidate is pinned
+# here - the two deletions above were both candidates, and a published release
+# is not removed the same way. Verified before pinning, as the note above
+# demands: v2.4.0 on exasol/exasol-personal is published, not a draft, not a
 # prerelease, and carries every asset this kit fetches - the macOS and Linux
 # arm64/x86_64 tarballs, the Windows x86_64 zip, and
-# exasol-personal_2.4.0_checksums.txt.
+# exasol-personal_2.4.0_checksums.txt - and every S3 binary pinned in
+# versions.json is byte-identical to the one inside that checksummed archive.
 EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.4.0}"
-EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.13.1}"
+EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.0}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.4.0}"
-EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
+EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # uv is the Python tool runner: uvx is the process the AI client launches to
 # run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
 # the kit's managed Python wherever the system one is too old. It is pinned
@@ -95,7 +524,7 @@ EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
 # will RUN at all: below it uv's bundled CA store trusts an emSign root whose
 # intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
 # on the machine is used only at or above this floor.
-EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.7}"
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.8}"
 EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
 EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in
@@ -151,7 +580,7 @@ EXAKIT_VERSIONS_URL="${EXAKIT_VERSIONS_URL:-https://raw.githubusercontent.com/${
 # repository the product is published from - right for a fresh curl|sh, and
 # silently wrong for every kit installed from a fork. The manifest records
 # where a kit really came from (kit.source), and the release assets already
-# follow it (json_tables_mirror_repo) - but these URLs kept pointing at the
+# follow it through the JSON Tables add-on - but these URLs kept pointing at the
 # default. The result was a split brain no fork install could verify: add-on
 # assets downloaded from the fork, digest pins fetched from the default, and
 # every install ending in a checksum mismatch that looked like corruption.
@@ -210,12 +639,12 @@ EXAKIT_VERSIONS_SCHEMA=1
 # so a support question ("where did this version come from?") has an answer.
 EXAKIT_VERSIONS_SOURCE_USED=""
 
-# Marketplace add-on "About" text. The one-line description the marketplace
-# shows for an add-on is NOT stored in this repository: it is the About field of
-# the add-on's own repository, fetched once and cached, so the tool that owns
-# the wording owns it in exactly one place. The cache is what makes that safe to
-# do in front of an interactive menu -- see exakit_marketplace_addon_description
-# for the full resolution order, including what happens with no network at all.
+# Marketplace add-on name, link and "About" text: the add-on repository's own on
+# GitHub. marketplace/catalog.json carries a copy tools/addon_github.py wrote; a
+# lookup refreshes the cache ONLY on demand -- while installing (the closing
+# marketplace offer) and while showing updates (exakit update). Every other
+# screen reads the cache, else the catalog's copy, and makes no request. See
+# exakit_marketplace_addon_description for the full resolution order.
 EXAKIT_ABOUT_URL="${EXAKIT_ABOUT_URL:-https://api.github.com/repos}"
 EXAKIT_ABOUT_TTL="${EXAKIT_ABOUT_TTL:-86400}"
 EXAKIT_ABOUT_CACHE_DIR="${EXAKIT_ABOUT_CACHE_DIR:-$EXAKIT_CACHE_DIR/about}"
@@ -291,14 +720,26 @@ _exakit_log_file() {
 # comes from a dozen places in four modules, and a gate per line is a gate
 # somebody forgets. warn/error are deliberately NOT gated — a job that says
 # nothing while it works must still say something when it goes wrong.
+# EXAKIT_ITEM_LOG — set by exakit_item_begin for the length of ONE item of a
+# grouped step (exapump, the database features under "Setup Utilities"). The
+# item's info/ok lines, the ones ok_step/info_step keep included, go to that
+# file instead of the screen: the item says itself in its own two lines when it
+# ends, and replays these only if it failed. The logfile gets every line as
+# before; warn/error still print at once.
 info() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'INFO %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '    %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "INFO  $*"
 }
 ok() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'OK %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '      %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "OK    $*"
 }
 # ok_step / info_step — the lines a one-line step keeps.
@@ -331,6 +772,105 @@ info_step() {
     ui_spin_resume
     EXAKIT_QUIET_DETAIL="$_ifs_prev"
 }
+
+# A GROUPED STEP: one heading, several items under it. Given a count, the items
+# share ONE progress bar while they work and each leaves one line, a tick with
+# its name and time (the installer's "Setup Utilities"):
+#
+#   ▸ Step 3/4  Setup Utilities
+#       ✓ Data Loader                            (14s)
+#       ███████░░░░░░░░░░░░░  1/3  SQL Preprocessor · verifying checksum (3s)
+#
+# Without a count each item is a spinner, then its tick and one dim line of
+# what was done.
+#
+# Display only: every step underneath runs, records and resumes exactly as it
+# does on its own. exakit_step_group_begin prints the heading and makes
+# begin_step draw no heading of its own (an item it skips is one line at the
+# item column); exakit_item_begin/_end bracket one item. ⇄ twins:
+# Start-ExakitStepGroup, Start-ExakitStepItem, Complete-ExakitStepItem in
+# exakit-common.ps1.
+EXAKIT_STEP_GROUP=0
+EXAKIT_ITEM_TOTAL=0
+EXAKIT_ITEM_DONE=0
+# exakit_step_group_begin <heading> [items] — with a count, the items are drawn
+# as ONE bar (ui_bar_begin) and each leaves only its tick, name and time.
+exakit_step_group_begin() {
+    exakit_step_heading "$1"
+    EXAKIT_STEP_GROUP=1
+    EXAKIT_ITEM_TOTAL="${2:-0}"
+    EXAKIT_ITEM_DONE=0
+}
+exakit_step_group_end() {
+    EXAKIT_STEP_GROUP=0
+    EXAKIT_ITEM_TOTAL=0
+    EXAKIT_ITEM_DONE=0
+}
+# exakit_item_line <mark> <title> [time] [detail] — an item's two lines. The
+# title is padded so the times line up; the detail is dim, one level further in.
+exakit_item_line() {
+    if [ -n "${3:-}" ]; then
+        printf '    %s %-38s %s(%s)%s\n' "$1" "$2" "${UI_DIM:-}" "$3" "${UI_RESET:-}"
+    else
+        printf '    %s %s\n' "$1" "$2"
+    fi
+    [ -z "${4:-}" ] || printf '        %s%s%s\n' "${UI_DIM:-}" "$4" "${UI_RESET:-}"
+}
+# exakit_item_begin <title> — start one item: its spinner names it, and its
+# info/ok lines are held (EXAKIT_ITEM_LOG) until it ends.
+exakit_item_begin() {
+    EXAKIT_ITEM_TITLE="$1"
+    EXAKIT_ITEM_T0="$(date +%s 2>/dev/null || echo 0)"
+    EXAKIT_ITEM_LOG="$(mktemp "${TMPDIR:-/tmp}/exakit-item.XXXXXX" 2>/dev/null)" || EXAKIT_ITEM_LOG=""
+    _UI_SPIN_INDENT='    '
+    if [ "${EXAKIT_ITEM_TOTAL:-0}" -gt 0 ] 2>/dev/null; then
+        _UI_SPIN_PREFIX=''
+        ui_bar_begin "${EXAKIT_ITEM_DONE:-0}" "$EXAKIT_ITEM_TOTAL" "$1"
+    else
+        _UI_SPIN_PREFIX="$1"
+    fi
+}
+# exakit_item_end <rc> [title] [detail] — end the item. Done: the tick, the
+# title (the one it began with unless a better one is given), the time, and the
+# detail. Not done: a cross, then every line the item held, so the facts it did
+# establish are on screen under the error it already printed.
+exakit_item_end() {
+    _eie_rc="$1"
+    _eie_title="${2:-$EXAKIT_ITEM_TITLE}"
+    _eie_el=$(( $(date +%s 2>/dev/null || echo 0) - ${EXAKIT_ITEM_T0:-0} ))
+    _eie_log="${EXAKIT_ITEM_LOG:-}"
+    EXAKIT_ITEM_LOG=""
+    command -v ui_bar_end >/dev/null 2>&1 && ui_bar_end
+    _UI_SPIN_INDENT='  '
+    _UI_SPIN_PREFIX=''
+    # Drawn as a bar: the item leaves its name and time only (no versions, no
+    # detail line) - the bar already said what it was doing while it did it.
+    if [ "${EXAKIT_ITEM_TOTAL:-0}" -gt 0 ] 2>/dev/null; then
+        EXAKIT_ITEM_DONE=$(( ${EXAKIT_ITEM_DONE:-0} + 1 ))
+        _eie_title="$EXAKIT_ITEM_TITLE"
+        set -- "$_eie_rc" "$_eie_title" ""
+    fi
+    if [ "$_eie_rc" -eq 0 ]; then
+        exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s" "${3:-}"
+    else
+        exakit_item_line "${UI_ERR:-}${UI_CROSS:-[x]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s"
+        if [ -n "$_eie_log" ] && [ -s "$_eie_log" ]; then
+            while IFS= read -r _eie_line || [ -n "$_eie_line" ]; do
+                case "$_eie_line" in
+                    "OK "*)   printf '        %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "${_eie_line#OK }" ;;
+                    "INFO "*) printf '        %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "${_eie_line#INFO }" ;;
+                esac
+            done < "$_eie_log"
+        fi
+    fi
+    [ -z "$_eie_log" ] || rm -f "$_eie_log"
+    return 0
+}
+# exakit_item_held <pattern> — did the item's held lines say this? For the
+# detail line, which says in a few words what the held lines said in full.
+exakit_item_held() {
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && [ -f "$EXAKIT_ITEM_LOG" ] && grep -q -- "$1" "$EXAKIT_ITEM_LOG" 2>/dev/null
+}
 # heading <text> — a green ▸ at the STEP indent (two spaces).
 #
 # Not an action and not an outcome, so neither the dim bullet nor the tick fits:
@@ -340,14 +880,14 @@ info_step() {
 #
 # Two spaces, the same column as begin_step's own arrow, because that is what it
 # IS: a top-level heading with its own children under it. At four it sat in the
-# action gutter, level with the "Explore marketplace ?" question it introduces,
-# and the two read as siblings when one contains the other. The glyph is the
+# action gutter, level with the rows it introduces, and the two read as siblings
+# when one contains the other. The glyph is the
 # step header's, in the tick's green rather than the accent, and degrades to ">"
 # in plain mode like every other arrow. Never gated by EXAKIT_QUIET_DETAIL:
 # nothing that uses it runs inside a one-line step.
 # ⇄ twin: Write-ExakitHeading in exakit-common.ps1.
 heading() {
-    printf '  %s%s%s %s\n' "${UI_OK:-}" "${UI_ARROW:->}" "${UI_RESET:-}" "$*"
+    printf '  %s%s%s %s%s%s\n' "${UI_OK:-}" "${UI_ARROW:->}" "${UI_RESET:-}" "${UI_BOLD:-}" "$*" "${UI_RESET:-}"
     _exakit_log_file "INFO  $*"
 }
 # A LIVE ADD-ON TABLE OWNS THE SCREEN: it redraws its own frame, so anything
@@ -372,11 +912,13 @@ _exakit_defer_under_addon_table() {
 }
 warn() {
     if _exakit_defer_under_addon_table "$*"; then _exakit_log_file "WARN  $*"; return 0; fi
+    [ -n "${_UI_BAR_FILE:-}" ] && [ -t 1 ] && printf '\r\033[K'
     printf '      %s!%s %s\n'  "${UI_WARN:-}" "${UI_RESET:-}" "$*" >&2
     _exakit_log_file "WARN  $*"
 }
 error() {
     if _exakit_defer_under_addon_table "$*"; then _exakit_log_file "ERROR $*"; return 0; fi
+    [ -n "${_UI_BAR_FILE:-}" ] && [ -t 1 ] && printf '\r\033[K'
     printf '      %s%s%s %s\n' "${UI_ERR:-}"  "${UI_CROSS:-[x]}" "${UI_RESET:-}" "$*" >&2
     _exakit_log_file "ERROR $*"
 }
@@ -484,6 +1026,7 @@ _ui_checkbox_toggle() {
 # EXAKIT_CHECKBOX_EXCLUSIVE (optional, cleared after each call): 1-based index
 # of an option that cannot be combined with the others — think "Skip".
 # Selecting it clears every other choice; selecting any other choice clears it.
+# Enter with the cursor ON it answers it alone, whatever else is ticked.
 # "a" (select all) selects all non-exclusive options.
 #
 # EXAKIT_CHECKBOX_GROUP (optional, cleared after each call):
@@ -503,12 +1046,38 @@ _ui_checkbox_toggle() {
 #                          uninstall menu is one -- it removes the database,
 #                          which no row above it represents, so "every add-on is
 #                          ticked" must never come to mean "remove the kit".
+#   mode "claim"         — the other way round: a child going ON ticks the
+#                          parent, a child going OFF leaves it as it was. For a
+#                          parent its children NEED but that stands on its own:
+#                          an add-on and its child rows in the add-ons table --
+#                          a child cannot be installed without the add-on, and
+#                          the add-on may be installed with no child.
 # SEVERAL specs may be given, separated by whitespace, and they are applied IN
 # ORDER. That is what nests them: the uninstall menu has "Add-ons only" as a
 # master over the add-ons listed under it, and "EVERYTHING" as a master over
 # that row and the add-ons together. The inner spec must come FIRST, so it has
 # settled its own parent before the outer spec re-reads that parent as one of
 # its own children.
+#
+# Two TREE modes build a small dynamic subtree (exakit connect's "Lakehouse":
+# catalogs under the source, files under the picked catalog). A tree mode is
+# one or more words joined by "+", e.g. "collapse+one+first":
+#   "collapse" — the children are HIDDEN until the parent is ticked: not drawn,
+#                skipped by the cursor. Ticking the parent ticks no child;
+#                unticking it hides them again and clears every row in the
+#                range, so nothing hidden is ever selected.
+#   "one"      — the parent's DIRECT children are one-of-N, drawn as radio
+#                buttons "( )" / "(•)": picking one unpicks the others and
+#                clears the rows under them (the old branch closes), and Space
+#                on the picked one changes nothing. A direct child is a row in
+#                the range that is not inside another spec's range whose
+#                parent sits in this range - so a radio row can be a collapse
+#                parent of its own. Enter is refused while a ticked parent's
+#                "one" group has nothing picked.
+#   "first"    — with "one": opening the parent picks its first selectable
+#                direct child (a disabled row is never picked).
+# Tree specs nest like the others, innermost first. They never change how the
+# modes above behave, so a menu without them draws and answers as before.
 EXAKIT_CHECKBOX_SELECTION=""
 EXAKIT_CHECKBOX_EXCLUSIVE=""
 EXAKIT_CHECKBOX_GROUP=""
@@ -546,6 +1115,20 @@ _ui_checkbox_group_children() {
 _ui_checkbox_apply_group() {
     _cga_sel="$1"; _cga_toggled="$2"; _cga_specs="$3"
     [ -n "$_cga_specs" ] || { printf '%s' "$_cga_sel"; return 0; }
+    # The tree modes read the whole spec list (a radio row's own branch, the
+    # ranges nested in a group).
+    _UI_CHECKBOX_SPECS="$_cga_specs"
+    # Space on the picked radio row picks it again: nothing changes, and its
+    # branch stays as it was (the toggle already took it out; put it back
+    # before any spec sees it off).
+    case ",$_cga_sel,|$_cga_specs" in
+        *",$_cga_toggled,"*'|'*) ;;
+        *'|'*one*)
+            if _ui_checkbox_is_radio "$_cga_toggled"; then
+                printf '%s' "${_cga_sel:+$_cga_sel,}$_cga_toggled"
+                return 0
+            fi ;;
+    esac
     for _cga_spec in $_cga_specs; do
         _cga_sel="$(_ui_checkbox_apply_one_group "$_cga_sel" "$_cga_toggled" "$_cga_spec")"
     done
@@ -555,6 +1138,11 @@ _ui_checkbox_apply_group() {
 _ui_checkbox_apply_one_group() {
     _cg_sel="$1"; _cg_toggled="$2"; _cg_spec="$3"
     [ -n "$_cg_spec" ] || { printf '%s' "$_cg_sel"; return 0; }
+    case "$_cg_spec" in
+        *:*:*:*collapse*|*:*:*:*one*)
+            _ui_checkbox_apply_tree "$_cg_sel" "$_cg_toggled" "$_cg_spec"
+            return 0 ;;
+    esac
     _cg_parent="${_cg_spec%%:*}"
     _cg_rest="${_cg_spec#*:}"
     _cg_first="${_cg_rest%%:*}"
@@ -601,6 +1189,14 @@ _ui_checkbox_apply_one_group() {
             case ",$_cg_sel," in
                 *",$_cg_toggled,"*) printf '%s' "$_cg_sel"; return 0 ;;
             esac
+        elif [ "$_cg_mode" = "claim" ]; then
+            # A child that just went OFF leaves the parent exactly as it was;
+            # one going ON claims it.
+            case ",$_cg_sel," in
+                *",$_cg_toggled,"*) ;;
+                *) printf '%s' "$_cg_sel"; return 0 ;;
+            esac
+            _cg_on=1
         elif [ "$_cg_mode" = "all" ]; then
             _cg_on=1
             for _cg_i in $_cg_children; do
@@ -624,6 +1220,230 @@ _ui_checkbox_apply_one_group() {
         return 0
     fi
     printf '%s' "$_cg_sel"
+}
+
+# --- the tree modes (collapse, one, first) ----------------------------------
+# Pure helpers over _UI_CHECKBOX_SPECS (the menu's whole spec list) and
+# _UI_CHECKBOX_SELECTABLE. ⇄ twins: the *-ExakitTree* functions in ui.ps1.
+_UI_CHECKBOX_SPECS=""
+
+# _ui_checkbox_spec_split <spec> — the spec's fields into _ucs_p _ucs_f _ucs_l
+# _ucs_m (mode, "any" when absent).
+_ui_checkbox_spec_split() {
+    _ucs_p="${1%%:*}"; _ucs_r="${1#*:}"
+    _ucs_f="${_ucs_r%%:*}"; _ucs_r="${_ucs_r#*:}"
+    _ucs_l="${_ucs_r%%:*}"
+    case "$1" in *:*:*:*) _ucs_m="${1##*:}" ;; *) _ucs_m="any" ;; esac
+}
+
+# _ui_checkbox_has_mode <mode> <word> — whether a "+"-joined mode holds <word>.
+_ui_checkbox_has_mode() {
+    case "+$1+" in *"+$2+"*) return 0 ;; esac
+    return 1
+}
+
+# _ui_checkbox_tree_members <parent> <first> <last> — the parent's DIRECT
+# children: the selectable rows of the range that no spec nested in it (a spec
+# whose parent sits in the range) claims for itself.
+_ui_checkbox_tree_members() {
+    _utm2_out=""
+    for _utm2_r in $(_ui_checkbox_group_children "$2" "$3"); do
+        _utm2_in=0
+        for _utm2_s in $_UI_CHECKBOX_SPECS; do
+            _ui_checkbox_spec_split "$_utm2_s"
+            [ "$_ucs_p" = "$1" ] && continue
+            [ "$_ucs_p" -ge "$2" ] && [ "$_ucs_p" -le "$3" ] || continue
+            if [ "$_utm2_r" -ge "$_ucs_f" ] && [ "$_utm2_r" -le "$_ucs_l" ]; then _utm2_in=1; break; fi
+        done
+        [ "$_utm2_in" = 0 ] && _utm2_out="$_utm2_out $_utm2_r"
+    done
+    printf '%s' "${_utm2_out# }"
+}
+
+# _ui_checkbox_is_radio <row> — whether the row is a direct child of a "one"
+# group (drawn "( )", picked and never unpicked by Space).
+_ui_checkbox_is_radio() {
+    for _ucr_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_ucr_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        [ "$1" -ge "$_ucs_f" ] && [ "$1" -le "$_ucs_l" ] || continue
+        _ucr_p="$_ucs_p"; _ucr_f="$_ucs_f"; _ucr_l="$_ucs_l"
+        case " $(_ui_checkbox_tree_members "$_ucr_p" "$_ucr_f" "$_ucr_l") " in *" $1 "*) return 0 ;; esac
+    done
+    return 1
+}
+
+# _ui_checkbox_tree_radio — every radio row, space separated (for the renderer).
+_ui_checkbox_tree_radio() {
+    _uctr_out=""
+    for _uctr_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uctr_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        _uctr_out="$_uctr_out $(_ui_checkbox_tree_members "$_ucs_p" "$_ucs_f" "$_ucs_l")"
+    done
+    printf '%s' "$_uctr_out" | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+
+# _ui_checkbox_tree_hidden <selected_csv> — the rows a closed "collapse" group
+# hides: every row in the range of one whose parent is not ticked.
+_ui_checkbox_tree_hidden() {
+    _ucth_out=""
+    for _ucth_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_ucth_s"
+        _ui_checkbox_has_mode "$_ucs_m" collapse || continue
+        case ",$1," in *",$_ucs_p,"*) continue ;; esac
+        _ucth_i="$_ucs_f"
+        while [ "$_ucth_i" -le "$_ucs_l" ]; do
+            case " $_ucth_out " in *" $_ucth_i "*) ;; *) _ucth_out="$_ucth_out $_ucth_i" ;; esac
+            _ucth_i=$(( _ucth_i + 1 ))
+        done
+    done
+    printf '%s' "${_ucth_out# }"
+}
+
+# _ui_checkbox_tree_missing <selected_csv> — the parent of the first "one"
+# group that is open (its parent ticked) with nothing picked; empty when every
+# open group has its pick. Enter is refused while there is one.
+_ui_checkbox_tree_missing() {
+    for _uctm_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uctm_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        case ",$1," in *",$_ucs_p,"*) ;; *) continue ;; esac
+        _uctm_p="$_ucs_p"
+        _uctm_members="$(_ui_checkbox_tree_members "$_ucs_p" "$_ucs_f" "$_ucs_l")"
+        [ -n "$_uctm_members" ] || continue
+        _uctm_any=0
+        for _uctm_m in $_uctm_members; do
+            case ",$1," in *",$_uctm_m,"*) _uctm_any=1; break ;; esac
+        done
+        [ "$_uctm_any" = 1 ] || { printf '%s' "$_uctm_p"; return 0; }
+    done
+    return 0
+}
+
+# _ui_checkbox_tree_arrow <left|right> <row> <selected_csv> — what ← or → does
+# on <row> in a menu with "collapse" groups, as the exakit-demo mock does it:
+#   "toggle"   → on a closed collapse parent: open it (as Space would);
+#              ← on an open collapse parent that is no one's child: close it;
+#   "move <r>" → → on an open parent: its first row shown that can be picked;
+#              ← on a row under a collapse parent: that (innermost) parent;
+#   nothing    a row with no children and no parent, or nothing to move to.
+# A row that is both (a picked catalog under Lakehouse) answers ← as a child:
+# the cursor goes up a level, it does not unpick the catalog.
+_ui_checkbox_tree_arrow() {
+    _uta_dir="$1"; _uta_row="$2"; _uta_sel="$3"
+    _uta_own=""; _uta_up=""; _uta_upw=0
+    for _uta_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uta_s"
+        _ui_checkbox_has_mode "$_ucs_m" collapse || continue
+        [ "$_ucs_p" = "$_uta_row" ] && _uta_own="$_ucs_f:$_ucs_l"
+        if [ "$_uta_row" -ge "$_ucs_f" ] && [ "$_uta_row" -le "$_ucs_l" ]; then
+            # The innermost: the narrowest range that holds the row.
+            _uta_w=$(( _ucs_l - _ucs_f ))
+            if [ -z "$_uta_up" ] || [ "$_uta_w" -lt "$_uta_upw" ]; then _uta_up="$_ucs_p"; _uta_upw="$_uta_w"; fi
+        fi
+    done
+    _uta_open=0
+    case ",$_uta_sel," in *",$_uta_row,"*) _uta_open=1 ;; esac
+    if [ "$_uta_dir" = right ]; then
+        [ -n "$_uta_own" ] || return 0
+        if [ "$_uta_open" = 0 ]; then printf 'toggle'; return 0; fi
+        _uta_hidden=" $(_ui_checkbox_tree_hidden "$_uta_sel") "
+        for _uta_c in $(_ui_checkbox_group_children "${_uta_own%%:*}" "${_uta_own#*:}"); do
+            case "$_uta_hidden" in *" $_uta_c "*) continue ;; esac
+            printf 'move %s' "$_uta_c"; return 0
+        done
+        return 0
+    fi
+    if [ -n "$_uta_up" ]; then printf 'move %s' "$_uta_up"; return 0; fi
+    [ -n "$_uta_own" ] && [ "$_uta_open" = 1 ] && printf 'toggle'
+    return 0
+}
+
+# _ui_checkbox_tree_collapse_on — whether a "collapse" group is in the specs
+# (the hint then says "→ to open").
+_ui_checkbox_tree_collapse_on() {
+    case " $_UI_CHECKBOX_SPECS" in *:*:*:*collapse*) return 0 ;; esac
+    return 1
+}
+
+# _ui_checkbox_tree_begin <specs> — a menu's tree state: _UI_TREE_ON (1 when a
+# spec uses a tree mode), _UI_TREE_RADIO (" r1 r2 ", the radio rows) and
+# _UI_TREE_HIDDEN, refreshed by _ui_checkbox_tree_refresh <selected_csv>. A menu
+# without tree specs gets empty sets and is drawn exactly as before.
+_UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+_ui_checkbox_tree_begin() {
+    _UI_CHECKBOX_SPECS="$1"; _UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+    case " $1" in *:*:*:*collapse*|*:*:*:*one*) _UI_TREE_ON=1 ;; *) return 0 ;; esac
+    _UI_TREE_RADIO=" $(_ui_checkbox_tree_radio) "
+}
+_ui_checkbox_tree_refresh() {
+    [ "$_UI_TREE_ON" = 1 ] || { _UI_TREE_HIDDEN=" "; return 0; }
+    _UI_TREE_HIDDEN=" $(_ui_checkbox_tree_hidden "$1") "
+}
+_ui_checkbox_tree_end() {
+    _UI_CHECKBOX_SPECS=""; _UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+}
+
+# _ui_checkbox_apply_tree <selected_csv> <toggled_idx> <spec> — one tree spec's
+# post-toggle rule, echoing the adjusted csv.
+_ui_checkbox_apply_tree() {
+    _uat_sel="$1"; _uat_t="$2"
+    _ui_checkbox_spec_split "$3"
+    _uat_p="$_ucs_p"; _uat_f="$_ucs_f"; _uat_l="$_ucs_l"; _uat_m="$_ucs_m"
+    _uat_on() { case ",$_uat_sel," in *",$1,"*) return 0 ;; esac; return 1; }
+    if [ "$_uat_t" = "$_uat_p" ]; then
+        if _uat_on "$_uat_p"; then
+            # Opened: nothing under it is ticked, unless "first" picks its first
+            # direct child.
+            if _ui_checkbox_has_mode "$_uat_m" one && _ui_checkbox_has_mode "$_uat_m" first; then
+                _uat_first="$(_ui_checkbox_tree_members "$_uat_p" "$_uat_f" "$_uat_l")"
+                _uat_first="${_uat_first%% *}"
+                [ -n "$_uat_first" ] && ! _uat_on "$_uat_first" && _uat_sel="${_uat_sel:+$_uat_sel,}$_uat_first"
+            fi
+        else
+            # Closed: nothing under it stays ticked.
+            _uat_out=""
+            for _uat_tok in $(printf '%s' "$_uat_sel" | tr ',' ' '); do
+                [ "$_uat_tok" -ge "$_uat_f" ] && [ "$_uat_tok" -le "$_uat_l" ] && continue
+                _uat_out="${_uat_out:+$_uat_out,}$_uat_tok"
+            done
+            _uat_sel="$_uat_out"
+        fi
+        printf '%s' "$_uat_sel"
+        return 0
+    fi
+    if [ "$_uat_t" -lt "$_uat_f" ] || [ "$_uat_t" -gt "$_uat_l" ]; then
+        printf '%s' "$_uat_sel"; return 0
+    fi
+    _uat_on "$_uat_t" || { printf '%s' "$_uat_sel"; return 0; }
+    if _ui_checkbox_has_mode "$_uat_m" one; then
+        case " $(_ui_checkbox_tree_members "$_uat_p" "$_uat_f" "$_uat_l") " in
+            *" $_uat_t "*)
+                # Picked: every other row of the range goes - the other radio
+                # rows and their branches - but the picked row's own branch
+                # (an inner spec, applied first, may have just filled it) stays.
+                _uat_keep=" $_uat_t "
+                for _uat_s in $_UI_CHECKBOX_SPECS; do
+                    _ui_checkbox_spec_split "$_uat_s"
+                    [ "$_ucs_p" = "$_uat_t" ] || continue
+                    _uat_i="$_ucs_f"
+                    while [ "$_uat_i" -le "$_ucs_l" ]; do _uat_keep="$_uat_keep$_uat_i "; _uat_i=$(( _uat_i + 1 )); done
+                done
+                _uat_out=""
+                for _uat_tok in $(printf '%s' "$_uat_sel" | tr ',' ' '); do
+                    if [ "$_uat_tok" -ge "$_uat_f" ] && [ "$_uat_tok" -le "$_uat_l" ]; then
+                        case "$_uat_keep" in *" $_uat_tok "*) ;; *) continue ;; esac
+                    fi
+                    _uat_out="${_uat_out:+$_uat_out,}$_uat_tok"
+                done
+                _uat_sel="$_uat_out" ;;
+        esac
+    fi
+    # A row under the parent went on: the parent is on (it always is when the
+    # group collapses, since its rows are hidden otherwise).
+    _uat_on "$_uat_p" || _uat_sel="${_uat_sel:+$_uat_sel,}$_uat_p"
+    printf '%s' "$_uat_sel"
 }
 
 # _ui_checkbox_apply_exclusive <selected_csv> <toggled_idx> <exclusive_idx> —
@@ -677,11 +1497,15 @@ ui_checkbox_menu() {
             [ "$_cb_cur" -lt 1 ] && _cb_cur=$_cb_n
             [ "$_cb_cur" -gt "$_cb_n" ] && _cb_cur=1
             if ! _cb_is_header "$_cb_cur" && ! _cb_is_disabled "$_cb_cur"; then
-                return 0
+                case "$_UI_TREE_HIDDEN" in *" $_cb_cur "*) ;; *) return 0 ;; esac
             fi
             _cb_steps=$((_cb_steps + 1))
         done
     }
+    # The tree modes (collapse, one): which rows are radio buttons, and which a
+    # closed group hides. Empty sets for every other menu.
+    _ui_checkbox_tree_begin "${EXAKIT_CHECKBOX_GROUP:-}"
+    _ui_checkbox_tree_refresh "$_cb_sel"
     _cb_cur=0
     _cb_step 1                                            # first selectable row
 
@@ -721,6 +1545,7 @@ ui_checkbox_menu() {
         EXAKIT_CHECKBOX_EXCLUSIVE=""
         EXAKIT_CHECKBOX_GROUP=""
         _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
         _cb_i=1
         for _cb_label in "$@"; do
             case ",$_cb_defaults," in *",$_cb_i,"*) ok "$_cb_label (selected by default)" ;; esac
@@ -731,8 +1556,16 @@ ui_checkbox_menu() {
     # Checked mark: the palette tick in fancy mode; plain "x" otherwise (the
     # plain-palette tick is the multi-char "[ok]", which would double-bracket).
     if [ "${UI_FANCY:-0}" = 1 ]; then _cb_mark="${UI_TICK:-x}"; else _cb_mark="x"; fi
+    # A picked radio row: the palette bullet, "*" without one (the plain bullet
+    # is "-", which reads as "not picked").
+    if [ "${UI_FANCY:-0}" = 1 ]; then _cb_dot="${UI_BULLET:-*}"; else _cb_dot="*"; fi
+    _cb_note=""
     _cb_first=1
     _cb_drawn=0
+    # A click ticks or unticks the row under it, like Space; Enter still
+    # confirms. _cb_at[i] is the line row i starts on within the frame.
+    _cb_at=()
+    ui_mouse_on
     while :; do
         if [ "$_cb_first" -ne 1 ] && [ "$UI_FANCY" = 1 ]; then
             # Up by the lines the LAST frame really occupied, not by the row
@@ -742,10 +1575,16 @@ ui_checkbox_menu() {
             printf '\033[%dA\033[0J' "$_cb_drawn"
         fi
         _cb_first=0
-        _cb_cols="$(_ui_term_cols)"
+        # One column short of the width: a row that fills the last column
+        # leaves the cursor pending a wrap, and some terminals then add a
+        # blank line that the redraw does not count (the frames stack).
+        _cb_cols=$(( $(_ui_term_cols) - 1 ))
         _cb_drawn=0
         _cb_i=1
         for _cb_label in "$@"; do
+            _cb_at[$_cb_i]="$_cb_drawn"
+            # A row a closed group hides is not drawn (and takes no line).
+            case "$_UI_TREE_HIDDEN" in *" $_cb_i "*) _cb_i=$((_cb_i + 1)); continue ;; esac
             if _cb_is_header "$_cb_i"; then
                 _cb_text="$(_ui_fit_row "${_cb_label#\#}" 4 "$_cb_cols")"
                 printf '    %s%s%s\n' "${UI_ACCENT:-}" "$_cb_text" "${UI_RESET:-}"
@@ -774,8 +1613,15 @@ ui_checkbox_menu() {
             _cb_chrome=$((9 + ${#_cb_mark}))
             [ "$_cb_chrome" -lt 10 ] && _cb_chrome=10
             _cb_text="$(_ui_fit_row "$_cb_label" "$_cb_chrome" "$_cb_cols")"
-            case ",$_cb_sel," in
-                *",$_cb_i,"*)
+            case "$_UI_TREE_RADIO|,$_cb_sel," in
+                *" $_cb_i "*"|"*",$_cb_i,"*)
+                    # A radio row (a "one" group): "(•)" picked, "( )" not.
+                    printf '    %s (%s) %s\n' "$_cb_ptr" "$_cb_dot" "$_cb_text"
+                    ;;
+                *" $_cb_i "*"|"*)
+                    printf '    %s ( ) %s\n' "$_cb_ptr" "$_cb_text"
+                    ;;
+                *"|"*",$_cb_i,"*)
                     printf '    %s %s[%s]%s %s\n' \
                         "$_cb_ptr" "${UI_OK:-}" "$_cb_mark" "${UI_RESET:-}" "$_cb_text"
                     ;;
@@ -786,18 +1632,41 @@ ui_checkbox_menu() {
             _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((_cb_chrome + ${#_cb_text})) "$_cb_cols")))
             _cb_i=$((_cb_i + 1))
         done
-        _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space · Enter to confirm" 6 "$_cb_cols")"
+        _cb_at[$(( _cb_n + 1 ))]="$_cb_drawn"
+        _cb_open=""
+        [ "$_UI_TREE_ON" = 1 ] && _ui_checkbox_tree_collapse_on && _cb_open=" · → to open"
+        _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space$_cb_open · Enter to confirm" 6 "$_cb_cols")"
         ui_menu_hint "$_cb_hint"
         _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_hint})) "$_cb_cols")))
+        # Enter refused for an open "one" group with nothing picked: said once,
+        # under the hint, until the next key.
+        if [ -n "$_cb_note" ]; then
+            _cb_note="$(_ui_fit_row "$_cb_note" 6 "$_cb_cols")"
+            printf '    %s!%s %s\n' "${UI_WARN:-}" "${UI_RESET:-}" "$_cb_note"
+            _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_note})) "$_cb_cols")))
+            _cb_note=""
+        fi
+        _ui_cursor_ask
         # One raw keypress, no echo. Enter arrives as an empty read; IFS= keeps
         # a Space keypress from being stripped to an empty string.
-        if [ "$_cb_tty" = "/dev/tty" ]; then
-            IFS= read -rsn1 _cb_key < /dev/tty || { _cb_sel="$_cb_defaults"; break; }
-        else
-            IFS= read -rsn1 _cb_key || { _cb_sel="$_cb_defaults"; break; }
-        fi
+        _ui_menu_key "$_cb_tty" || { _cb_sel="$_cb_defaults"; break; }
+        _cb_key="$UI_KEY"
         case "$_cb_key" in
             "")                                          # Enter → confirm, next step
+                # Enter ON the exclusive row (Skip, No, Nothing) answers that
+                # row alone, whatever else is ticked: the other rows usually
+                # start ticked, so "move to Skip, press Enter" used to confirm
+                # them instead. Same rule as ui_table_menu.
+                if [ -n "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" ] && [ "$_cb_cur" = "$EXAKIT_CHECKBOX_EXCLUSIVE" ]; then
+                    _cb_sel="$_cb_cur"
+                fi
+                if [ "$_UI_TREE_ON" = 1 ]; then
+                    _cb_miss="$(_ui_checkbox_tree_missing "$_cb_sel")"
+                    if [ -n "$_cb_miss" ]; then
+                        _cb_note="Pick one of the options under ${_cb_labels[$(( _cb_miss - 1 ))]}."
+                        continue
+                    fi
+                fi
                 [ -n "$_cb_sel" ] && break
                 continue                                 # at least one selection required
                 ;;
@@ -806,15 +1675,35 @@ ui_checkbox_menu() {
                 _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
                 _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
                 ;;
-            "$(printf '\033')")                          # arrows: ESC [ A / ESC [ B
-                if [ "$_cb_tty" = "/dev/tty" ]; then
-                    IFS= read -rsn2 -t 1 _cb_seq < /dev/tty || _cb_seq=""
-                else
-                    IFS= read -rsn2 -t 1 _cb_seq || _cb_seq=""
-                fi
-                case "$_cb_seq" in
+            "$(printf '\033')")                          # arrows: ESC [ A / ESC [ B; a click: ESC [<
+                case "$UI_KEY_SEQ" in
                     '[A') _cb_step -1 ;;
                     '[B') _cb_step 1 ;;
+                    '[C'|'[D')
+                        # → opens a collapse group or steps into it, ← steps
+                        # out or closes it; nothing in any other menu.
+                        [ "$_UI_TREE_ON" = 1 ] || continue
+                        _cb_dir=right; [ "$UI_KEY_SEQ" = '[D' ] && _cb_dir=left
+                        _cb_act="$(_ui_checkbox_tree_arrow "$_cb_dir" "$_cb_cur" "$_cb_sel")"
+                        case "$_cb_act" in
+                            toggle)
+                                _cb_sel="$(_ui_checkbox_toggle "$_cb_sel" "$_cb_n" "$_cb_cur")"
+                                _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
+                                _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
+                                ;;
+                            "move "*) _cb_cur="${_cb_act#move }" ;;
+                        esac
+                        ;;
+                    '[<')
+                        [ -n "$UI_CURSOR_ROW" ] || continue
+                        _cb_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _cb_drawn )) "$_cb_n" "${_cb_at[@]}")"
+                        [ -n "$_cb_hit" ] || continue
+                        if _cb_is_header "$_cb_hit" || _cb_is_disabled "$_cb_hit"; then continue; fi
+                        _cb_cur="$_cb_hit"
+                        _cb_sel="$(_ui_checkbox_toggle "$_cb_sel" "$_cb_n" "$_cb_cur")"
+                        _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
+                        _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
+                        ;;
                 esac
                 ;;
             k|K) _cb_step -1 ;;
@@ -826,17 +1715,29 @@ ui_checkbox_menu() {
                 _cb_i=1
                 while [ "$_cb_i" -le "$_cb_n" ]; do
                     if ! _cb_is_header "$_cb_i" && ! _cb_is_disabled "$_cb_i" && [ "$_cb_i" != "$EXAKIT_CHECKBOX_EXCLUSIVE" ]; then
-                        _cb_sel="${_cb_sel:+$_cb_sel,}$_cb_i"
+                        # Never a row a closed group hides, nor a radio row:
+                        # one of N is a choice, not "all".
+                        case "$_UI_TREE_HIDDEN$_UI_TREE_RADIO" in
+                            *" $_cb_i "*) ;;
+                            *) _cb_sel="${_cb_sel:+$_cb_sel,}$_cb_i" ;;
+                        esac
                     fi
                     _cb_i=$((_cb_i + 1))
                 done
                 ;;
         esac
+        if [ "$_UI_TREE_ON" = 1 ]; then
+            _ui_checkbox_tree_refresh "$_cb_sel"
+            # The cursor's row closed under it: back up to the nearest row shown.
+            case "$_UI_TREE_HIDDEN" in *" $_cb_cur "*) _cb_step -1 ;; esac
+        fi
     done
+    ui_mouse_off
     EXAKIT_CHECKBOX_SELECTION="$(printf '%s' "$_cb_sel" | tr ',' '\n' | sort -n | paste -sd, -)"
     EXAKIT_CHECKBOX_EXCLUSIVE=""
     EXAKIT_CHECKBOX_GROUP=""
     _UI_CHECKBOX_SELECTABLE=""
+    _ui_checkbox_tree_end
     return 0
 }
 
@@ -878,6 +1779,47 @@ exakit_sweep_sensitive_tmp() {
     [ -n "${EXAKIT_SENSITIVE_TMP:-}" ] || return 0
     rm -f $EXAKIT_SENSITIVE_TMP 2>/dev/null
     EXAKIT_SENSITIVE_TMP=""
+}
+
+# Scratch files and folders in TMPDIR, the same way: a table's state file, a
+# download's unpack folder. Removed on the happy path by their owners, and
+# swept here on die() and on EXIT for every other path. Without this, each
+# die() or Ctrl+C mid-step left one behind, and the data table's state file
+# was never removed at all: hundreds of exakit-table.*, exakit-addons.* and
+# exakit-personal.* piled up in one developer's TMPDIR.
+#
+# Each entry records the subshell level it was made at, and a sweep removes
+# only its own level's. The loads run in subshells while the parent's table
+# animates from its state file; a die() in one of them must not delete that
+# file from under the parent. bash 3.2 has no BASHPID, but BASH_SUBSHELL is
+# enough: a subshell sees its parent's entries only at lower levels. The
+# animator's sidecar files (.new .lines .stop .fatal) go with their table.
+EXAKIT_SCRATCH_TMP=""
+exakit_track_tmp() {
+    [ -n "${1:-}" ] || return 0
+    EXAKIT_SCRATCH_TMP="${EXAKIT_SCRATCH_TMP}${BASH_SUBSHELL:-0} $1
+"
+}
+exakit_sweep_tmp() {
+    [ -n "${EXAKIT_SCRATCH_TMP:-}" ] || return 0
+    _est_level="${BASH_SUBSHELL:-0}"
+    _est_keep=""
+    while IFS= read -r _est_line; do
+        [ -n "$_est_line" ] || continue
+        _est_path="${_est_line#* }"
+        if [ "${_est_line%% *}" = "$_est_level" ] && [ -n "$_est_path" ]; then
+            rm -rf "$_est_path" "$_est_path.new" "$_est_path.lines" \
+                "$_est_path.stop" "$_est_path.fatal" \
+                "$_est_path.activity" "$_est_path.activity.new" 2>/dev/null
+        else
+            _est_keep="$_est_keep$_est_line
+"
+        fi
+    done <<EXAKIT_SCRATCH_EOF
+$EXAKIT_SCRATCH_TMP
+EXAKIT_SCRATCH_EOF
+    EXAKIT_SCRATCH_TMP="$_est_keep"
+    return 0
 }
 
 # --- failure notes ----------------------------------------------------------
@@ -1019,6 +1961,7 @@ die() {
         exakit_note_failure "$*"
         printf 'fatal|%s\n' "$*" >> "$EXAKIT_DEFER_ERRORS" 2>/dev/null
         _exakit_log_file "FATAL $*"
+        exakit_sweep_tmp
         exit 1
     fi
     # Nothing is deferring: stop any animation first, or the message below is
@@ -1030,6 +1973,8 @@ die() {
         printf '    %s%s Log: %s%s\n' "${UI_DIM:-}" "${UI_VB:-|}" "$EXAKIT_LOG_FILE" "${UI_RESET:-}" >&2
     fi
     _exakit_log_file "FATAL $*"
+    # After the animation stopped above: a table's state file is one of these.
+    exakit_sweep_tmp
     exit 1
 }
 
@@ -1230,8 +2175,61 @@ confirm_env() {
     case "$_ce_val" in
         1|y|Y|yes|YES|Yes) return 0 ;;
         0|n|N|no|NO|No)    return 1 ;;
+        # AN ANSWER THAT IS NOT YES OR NO IS BAD INPUT, NOT A QUESTION (audit
+        # AGK-10): `EXAKIT_REUSE_DB=maybe` used to fall through to the prompt,
+        # which waits on /dev/tty when an agent runs with a controlling terminal.
+        ?*) reject "$_ce_var must be 1 or 0 (yes or no), not '$_ce_val'." ;;
         *) confirm "$_ce_question" "$_ce_default" ;;
     esac
+}
+
+# exakit_validate_env_answers — every answer the installer reads from the
+# environment, checked BEFORE anything is installed (audit AGK-10). A typo used
+# to be echoed as "(yours)" by the dry run and surface minutes later, or be
+# read silently as the default. Prints one line per bad answer to stderr and
+# returns 2 when there is any. Read-only: safe in a dry run.
+exakit_validate_env_answers() {
+    _eva_bad=0
+    _eva_say() { printf '  %s\n' "$1" >&2; _eva_bad=1; }
+    for _eva_var in EXAKIT_REUSE_DB EXAKIT_REPLACE_DB EXAKIT_PODMAN_SELFHEAL EXAKIT_CONFIRM_RUNTIME_UPDATE \
+                    EXAKIT_AUTO_ROLLBACK EXAKIT_SKIP_MCP EXAKIT_LOAD_SAMPLE EXAKIT_WSL_CHECKED; do
+        eval "_eva_val=\${$_eva_var:-}"
+        case "$_eva_val" in
+            ''|1|0|y|Y|n|N|yes|no|YES|NO|Yes|No) ;;
+            *) _eva_say "$_eva_var must be 1 or 0, not '$_eva_val'" ;;
+        esac
+    done
+    case "${EXAKIT_INSTALL_PODMAN:-}" in ''|0|1) ;; *) _eva_say "EXAKIT_INSTALL_PODMAN must be 0 or 1, not '$EXAKIT_INSTALL_PODMAN'" ;; esac
+    case "${EXAKIT_ON_EXISTING:-}" in ''|skip|replace|append) ;; *) _eva_say "EXAKIT_ON_EXISTING must be skip, replace or append, not '$EXAKIT_ON_EXISTING'" ;; esac
+    case "${EXAKIT_CONTAINER_ENGINE:-}" in ''|docker|podman) ;; *) _eva_say "EXAKIT_CONTAINER_ENGINE must be docker or podman, not '$EXAKIT_CONTAINER_ENGINE'" ;; esac
+    if [ -n "${EXAKIT_MCP_CLIENTS:-}" ]; then
+        case "$(printf '%s' "$EXAKIT_MCP_CLIENTS" | tr 'A-Z' 'a-z')" in
+            all|none|skip) ;;
+            *) exakit_parse_mcp_client_selection "$EXAKIT_MCP_CLIENTS" >/dev/null 2>&1 || \
+                   _eva_say "EXAKIT_MCP_CLIENTS names a client the kit does not know: '$EXAKIT_MCP_CLIENTS' (known: claude, claude_desktop, claude_code, codex, cursor, copilot, gemini, opencode, continue, all, none)" ;;
+        esac
+    fi
+    if [ -n "${EXAKIT_DATASETS:-}" ] && command -v exakit_bundled_datasets >/dev/null 2>&1; then
+        _eva_known=" $(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
+        if [ "$_eva_known" != "  " ]; then
+            for _eva_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
+                # `external` is the data menu's last row (exakit connect), a valid
+                # answer that loads nothing - not a dataset.
+                case "$_eva_id" in none|all|external) continue ;; esac
+                case "$_eva_known" in *" $_eva_id "*) ;; *) _eva_say "EXAKIT_DATASETS names an unknown dataset '$_eva_id' (known:$(printf '%s' "$_eva_known" | sed 's/ *$//'))" ;; esac
+            done
+        fi
+    fi
+    if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
+        _eva_root="$(exakit_repo_root 2>/dev/null || true)"
+        if [ -n "$_eva_root" ] && [ -f "$_eva_root/marketplace/metadata.py" ] && exakit_can_run_python 2>/dev/null; then
+            _eva_out="$(run_python_any "$_eva_root/marketplace/metadata.py" "$_eva_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || \
+                _eva_say "$_eva_out"
+        fi
+    fi
+    [ "$_eva_bad" = 0 ] && return 0
+    printf '  Nothing was installed. Fix the answer and re-run.\n' >&2
+    return 2
 }
 
 _exakit_prompt_tty() {
@@ -1240,6 +2238,64 @@ _exakit_prompt_tty() {
     elif (: < /dev/tty) 2>/dev/null; then
         printf '/dev/tty\n'
     fi
+}
+
+# exakit_drop_key_escapes <text> — the text without the escape sequences keys
+# send, into _EKE_OUT: CSI (ESC [, parameter and intermediate bytes, a final
+# byte - an arrow ESC [ D, Delete ESC [ 3 ~, Ctrl-Left ESC [ 1 ; 5 D), SS3
+# (ESC O and one byte) and a lone ESC. A hidden line read in canonical mode
+# takes an arrow pressed in it as those bytes, so a password would end in
+# "[D"; with nothing echoed, nobody sees why it is refused.
+exakit_drop_key_escapes() {
+    _eke_esc="$(printf '\033')"
+    _eke_in="$1"; _EKE_OUT=""
+    while :; do
+        case "$_eke_in" in
+            *"$_eke_esc"*) ;;
+            *) _EKE_OUT="$_EKE_OUT$_eke_in"; break ;;
+        esac
+        _EKE_OUT="$_EKE_OUT${_eke_in%%"$_eke_esc"*}"
+        _eke_in="${_eke_in#*"$_eke_esc"}"
+        case "$_eke_in" in
+            '['*)
+                _eke_in="${_eke_in#?}"
+                while [ -n "$_eke_in" ]; do
+                    case "${_eke_in:0:1}" in
+                        [0-9]|';'|':'|'<'|'='|'>'|'?'|' '|'!'|'"'|'#'|'$'|'%'|'&'|"'"|'('|')'|'*'|'+'|','|'-'|'.'|'/')
+                            _eke_in="${_eke_in#?}" ;;
+                        "$_eke_esc") break ;;
+                        *) _eke_in="${_eke_in#?}"; break ;;
+                    esac
+                done ;;
+            O?*) _eke_in="${_eke_in#??}" ;;
+        esac
+    done
+    _eke_in=""
+}
+
+# exakit_read_hidden <label> — one line from the terminal with echo off, on
+# stdout. Call it in $( ): the trap below is then that subshell's own and never
+# replaces the caller's. Echo goes off BEFORE the prompt is printed - in the
+# other order, whatever arrived the moment the prompt appeared (a paste, a
+# password manager typing) was echoed in clear; measured. The terminal's exact
+# previous state comes back afterwards, on Ctrl-C too. Where echo cannot be
+# turned off nothing is read: a credential is never taken in clear. A key that
+# sends an escape sequence (an arrow, Delete) does nothing
+# (exakit_drop_key_escapes).
+exakit_read_hidden() {
+    _erh_saved="$(stty -g < /dev/tty 2>/dev/null)"
+    stty -echo < /dev/tty 2>/dev/null || return 1
+    trap 'stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null; printf "\n" > /dev/tty; exit 130' INT TERM
+    printf '    %s?%s %s (input hidden): ' "${UI_ASK:-}" "${UI_RESET:-}" "$1" > /dev/tty
+    # Unset first: an exported name (even empty) stays exported when assigned.
+    unset _erh_value
+    IFS= read -r _erh_value < /dev/tty
+    stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null
+    trap - INT TERM
+    printf '\n' > /dev/tty
+    exakit_drop_key_escapes "$_erh_value"
+    printf '%s' "$_EKE_OUT"
+    _EKE_OUT=""
 }
 
 prompt_text() {
@@ -1384,7 +2440,7 @@ exakit_uv_version_of() {
 _exakit_uv_manifest_value() {
     _uvm_was="${_EXAKIT_UV_RESOLVING:-0}"
     _EXAKIT_UV_RESOLVING=1
-    _uvm="$(exakit_versions_value "components.uv.$1" 2>/dev/null || true)"
+    _uvm="$(exakit_versions_pin "components.uv.$1" 2>/dev/null || true)"    # the kit copy's pin (SEC-13)
     _EXAKIT_UV_RESOLVING="$_uvm_was"
     printf '%s' "$_uvm"
 }
@@ -1467,12 +2523,41 @@ exakit_uv_target() {
 # .sha256 sidecars and re-hashed from the downloaded archives before pinning.
 exakit_uv_pinned_sha256() {
     case "$1" in
-        uv-0.13.7-linux-aarch64)  echo "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc" ;;
-        uv-0.13.7-linux-x86_64)   echo "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83" ;;
-        uv-0.13.7-macos-aarch64)  echo "81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731" ;;
-        uv-0.13.7-macos-x86_64)   echo "20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7" ;;
-        uv-0.13.7-windows-x86_64) echo "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021" ;;
+        uv-0.13.8-linux-aarch64)  echo "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585" ;;
+        uv-0.13.8-linux-x86_64)   echo "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91" ;;
+        uv-0.13.8-macos-aarch64)  echo "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558" ;;
+        uv-0.13.8-macos-x86_64)   echo "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3" ;;
+        uv-0.13.8-windows-x86_64) echo "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8" ;;
         *) echo "" ;;
+    esac
+}
+
+# exakit_uv_binary_sha256 uv-<version>-<platform> — the SHA-256 of the uv
+# binary inside each release archive a kit pinned and verified (0.13.6 in kit
+# 0.2.3, 0.13.7 in 0.2.4 and 0.2.5, 0.13.8 since). How a uv those kits put in
+# EXAKIT_BIN_DIR is told apart from one the user put there: they wrote no
+# ownership receipt for it (_exakit_legacy_kit_owned). Every uv the kit
+# installs from now on gets a receipt (exakit_uv_record_manifest), so this
+# table never has to grow. Taken from the archives after their digests matched
+# versions.json. Twin of Get-ExakitUvBinarySha256 in exakit-common.ps1.
+exakit_uv_binary_sha256() {
+    case "$1" in
+        uv-0.13.6-linux-aarch64)  printf '%s\n' 7d60258dc76bca41d7b3591cdd829fa9633827fad944970bf5e1fb2a8c01476d ;;
+        uv-0.13.6-linux-x86_64)   printf '%s\n' 23803452c0fbe125033054cd9ff245f1d649fb65b4b73f68429f4abda432436d ;;
+        uv-0.13.6-macos-aarch64)  printf '%s\n' 3996850e6d85e60b0142b40af4bd984822d65f736b52209921c47312450685cb ;;
+        uv-0.13.6-macos-x86_64)   printf '%s\n' a94795fa09796e20b220c237410465fb40a334657816d58cf7c4f4df4bc8239e ;;
+        uv-0.13.6-windows-x86_64) printf '%s\n' 81ea623608f8c17720c62efd0a380a8ead380c4d365ba6968e9d279a2319c674 ;;
+        uv-0.13.7-linux-aarch64)  printf '%s\n' 553b3a3a31484ef9e4f220085ca672cc71c851f92a92d984646a9d1c814b02c3 ;;
+        uv-0.13.7-linux-x86_64)   printf '%s\n' 4b5e59bc557ff2cd70934beb59d0eaa92820702853d49f0066b50aa11a8f0c52 ;;
+        uv-0.13.7-macos-aarch64)  printf '%s\n' 0f333833a6d011710d3edc0e45b55d3d934aef15bb83a25b29848c241ac513b4 ;;
+        uv-0.13.7-macos-x86_64)   printf '%s\n' b345904c70c5bb715cda5a58cb74b6c53158346e806258e270a774fdaa3d7739 ;;
+        uv-0.13.7-windows-x86_64) printf '%s\n' 1791d7a9ed5b6df13ccf80f102e025c333010d96326b4ff0262aa3b578835c5a ;;
+        uv-0.13.8-linux-aarch64)  printf '%s\n' 71a9af4238e9e139a3c185e0a010edd293e9ced3fc158bb544725b3d28d58b29 ;;
+        uv-0.13.8-linux-x86_64)   printf '%s\n' 4a7607589912d9c20e86b860b032f7c7f2913c9a3e76f46aef136885387452b8 ;;
+        uv-0.13.8-macos-aarch64)  printf '%s\n' f98066c132dc37b83a8861f9b538d732b5aad41d3b3a69e47abf27cdaef842a9 ;;
+        uv-0.13.8-macos-x86_64)   printf '%s\n' afdbf4b93ab474668f8ad99da2fb7fb6562c020a4bbd860e9b1909181498b1b6 ;;
+        uv-0.13.8-windows-x86_64) printf '%s\n' 03fa174894b9d0cbe08762d40d1c2c64d10e875bd56f1a1e334ee1e00d60cdbe ;;
+        *) printf '\n' ;;
     esac
 }
 
@@ -1600,6 +2685,12 @@ exakit_uv_record_manifest() {
     [ -n "$_urm_v" ] && manifest_set components.uv.version "$_urm_v" >/dev/null 2>&1 || true
     if [ "$EXAKIT_UV_BIN" = "$EXAKIT_BIN_DIR/uv" ]; then
         manifest_set components.uv.managed true >/dev/null 2>&1 || true
+        # This process installed it: the receipt that makes it the kit's, so
+        # `exakit update` keeps managing it (audit UPG-06). "managed" alone
+        # only says where it is, which a uv the user put there shares.
+        if [ "${_EXAKIT_UV_KIT_INSTALLED:-0}" = 1 ]; then
+            exakit_record_ownership uv kit "$EXAKIT_UV_BIN" >/dev/null 2>&1 || true
+        fi
     else
         manifest_set components.uv.managed false >/dev/null 2>&1 || true
     fi
@@ -1672,6 +2763,7 @@ exakit_ensure_uv() {
     fi
     EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
     _EXAKIT_UV_VETTED="$EXAKIT_UV_BIN"
+    _EXAKIT_UV_KIT_INSTALLED=1
     exakit_uv_record_manifest
     return 0
 }
@@ -1726,6 +2818,7 @@ exakit_uv_update() {
     EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
     _EXAKIT_UV_VETTED="$EXAKIT_UV_BIN"
     _EXAKIT_UV_NONE=
+    _EXAKIT_UV_KIT_INSTALLED=1
     exakit_uv_record_manifest
     manifest_set desired.uv "$(exakit_uv_version_of "$EXAKIT_UV_BIN" 2>/dev/null || printf '%s' "$_uvu_want")" >/dev/null 2>&1 || true
     # The AI clients launch uvx by absolute path, so a kit copy that just
@@ -1745,7 +2838,11 @@ run_python() {
         return $?
     fi
     exakit_ensure_uv || return 1
-    "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ]; then
+        UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    else
+        "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    fi
 }
 
 # Optional Python for best-effort flows (latest-version checks, digest lookup).
@@ -1753,7 +2850,10 @@ run_python() {
 # parsing or report "unknown" instead of failing a status/version command.
 exakit_can_run_python() {
     _exakit_has_system_python3 && return 0
-    exakit_ensure_uv >/dev/null 2>&1
+    exakit_ensure_uv >/dev/null 2>&1 || return 1
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ]; then
+        UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never "$EXAKIT_UV_BIN" python find --no-project "$EXAKIT_MANAGED_PYTHON_VERSION" >/dev/null 2>&1
+    fi
 }
 
 # run_python_any — run a script on ANY Python 3 that is already on the machine.
@@ -1774,6 +2874,22 @@ run_python_any() {
         return $?
     fi
     run_python "$@"
+}
+
+# exakit_python_any_argv — the command run_python_any runs, as words in the
+# array _EXAKIT_PY_ANY, for a caller that needs an EXECUTABLE: timeout(1) in
+# exakit_run_bounded cannot run a shell function. The same choice in the same
+# order: a python3 that can run (run_python_any), then one meeting the floor
+# (run_python), then the uv-managed runtime as `uv run ... python`. Non-zero,
+# the array untouched, when there is no interpreter. ⇄ run_python_any and
+# run_python: a change to either changes this too.
+exakit_python_any_argv() {
+    if _exakit_python3_present || _exakit_has_system_python3; then
+        _EXAKIT_PY_ANY=(python3)
+        return 0
+    fi
+    exakit_ensure_uv || return 1
+    _EXAKIT_PY_ANY=("$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python)
 }
 
 # Is there any Python 3 at all? Never installs one from a read-only query
@@ -1919,6 +3035,7 @@ _exakit_manifest_log_stderr() {
 # Value is stored as JSON if it parses as JSON, otherwise as a string.
 manifest_set() {
     require_python3
+    _exakit_manifest_snap_drop
     # stdout is discarded and stderr is captured rather than redirected with
     # `2>>`: the log directory can already be gone (uninstall removes the kit
     # home while later steps still write), and a redirection onto a missing
@@ -2006,6 +3123,7 @@ PY
 manifest_set_many() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     exakit_can_run_python || return 0
+    _exakit_manifest_snap_drop
     # THE LINES ARE READ HERE, NOT BY PYTHON. `run_python -` takes the program
     # itself from stdin - the heredoc below - so the script's own
     # sys.stdin.read() always came back empty: every caller's piped keys were
@@ -2077,7 +3195,89 @@ PY
 # routing it through the 3.11 gate is what made `exakit status` install uv on
 # a stock Mac. With no interpreter at all a read-only query answers "missing"
 # rather than dying; everything else still gets the explicit failure.
+# --- the manifest, read once (read-only commands) -----------------------------
+# manifest_get starts an interpreter per key: about 40 ms each, and status asks
+# twenty times, mcp-status twenty-five, version sixty-four - seconds of a screen
+# that only reads. A read-only command (EXAKIT_READONLY_QUERY=1, set by exakit
+# before the libraries load) flattens the manifest ONCE into "key<TAB>value"
+# lines, every node as manifest_get would print it, and each lookup after that
+# is a shell read with no fork.
+#
+# Only there: an install reads flags another process has just written, and must
+# see them. The copy is dropped by every manifest write in this process and
+# rebuilt when the manifest's file is newer; a value that spans lines is marked
+# and answered by the interpreter as before. One file per exakit process ($$ is
+# the top shell's in every subshell), swept on exit.
+_EXAKIT_MSNAP_MULTI="$(printf '\037')multiline"
+_exakit_manifest_snap_path() {
+    printf '%s/exakit-msnap.%s' "${TMPDIR:-/tmp}" "$$"
+}
+_exakit_manifest_snap_drop() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] || return 0
+    rm -f "$(_exakit_manifest_snap_path)" 2>/dev/null || true
+}
+# _exakit_manifest_snap - 0 with the snapshot in place and current, 1 when the
+# caller should ask the interpreter (not a read-only command, no manifest, no
+# Python, or the copy could not be written).
+_exakit_manifest_snap() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] && [ "${EXAKIT_NO_MANIFEST_SNAPSHOT:-0}" != 1 ] || return 1
+    [ -n "${EXAKIT_MANIFEST:-}" ] && [ -f "$EXAKIT_MANIFEST" ] || return 1
+    _ems_snap="$(_exakit_manifest_snap_path)"
+    if [ -f "$_ems_snap" ] && ! [ "$EXAKIT_MANIFEST" -nt "$_ems_snap" ]; then
+        return 0
+    fi
+    exakit_can_run_python_any || return 1
+    _ems_tmp="$(mktemp "$_ems_snap.XXXXXX" 2>/dev/null)" || return 1
+    if run_python_any - "$EXAKIT_MANIFEST" "$_EXAKIT_MSNAP_MULTI" > "$_ems_tmp" 2>/dev/null <<'PY'
+import json, sys
+path, multi = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        doc = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(1)
+if not isinstance(doc, dict):
+    sys.exit(1)
+out = []
+def walk(prefix, node):
+    for key, value in node.items():
+        if not isinstance(key, str) or "\t" in key or "\n" in key or "\r" in key:
+            continue
+        name = prefix + key
+        text = value if isinstance(value, str) else json.dumps(value)
+        out.append(name + "\t" + (multi if ("\n" in text or "\r" in text) else text))
+        if isinstance(value, dict):
+            walk(name + ".", value)
+walk("", doc)
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+PY
+    then
+        mv -f "$_ems_tmp" "$_ems_snap" 2>/dev/null || { rm -f "$_ems_tmp"; return 1; }
+        return 0
+    fi
+    rm -f "$_ems_tmp"
+    return 1
+}
+# _exakit_manifest_snap_get <dot.path> - prints the value and returns 0; 1 when
+# the key is not there; 2 when the interpreter has to answer (a marked value).
+_exakit_manifest_snap_get() {
+    while IFS= read -r _emg_line; do
+        case "$_emg_line" in
+            "$1	"*)
+                _emg_val="${_emg_line#*	}"
+                [ "$_emg_val" = "$_EXAKIT_MSNAP_MULTI" ] && return 2
+                printf '%s\n' "$_emg_val"
+                return 0 ;;
+        esac
+    done < "$(_exakit_manifest_snap_path)"
+    return 1
+}
+
 manifest_get() {
+    if _exakit_manifest_snap; then
+        _exakit_manifest_snap_get "$1"
+        case $? in 0) return 0 ;; 1) return 1 ;; esac
+    fi
     if ! exakit_can_run_python_any; then
         [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ] && return 1
         die "A Python runtime is required, and the automatic uv bootstrap failed."
@@ -2151,6 +3351,7 @@ PY
 manifest_del() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     require_python3
+    _exakit_manifest_snap_drop
     # Same treatment as manifest_set: the interpreter reports to the log, the
     # reader gets one sentence. Still a warn rather than a die — a partial
     # uninstall must not fail over bookkeeping.
@@ -2267,7 +3468,10 @@ PY
 
 # exakit_clear_soft_failure <component> — the component finished after all (a
 # re-run, a later retry), so its record goes: on disk, and from this run's
-# closing summary. ⇄ twin: Clear-ExakitSoftFailure in exakit-common.ps1.
+# closing summary — and a failure note that is about it ("<label> did not
+# finish ...") goes too, or `exakit status` kept a "Last failure" for a step
+# `exakit mcp-setup` had since finished. A note about anything else stays.
+# ⇄ twin: Clear-ExakitSoftFailure in exakit-common.ps1.
 exakit_clear_soft_failure() {
     [ -n "${1:-}" ] || return 0
     if [ -n "${EXAKIT_SOFT_FAILED:-}" ] && exakit_soft_failed "$1"; then
@@ -2282,7 +3486,15 @@ exakit_clear_soft_failure() {
     # Read first: a clean component (the common case) costs one read, no write.
     _csf_key="install.soft_failures.$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')"
     if [ -n "$(manifest_get "$_csf_key" 2>/dev/null || true)" ]; then
+        _csf_label="$(manifest_get "$_csf_key.label" 2>/dev/null || true)"
+        [ -n "$_csf_label" ] || _csf_label="$1"
         ( manifest_del "$_csf_key" ) >/dev/null 2>&1 || true
+        _csf_note="$(exakit_failure_note_file)"
+        if [ -f "$_csf_note" ]; then
+            case "$(head -n 1 "$_csf_note" 2>/dev/null)" in
+                "$_csf_label did not finish"*) rm -f "$_csf_note" 2>/dev/null ;;
+            esac
+        fi
     fi
     return 0
 }
@@ -2374,6 +3586,11 @@ PY
 _EXAKIT_VERSIONS_DOC=""
 _EXAKIT_VERSIONS_SOURCE=""
 _EXAKIT_VERSIONS_SCHEMA_AHEAD=0
+# Why the last forced or due fetch of the manifest failed, in words; empty when
+# it succeeded or was not attempted. Read by the update and version screens so
+# a failed check is never shown as "everything is current".
+# ⇄ twin: $script:VersionsCheckError in setup/lib/exakit-common.ps1.
+_EXAKIT_VERSIONS_CHECK_ERROR=""
 
 # _exakit_json_leaves <file> [dot.path] — scalar reader for the canonical form
 # described above: prints "<dot.path><TAB><value>" for every scalar, or just the
@@ -2722,11 +3939,61 @@ _exakit_versions_attempt_recent() {
     [ "$(( _var_now - _var_mtime ))" -lt "$EXAKIT_VERSIONS_RETRY_COOLDOWN" ]
 }
 
+# _exakit_curl_failure_reason <curl exit> <url> [http code] — curl's exit code
+# as the words a reader needs. ⇄ twin: Get-ExakitCurlFailureReason.
+_exakit_curl_failure_reason() {
+    _cfr_host="${2#*://}"
+    _cfr_host="${_cfr_host%%/*}"
+    _cfr_host="${_cfr_host%%:*}"
+    [ -n "$_cfr_host" ] || _cfr_host="the server"
+    case "$1" in
+        5)  printf 'could not resolve the proxy\n' ;;
+        6)  printf 'could not resolve %s\n' "$_cfr_host" ;;
+        7)  printf 'could not connect to %s\n' "$_cfr_host" ;;
+        22) case "${3:-}" in
+                [1-9][0-9][0-9]) printf '%s answered HTTP %s\n' "$_cfr_host" "$3" ;;
+                *) printf '%s answered with an HTTP error\n' "$_cfr_host" ;;
+            esac ;;
+        28) printf 'timed out reaching %s\n' "$_cfr_host" ;;
+        35) printf 'the TLS connection to %s failed\n' "$_cfr_host" ;;
+        52) printf '%s sent an empty reply\n' "$_cfr_host" ;;
+        56) printf 'the connection to %s was reset\n' "$_cfr_host" ;;
+        60) printf 'the certificate of %s was not trusted\n' "$_cfr_host" ;;
+        *)  printf 'curl exit %s reaching %s\n' "$1" "$_cfr_host" ;;
+    esac
+}
+
+# exakit_versions_check_failed_text — what a failed check tells the reader in
+# place of "Everything is already current". ⇄ twin:
+# Get-ExakitVersionsCheckFailedText.
+exakit_versions_check_failed_text() {
+    _vcf_reason="${1:-$_EXAKIT_VERSIONS_CHECK_ERROR}"
+    [ -n "$_vcf_reason" ] || _vcf_reason="the versions manifest could not be fetched"
+    printf 'Could not check for updates: %s. %s\n' "$_vcf_reason" "$(exakit_versions_known_text)"
+}
+
+# exakit_versions_known_text — the second half of that sentence, which is also
+# the remedy_hint of the failed row `exakit update --json` reports for it.
+exakit_versions_known_text() {
+    _vkt_text="Check your internet connection or proxy. Showing the versions this kit already knows"
+    _vkt_updated="$(exakit_versions_value updated 2>/dev/null || true)"
+    if [ -n "$_vkt_updated" ]; then
+        _vkt_text="$_vkt_text (updated $(exakit_format_manifest_date "$_vkt_updated"))"
+    fi
+    printf '%s. Then run the same command again.\n' "$_vkt_text"
+}
+
 # exakit_versions_update_cache [force] — refresh the cached document.
 # Skips the network while the cache is younger than the TTL; "force" is for the
 # explicit `exakit version`, which should always ask upstream.
 # Returns 0 when a validated document was installed, 2 when the fetch was
-# skipped as unnecessary, 1 when nothing could be fetched.
+# skipped as unnecessary, 1 when nothing could be fetched. A fetch that was
+# tried and failed leaves its reason in _EXAKIT_VERSIONS_CHECK_ERROR.
+#
+# curl tries every address the host resolves to (within the connect timeout),
+# so the Windows failure that moved the PowerShell twin to curl.exe - .NET
+# Framework waiting out ~21 s on one unreachable raw.githubusercontent.com
+# address - does not happen here.
 #
 # A failed or invalid download never touches the cache: the temporary file lives
 # in the cache directory (same filesystem) and only a validated document is
@@ -2747,23 +4014,32 @@ exakit_versions_update_cache() {
     if [ "$_vu_force" != "force" ] && _exakit_versions_attempt_recent; then
         return 2
     fi
-    command -v curl >/dev/null 2>&1 || return 1
+    _EXAKIT_VERSIONS_CHECK_ERROR=""
+    if ! command -v curl >/dev/null 2>&1; then
+        _EXAKIT_VERSIONS_CHECK_ERROR="curl is not installed"
+        return 1
+    fi
     mkdir -p "$(dirname "$EXAKIT_VERSIONS_CACHE")" 2>/dev/null || return 1
     # Written BEFORE the request, so a timeout or a kill still records that the
     # question was asked.
     : > "$(_exakit_versions_attempt_stamp)" 2>/dev/null || true
     _vu_tmp="$EXAKIT_VERSIONS_CACHE.tmp.$$"
-    if ! curl -fsSL --proto '=https' --retry 1 \
+    _vu_rc=0
+    _vu_code="$(curl -fsSL --proto '=https' --retry 1 \
             --connect-timeout "$EXAKIT_VERSION_LOOKUP_CONNECT_TIMEOUT" \
             --max-time "$EXAKIT_VERSION_LOOKUP_MAX_TIME" \
-            -A "$(exakit_versions_user_agent)" \
-            -o "$_vu_tmp" "$EXAKIT_VERSIONS_URL" 2>/dev/null; then
+            -A "$(exakit_versions_user_agent)" -w '%{http_code}' \
+            -o "$_vu_tmp" "$EXAKIT_VERSIONS_URL" 2>/dev/null)" || _vu_rc=$?
+    if [ "$_vu_rc" -ne 0 ]; then
         rm -f "$_vu_tmp"
-        _exakit_log_file "INFO  versions manifest fetch failed — keeping the cached copy"
+        _EXAKIT_VERSIONS_CHECK_ERROR="$(_exakit_curl_failure_reason "$_vu_rc" "$EXAKIT_VERSIONS_URL" "$_vu_code")"
+        _exakit_log_file "INFO  versions manifest fetch failed ($_EXAKIT_VERSIONS_CHECK_ERROR) — keeping the cached copy"
         return 1
     fi
     if ! exakit_versions_validate "$_vu_tmp"; then
         rm -f "$_vu_tmp"
+        _vu_host="${EXAKIT_VERSIONS_URL#*://}"
+        _EXAKIT_VERSIONS_CHECK_ERROR="the manifest downloaded from ${_vu_host%%/*} did not validate"
         _exakit_log_file "WARN  fetched versions manifest did not validate — keeping the cached copy"
         return 1
     fi
@@ -2833,6 +4109,20 @@ exakit_versions_resolve_doc() {
     fi
     _EXAKIT_VERSIONS_SOURCE="fallback"
     return 1
+}
+
+# exakit_versions_pin <dot.path> — a value from THIS KIT COPY's versions.json,
+# never the document fetched from the main branch. Every SHA-256 a download is
+# verified against, and the version it belongs to, come from here (SEC-13): the
+# fetched copy says what is newest, but a digest read from it would be the
+# mutable branch vouching for itself. The kit copy came from a release
+# (exakit update installs the announced tag) with the digests it was reviewed
+# with; a newer version advertised only remotely gets no digest here and falls
+# to the component's next tier. Twin of Get-ExakitVersionsPin.
+exakit_versions_pin() {
+    _vp_doc="$(exakit_versions_baked_doc 2>/dev/null || true)"
+    [ -n "$_vp_doc" ] || return 1
+    exakit_versions_value "$1" "$_vp_doc"
 }
 
 exakit_versions_active_doc() {
@@ -2914,6 +4204,16 @@ PY
 exakit_run_bounded() {
     _rb_limit="$1"
     shift
+    # AN EXECUTABLE, NEVER A SHELL FUNCTION. timeout(1) and gtimeout exec
+    # their command, and a function is no file: coreutils answered 127
+    # ("failed to run command") and the language container DNS repair, which
+    # passed run_python_any, never ran on any Linux or WSL host. Refused
+    # loudly instead, so a caller resolves its executable first
+    # (exakit_python_any_argv for run_python_any).
+    if declare -F "$1" >/dev/null 2>&1; then
+        printf 'exakit_run_bounded needs an executable, not the shell function %s\n' "$1" >&2
+        return 2
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_rb_limit" "$@"
         return $?
@@ -3000,12 +4300,53 @@ exakit_legacy_runtime_notice() {
     return 0
 }
 
+# --- yes/no checks asked ahead of time (read-only commands) -------------------
+# exakit_prefetch <name> <function> starts a side-effect-free yes/no check in
+# the background; the function itself then answers from that run instead of
+# starting again (_exakit_prefetched). `exakit info` asked whether add-ons are
+# pending and whether the database runs one after the other, two seconds each,
+# with a panel to draw in between: now both run while the panel is drawn.
+# Read-only commands only, and only for checks that change nothing.
+_EXAKIT_PREFETCH_DIR=""
+exakit_prefetch() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] || return 0
+    if [ -z "$_EXAKIT_PREFETCH_DIR" ]; then
+        _EXAKIT_PREFETCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/exakit-prefetch.XXXXXX" 2>/dev/null)" || { _EXAKIT_PREFETCH_DIR=""; return 0; }
+        exakit_track_tmp "$_EXAKIT_PREFETCH_DIR"
+    fi
+    [ -e "$_EXAKIT_PREFETCH_DIR/$1.started" ] && return 0
+    : > "$_EXAKIT_PREFETCH_DIR/$1.started"
+    (
+        # In here the check is not "prefetched": it is the run itself.
+        _EXAKIT_PREFETCH_SELF="$1"
+        "$2" >/dev/null 2>&1
+        printf '%s\n' "$?" > "$_EXAKIT_PREFETCH_DIR/$1.tmp" && mv -f "$_EXAKIT_PREFETCH_DIR/$1.tmp" "$_EXAKIT_PREFETCH_DIR/$1.rc"
+    ) &
+    return 0
+}
+# _exakit_prefetched <name> - the prefetched check's own exit status (0 or 1);
+# 255 when none was started, it is this very run, or it never answered.
+_exakit_prefetched() {
+    [ -n "$_EXAKIT_PREFETCH_DIR" ] && [ "${_EXAKIT_PREFETCH_SELF:-}" != "$1" ] && \
+        [ -e "$_EXAKIT_PREFETCH_DIR/$1.started" ] || return 255
+    _epf_n=0
+    while [ ! -f "$_EXAKIT_PREFETCH_DIR/$1.rc" ]; do
+        _epf_n=$(( _epf_n + 1 ))
+        [ "$_epf_n" -le 600 ] || return 255          # 30 s: ask directly instead
+        sleep 0.05
+    done
+    _epf_rc="$(cat "$_EXAKIT_PREFETCH_DIR/$1.rc" 2>/dev/null || true)"
+    case "$_epf_rc" in 0) return 0 ;; ''|*[!0-9]*) return 255 ;; *) return 1 ;; esac
+}
+
 # exakit_runtime_is_running — one question, no side effects: is the installed
 # database runtime up right now? The pure check that `exakit status` branches
 # its exit code on and `exakit mcp-doctor` consults BEFORE any operation that
 # needs a live database — so a stopped database is diagnosed as exactly that,
 # never as whatever downstream step happened to fail first.
 exakit_runtime_is_running() {
+    _exakit_prefetched running
+    case $? in 0) return 0 ;; 1) return 1 ;; esac
     case "$(exakit_installation_runtime_type 2>/dev/null || true)" in
         personal)
             command -v personal_deployment_running >/dev/null 2>&1 || return 1
@@ -3045,7 +4386,7 @@ exakit_runtime_remedy() {
 exakit_loaded_datasets() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     if command -v exakit_verified_datasets >/dev/null 2>&1; then
-        _eld_verified="$(exakit_verified_datasets 2>/dev/null)" && {
+        _eld_verified="$(exakit_verified_datasets "${EXAKIT_STATUS_SQL_TIMEOUT:-20}" 2>/dev/null)" && {
             [ -n "$_eld_verified" ] && printf '%s\n' "$_eld_verified"
             return 0
         }
@@ -3247,7 +4588,12 @@ exakit_resolve_install_versions() {
 # the currently advertised set; an offline one silently uses the cached copy, the
 # copy that shipped with this kit, or the constants above.
 _exakit_resolve_versions_manifest() {
+    # Up to 12 s of curl on a network that drops raw GitHub content, so under
+    # the spinner `exakit version` shows for it: it leaves no line behind, and a
+    # failure goes to the log only (the install goes on with the copy it has).
+    ui_spin_begin "Checking for newer versions"
     exakit_versions_update_cache >/dev/null 2>&1 || true
+    ui_spin_end
     # Resolve once in THIS shell so the command substitutions below inherit the
     # decision instead of re-validating the document for every lookup.
     exakit_versions_resolve_doc >/dev/null 2>&1 || true
@@ -3283,10 +4629,9 @@ _exakit_resolve_versions_latest() {
         EXAKIT_EXAPUMP_VERSION="$(exakit_latest_github_release_version "$EXAKIT_EXAPUMP_REPO" || true)"
         [ -n "$EXAKIT_EXAPUMP_VERSION" ] || EXAKIT_EXAPUMP_VERSION="$EXAKIT_EXAPUMP_VERSION_FALLBACK"
     fi
-    if [ -z "$EXAKIT_MCP_VERSION" ]; then
-        EXAKIT_MCP_VERSION="$(exakit_latest_pypi_version "$EXAKIT_MCP_PACKAGE" || true)"
-        [ -n "$EXAKIT_MCP_VERSION" ] || EXAKIT_MCP_VERSION="$EXAKIT_MCP_VERSION_FALLBACK"
-    fi
+    # The MCP server is the image this kit copy pins, not a PyPI package: its
+    # version follows the pin under every policy.
+    _exakit_resolve_one EXAKIT_MCP_VERSION components.mcp.version "$EXAKIT_MCP_VERSION_FALLBACK"
     if [ -z "$EXAKIT_PYEXASOL_VERSION" ]; then
         EXAKIT_PYEXASOL_VERSION="$(exakit_latest_pypi_version "${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}" || true)"
         [ -n "$EXAKIT_PYEXASOL_VERSION" ] || EXAKIT_PYEXASOL_VERSION="$EXAKIT_PYEXASOL_VERSION_FALLBACK"
@@ -3313,7 +4658,7 @@ exakit_component_latest() {
         # astral tags releases as plain numbers (0.13.6, no v); the helper
         # strips an optional v, so the answer has the same shape either way.
         uv)       exakit_latest_github_release_version "$EXAKIT_UV_REPO" ;;
-        mcp)      exakit_latest_pypi_version "$EXAKIT_MCP_PACKAGE" ;;
+        mcp)      exakit_mcp_image_version ;;
         pyexasol) exakit_latest_pypi_version "${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}" ;;
         personal) exakit_latest_github_release_version "$EXAKIT_PERSONAL_REPO" ;;
         runtime)
@@ -3476,6 +4821,32 @@ exakit_version_plain() {
     esac
 }
 
+# exakit_version_same <a> <b> - true when the two name the same version, with a
+# leading "v" before a digit ignored on both sides.
+#
+# Equality is where the spelling difference turned into a wrong answer. The
+# pin says v0.6.1 (a git tag) and the semantic-views probe answers 0.6.1, so
+# a plain string test called them different: every `exakit update` "updated"
+# semantic-views 0.6.1 -> v0.6.1, never said everything was current, and the
+# update notice came back after every command. Every place that asks "is the
+# installed version the advertised one" asks it here. Empty never matches.
+# Twin of Test-ExakitVersionSame in exakit-common.ps1.
+exakit_version_same() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    [ "$(exakit_version_plain "$1")" = "$(exakit_version_plain "$2")" ]
+}
+
+# exakit_mcp_image_version — the version of the MCP server image this kit copy
+# pins (the tag of components.mcp.sidecar_image, read from the kit copy only -
+# SEC-13). Here rather than in mcp.sh so every caller answers the same, with or
+# without the MCP module loaded; mcp_sidecar_image_version is the same answer.
+exakit_mcp_image_version() {
+    _emiv="$(exakit_versions_pin components.mcp.sidecar_image 2>/dev/null || true)"
+    _emiv="${_emiv%%@*}"
+    _emiv="${_emiv##*:}"
+    case "$_emiv" in [0-9]*) printf '%s\n' "$_emiv" ;; *) printf '%s\n' "$EXAKIT_MCP_VERSION_FALLBACK" ;; esac
+}
+
 exakit_component_available() {
     _cav_override="$(_exakit_component_env_override "$1")"
     if [ -n "$_cav_override" ]; then
@@ -3501,6 +4872,14 @@ exakit_component_available() {
                 fi
                 ;;
         esac
+    fi
+    # The MCP server the launcher runs beside the database is an image pinned by
+    # digest in this kit copy: its tag is the only version an update can put
+    # there, whatever PyPI or the fetched document say is newest. Offering
+    # those instead parked the row on "update available" for good.
+    if [ "$1" = mcp ]; then
+        exakit_mcp_image_version
+        return 0
     fi
     case "${EXAKIT_VERSION_POLICY:-manifest}" in
         latest)
@@ -3567,10 +4946,11 @@ _exakit_component_fallback() {
         # copy on disk, which is exactly what is installed.
         exakit) exakit_kit_bundled_version ;;
         *)
-            # Marketplace add-ons: EXAKIT_<ID>_VERSION_FALLBACK, defined by the
-            # add-on's own module (empty when the module is not loaded).
+            # Marketplace defaults are release data, not duplicated constants
+            # in the platform modules.
             _exakit_addon_registered "$1" || return 1
-            eval "_cf_value=\"\${$(_exakit_addon_env_var "$1" VERSION_FALLBACK):-}\""
+            _cf_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+            _cf_value="$(run_python_any "$_cf_root/marketplace/metadata.py" "$_cf_root" registry 2>/dev/null | awk -F'|' -v id="$1" '$1 == id { print $5; exit }')"
             [ -n "$_cf_value" ] || return 1
             printf '%s\n' "$_cf_value"
             ;;
@@ -3673,67 +5053,6 @@ _exakit_probe_pyexasol_version() {
     printf '%s' "$_ppv_out"
 }
 
-# exakit_installed_mcp_version — the MCP server is never "installed": uvx
-# materialises it per launch. What exists on the machine is the SPEC pinned into each
-# AI client config, and that is what will run the next time a client connects.
-#
-# The adapters own where those configs live, so the paths come from the kit's own
-# status operation rather than from a second copy of that knowledge here. When the
-# clients disagree — one set up before an update and never refreshed — the oldest pin
-# is the answer here, and the per-client picture belongs to `exakit mcp-doctor`: it
-# names each client whose managed entry is no longer the one the kit would write, and
-# `exakit mcp-doctor` re-writes those entries from the current definition.
-exakit_installed_mcp_version() {
-    command -v exakit_run_mcp_operation_cli >/dev/null 2>&1 || return 1
-    exakit_can_run_python || return 1
-    _imv_result="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-pins.XXXXXX")"
-    if ! exakit_run_mcp_operation_cli status \
-            "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue" \
-            "$_imv_result" >/dev/null 2>&1; then
-        rm -f "$_imv_result"
-        return 1
-    fi
-    _imv_pins="$(run_python - "$_imv_result" 2>/dev/null <<'PY'
-import json, re, sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        doc = json.load(handle)
-except (OSError, ValueError):
-    raise SystemExit(1)
-pins = set()
-for artifact in doc.get("artifacts", []) or []:
-    path = artifact.get("path")
-    if not path:
-        continue
-    try:
-        with open(path, encoding="utf-8") as handle:
-            body = handle.read()
-    except OSError:
-        continue
-    pins.update(re.findall(r"exasol-mcp-server@([0-9][0-9A-Za-z._+-]*)", body))
-if not pins:
-    raise SystemExit(1)
-
-
-def key(v):
-    return [int(p) if p.isdigit() else p for p in re.split(r"([0-9]+)", v)]
-
-
-# The OLDEST pin, not the set: this value is compared against the advertised version,
-# and a comma-joined list is not a version. The oldest is also the honest answer —
-# it is the weakest link, the client that would launch the most outdated server.
-# Which client is stale belongs to `exakit mcp-doctor`, which prints per-client state
-# already. (No apostrophes in here: this heredoc sits inside a command substitution,
-# and bash 3.2 mis-tracks a lone quote in that position.)
-print(sorted(pins, key=key)[0])
-PY
-    )"
-    rm -f "$_imv_result"
-    [ -n "$_imv_pins" ] || return 1
-    printf '%s\n' "$_imv_pins"
-}
-
 # exakit_previous_kit_repo <installing-repo> — the owner/repo of a starter kit
 # already installed here that this run is moving on FROM, or empty.
 #
@@ -3820,14 +5139,14 @@ exakit_component_current() {
             fi
             ;;
         mcp)
-            # What the clients are pinned to is what will actually run; the record is
-            # the fallback when no client is configured or the module is absent.
-            _cur_live="$(exakit_installed_mcp_version 2>/dev/null || true)"
-            if [ -n "$_cur_live" ]; then
-                printf '%s\n' "$_cur_live"
-            else
-                manifest_get components.mcp_server.version 2>/dev/null
-            fi
+            # The image the sidecar runs, as recorded when it last served. A record
+            # from before the sidecar (clients on the old stdio server) is not this
+            # server at all: no version, so the update moves it over. Nor is a
+            # move whose clients were not yet pointed at the sidecar (a failed
+            # or interrupted update from such a record): mcp_update finishes it.
+            [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] || return 0
+            [ "$(manifest_get components.mcp_server.clients_move 2>/dev/null || true)" != pending ] || return 0
+            manifest_get components.mcp_server.version 2>/dev/null
             ;;
         uv)
             # The uv the kit would run, read from the binary itself: the first
@@ -3896,35 +5215,12 @@ exakit_component_current() {
 # installs), and only the installed ones join the routine update flow, so
 # `exakit update all` can refresh an add-on but never sneak one in.
 #
-# Adding a new add-on is three additive changes — NO case-statement surgery.
-# Every registry function (version block, env override, fallback, upstream
-# lookup, installed probe, update targets/dispatch) handles registered add-ons
-# through a generic arm driven by these conventions:
-#   1. Ship its module as setup/lib/<id>.sh (+ the .ps1 twin), defining
-#      <id>_install, <id>_validate, <id>_update, <id>_installed_version and
-#      <id>_uninstall — with dashes flipped to underscores, since a shell
-#      function name cannot carry a dash — plus its own EXAKIT_<ID>_VERSION
-#      and EXAKIT_<ID>_VERSION_FALLBACK constants. The uninstall hook takes a
-#      dry flag ("1" narrates the plan) and is what folds the add-on into the
-#      selectable `exakit uninstall` menu and the full teardown, with no
-#      further wiring.
-#   2. Add a components.<id> block to versions.json: version, severity, and
-#      repo (GitHub-release-installed) or package (PyPI-installed) — that
-#      field is what the generic upstream lookup reads. An add-on the kit
-#      repackages itself (json-tables) carries neither and
-#      defines <id>_latest instead: exakit_component_latest asks that hook
-#      FIRST, so a repo field beside it would never be read. The hook answers
-#      from versions.json on purpose — only a build the pkg workflow has
-#      published and fingerprinted is installable — and
-#      exakit_component_latest_source is how the rest of the kit tells the
-#      two apart.
-#   3. Add one line to exakit_marketplace_addons below.
-# The add-on's one-line description is NOT one of those changes: it is the
-# About field of its own repository, read through
-# exakit_marketplace_addon_description.
-# (CI guards move with it: the expected-components set in versions.yml and the
-# COUPLED fallback-constant table in versions-bump.yml.)
-# ⇄ twin: Get-ExakitMarketplaceAddons and friends in setup/exakit.ps1.
+# Add-on membership, labels, visibility and fallback versions live in
+# marketplace/catalog.json. Operations live in marketplace/addons/<id>.py and
+# the tested component pin lives in versions.json. metadata.py supplies the
+# platform hooks, so a new add-on needs no shell or PowerShell module pair or
+# registry case. See marketplace/README.md for the complete developer path.
+# ⇄ twin: Get-ExakitMarketplaceAddons in setup/lib/exakit-common.ps1.
 
 # exakit_marketplace_addons — one line per add-on: "id|label".
 #
@@ -3941,17 +5237,218 @@ exakit_component_current() {
 # json-tables is last, so json-tables is what disappeared, silently, on any
 # machine that had VS Code. Reading on fd 3 makes that class of bug
 # impossible here no matter what a future add-on shells out to.
+_exakit_marketplace_root() {
+    _mr_local="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    if [ -f "$_mr_local/marketplace/catalog.json" ]; then printf '%s\n' "$_mr_local"; return 0; fi
+    exakit_repo_root
+}
+
+_exakit_marketplace_versions_doc() {
+    case "${EXAKIT_VERSION_POLICY:-manifest}" in manifest|latest) ;; *) return 1 ;; esac
+    exakit_versions_active_doc
+}
+
+# _exakit_registry — metadata.py's registry rows, read ONCE per process. Every
+# per-add-on question (is it registered, its block, its version override) asked
+# for the whole registry again, a Python start each time - dozens per add-on
+# table, which is most of why listing or offering the add-ons took seconds. The
+# rows are kept in a variable; read in the main shell (the hook loader primes
+# it at load), every subshell after inherits them for free.
+_EXAKIT_REGISTRY_ROWS=""
+_exakit_registry() {
+    if [ -z "$_EXAKIT_REGISTRY_ROWS" ]; then
+        _mcr_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+        [ -f "$_mcr_root/marketplace/metadata.py" ] || return 1
+        _EXAKIT_REGISTRY_ROWS="$(run_python_any "$_mcr_root/marketplace/metadata.py" "$_mcr_root" registry 2>/dev/null)"
+    fi
+    [ -n "$_EXAKIT_REGISTRY_ROWS" ] || return 1
+    printf '%s\n' "$_EXAKIT_REGISTRY_ROWS"
+}
+
 exakit_marketplace_addons() {
-    printf '%s\n' "dash-server|dash-server (AI dashboard host)"
-    printf '%s\n' "dbt-exasol|dbt-exasol (dbt models on Exasol)"
-    printf '%s\n' "exasol-scheduler|Exasol Scheduler (SQL jobs on a schedule)"
-    printf '%s\n' "exasol-vscode|Exasol for VS Code (editor extension)"
-    printf '%s\n' "json-tables|JSON Tables (JSON into Exasol)"
+    _exakit_registry | cut -d'|' -f1,2
+}
+
+_exakit_addon_visible() {
+    [ "$(_exakit_registry | awk -F'|' -v id="$1" '$1 == id { print $4; exit }')" = 1 ]
+}
+
+# _exakit_hook_memo — where this run remembers the add-ons' read-only answers
+# (installed-version, system-present, applicable, applicable-reason). A table,
+# a listing and the offer ask the same questions of every add-on several times,
+# a Python start each; asked once, they are remembered for the run. Keyed by
+# one temp folder, made by _exakit_hook_memo_begin in a shell whose EXIT trap
+# sweeps it (setup/exakit; the installer's closing offer), registered with
+# exakit_track_tmp so it goes when the run does. The subshells the table code
+# runs in inherit its name. Nothing is written to the kit home, and a script
+# that only sources this library asks every time, as before. Anything that
+# changes an add-on (a mutate run below) forgets it all, before and after.
+_EXAKIT_HOOK_MEMO=""
+_exakit_hook_memo_begin() {
+    [ -z "$_EXAKIT_HOOK_MEMO" ] || return 0
+    _EXAKIT_HOOK_MEMO="$(mktemp -d "${TMPDIR:-/tmp}/exakit-hooks.XXXXXX" 2>/dev/null || true)"
+    [ -n "$_EXAKIT_HOOK_MEMO" ] || return 1
+    exakit_track_tmp "$_EXAKIT_HOOK_MEMO"
+}
+_exakit_hook_memo_forget() {
+    [ -n "$_EXAKIT_HOOK_MEMO" ] && [ -d "$_EXAKIT_HOOK_MEMO" ] || return 0
+    rm -f "$_EXAKIT_HOOK_MEMO"/* 2>/dev/null
+    return 0
+}
+
+_exakit_marketplace_run_python() {
+    _mrp_mode="$1"; shift
+    if [ "$_mrp_mode" = mutate ]; then
+        _exakit_hook_memo_forget
+        _exakit_marketplace_run_python_now mutate "$@"
+        _mrp_rc=$?
+        _exakit_hook_memo_forget
+        return "$_mrp_rc"
+    fi
+    _exakit_marketplace_run_python_now "$_mrp_mode" "$@"
+}
+
+_exakit_marketplace_run_python_now() {
+    _mrp_mode="$1"; shift
+    if [ "$_mrp_mode" = query ] && _exakit_python3_present; then
+        python3 "$@"
+        return $?
+    fi
+    _mrp_uv="$(command -v uv 2>/dev/null || true)"
+    [ -n "$_mrp_uv" ] || [ ! -x "$EXAKIT_BIN_DIR/uv" ] || _mrp_uv="$EXAKIT_BIN_DIR/uv"
+    if [ -z "$_mrp_uv" ] && [ "$_mrp_mode" = mutate ]; then
+        exakit_ensure_uv || return 1
+        _mrp_uv="$EXAKIT_UV_BIN"
+    fi
+    if [ -n "$_mrp_uv" ]; then
+        if [ "$_mrp_mode" = query ]; then
+            UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never \
+                "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+        else
+            UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" \
+                "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+        fi
+    else
+        run_python_any "$@"
+    fi
+}
+
+_exakit_marketplace_python() {
+    _mcp_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mcp_root/marketplace/service.py" ] || return 1
+    if [ "$2" = uninstall ] && [ "${3:-0}" = 1 ]; then
+        set -- "$1" "$2" --dry-run
+    else
+        set -- "$1" "$2"
+    fi
+    EXAKIT_MARKETPLACE_ACTIVITY_FILE="${EXAKIT_ADDON_TABLE_STATE:+$EXAKIT_ADDON_TABLE_STATE.activity}" \
+    EXAKIT_MARKETPLACE_ACTIVITY_ROW="${EXAKIT_ADDON_TABLE_ROW:-}" \
+        export EXAKIT_MARKETPLACE_ACTIVITY_FILE EXAKIT_MARKETPLACE_ACTIVITY_ROW
+    if [ "$2" = install ] || [ "$2" = update ]; then
+        _mcp_target="$(exakit_component_available "$1" 2>/dev/null || true)"
+        EXAKIT_MARKETPLACE_TARGET_VERSION="$_mcp_target" \
+        EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+            _exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@"
+    else
+        case "$2" in uninstall|validate|start|stop) _mcp_mode=mutate ;; *) _mcp_mode=query ;; esac
+        # A dry run changes nothing, so it installs nothing either (no uv
+        # bootstrap): it is read-only. Twin of $mutating in
+        # Invoke-ExakitMarketplacePythonNow.
+        [ "${3:-}" != --dry-run ] || _mcp_mode=query
+        case "$2:$#" in
+            installed-version:2|system-present:2|applicable:2|applicable-reason:2)
+                # Read-only and asked again and again: remembered for the run (_EXAKIT_HOOK_MEMO).
+                if [ -n "$_EXAKIT_HOOK_MEMO" ] && [ -d "$_EXAKIT_HOOK_MEMO" ]; then
+                    _mcp_memo="$_EXAKIT_HOOK_MEMO/$1.$2"
+                    if [ -f "$_mcp_memo" ]; then
+                        _mcp_rc="$(head -1 "$_mcp_memo")"
+                        sed 1d "$_mcp_memo"
+                        return "${_mcp_rc:-1}"
+                    fi
+                    _mcp_out="$(_exakit_marketplace_run_python query "$_mcp_root/marketplace/service.py" "$@")"
+                    _mcp_rc=$?
+                    _mcp_part="$_mcp_memo.$RANDOM"
+                    { printf '%s\n' "$_mcp_rc"; [ -z "$_mcp_out" ] || printf '%s\n' "$_mcp_out"; } \
+                        > "$_mcp_part" 2>/dev/null && mv -f "$_mcp_part" "$_mcp_memo" 2>/dev/null
+                    [ -z "$_mcp_out" ] || printf '%s\n' "$_mcp_out"
+                    return "$_mcp_rc"
+                fi
+                ;;
+        esac
+        case "$2" in
+            uninstall)
+                # The module answers with the paths it removed (or would
+                # remove), one per line on stdout. Passed straight through they
+                # reached the terminal as bare absolute paths: in the middle of
+                # the --yes plan and again spliced into the "Removing the kit"
+                # spinner line. A dry run lists them as plan lines; a real run
+                # sends them to the logfile, like every other path a removal
+                # touches. Twin of the $DryRun / Write-ExakitLog arms at the end
+                # of Invoke-ExakitMarketplacePython in exakit-common.ps1.
+                _mcp_out="$(_exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@")"
+                _mcp_rc=$?
+                # What was removed, for a caller that reports it (cmd_uninstall
+                # after an interrupted install). Twin: $script:ExakitAddonRemoved.
+                EXAKIT_ADDON_REMOVED=""
+                while IFS= read -r _mcp_line; do
+                    [ -n "$_mcp_line" ] || continue
+                    if [ "${3:-}" = --dry-run ]; then
+                        info "  will remove: $(ui_tilde "$_mcp_line")"
+                    else
+                        _exakit_log_file "INFO  $1 $_mcp_line"
+                        case "$_mcp_line" in
+                            "  • "*) ;;     # a progress line (KitContext.activity), not a removed item
+                            *) EXAKIT_ADDON_REMOVED="${EXAKIT_ADDON_REMOVED:+$EXAKIT_ADDON_REMOVED, }$(ui_tilde "$_mcp_line")" ;;
+                        esac
+                    fi
+                done <<EXAKIT_MCP_UNINSTALL_EOF
+$_mcp_out
+EXAKIT_MCP_UNINSTALL_EOF
+                return "$_mcp_rc" ;;
+            latest|validate)
+                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+                    _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
+            *) _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
+        esac
+    fi
+}
+
+# Direct add-on commands share one platform boundary. The command parsers and
+# side effects live in marketplace/*.py, not in parallel shell implementations.
+_exakit_marketplace_cli() {
+    case "$1" in persona_apply|installer_flow) ;; *) return 2 ;; esac
+    _emc_script="$1"
+    shift
+    # Both entry points write (the persona record, the add-ons they start).
+    EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+        _exakit_marketplace_run_python mutate "$(_exakit_marketplace_root)/marketplace/$_emc_script.py" "$@"
+}
+
+_exakit_marketplace_python_hooks() {
+    _mph_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mph_root/marketplace/metadata.py" ] || return 1
+    _mph_rows="$(run_python_any "$_mph_root/marketplace/metadata.py" "$_mph_root" shell-hooks 2>/dev/null)" || return 1
+    while IFS='|' read -r _mph_id _mph_method _mph_operation <&3; do
+        [ -n "$_mph_id" ] || continue
+        # metadata.py validates ids and takes operation names from the service.
+        _mph_name="${_mph_id//-/_}_$_mph_method"          # no fork per hook: there are over a hundred
+        # Keep a hook already supplied by the caller (including test and
+        # embedder overrides); loading the registry must be idempotent.
+        # Replace legacy lifecycle hooks in the main CLI; isolated test
+        # overrides remain untouched.
+        if [ "${EXAKIT_MARKETPLACE_PYTHON_HOOKS:-0}" != 1 ]; then
+            command -v "$_mph_name" >/dev/null 2>&1 && continue
+        fi
+        eval "$_mph_name() { _exakit_marketplace_python '$_mph_id' '$_mph_operation' \"\$@\"; }"
+    done 3<<EXAKIT_MPH_EOF
+$_mph_rows
+EXAKIT_MPH_EOF
+    _exakit_registry >/dev/null 2>&1 || true     # read once, here in the main shell (see _exakit_registry)
 }
 
 # _exakit_addon_fn <id> <suffix> — the module function for an add-on.
 _exakit_addon_fn() {
-    printf '%s_%s\n' "$(printf '%s' "$1" | tr '-' '_')" "$2"
+    printf '%s_%s\n' "${1//-/_}" "$2"
 }
 
 # _exakit_addon_env_var <id> <suffix> — the env/constant name for an add-on:
@@ -4033,15 +5530,72 @@ EXAKIT_ADF_PY
     sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_adf_doc" | head -1
 }
 
-# _exakit_addon_repo <id> — the add-on's repository, as owner/name.
+# _exakit_addon_github <id> <repo|url|name|about> — the add-on's GitHub
+# repository as marketplace/catalog.json carries it: tools/addon_github.py
+# copies it from GitHub, so it is the repository's own name, link and About, and
+# the answer when GitHub cannot be reached. One add-on per catalog line, so with
+# no Python the line is read with sed. Whitespace collapses to single spaces;
+# callers that print the About still sanitise it.
+_exakit_addon_github() {
+    _agh_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_agh_cat" ] || return 1
+    case "$2" in repo|url|name|about) ;; *) return 1 ;; esac
+    # Any working python3, never one installed for this: a read of the kit's own
+    # file must not set up a runtime (it is asked once per table row).
+    if _exakit_python3_present; then
+        python3 - "$_agh_cat" "$1" "$2" <<'EXAKIT_AGH_PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        rows = json.load(handle)["addons"]
+except Exception:
+    sys.exit(1)
+for row in rows:
+    if isinstance(row, dict) and row.get("id") == sys.argv[2]:
+        block = row.get("github")
+        value = block.get(sys.argv[3]) if isinstance(block, dict) else None
+        if isinstance(value, str) and value.strip():
+            print(" ".join(value.split()))
+            sys.exit(0)
+sys.exit(1)
+EXAKIT_AGH_PY
+        return $?
+    fi
+    _agh_line="$(grep -F "{\"id\": \"$1\"," "$_agh_cat" 2>/dev/null | head -1)"
+    [ -n "$_agh_line" ] || return 1
+    # The block as tools/addon_github.py writes it: repo, url, name, about, in
+    # that order, about last. The first three never hold a quote; the About may,
+    # escaped, so it is taken to the block's closing quote and unescaped.
+    _agh_block="$(printf '%s\n' "$_agh_line" | sed -n 's/.*"github": {\(.*\)}, "backend".*/\1/p' | head -1)"
+    case "$2" in
+        about) _agh_value="$(printf '%s\n' "$_agh_block" | sed -n 's/.*"about": "\(.*\)"$/\1/p' | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')" ;;
+        *) _agh_value="$(printf '%s\n' "$_agh_block" | sed -n 's/.*"'"$2"'": "\([^"]*\)".*/\1/p' | head -1)" ;;
+    esac
+    [ -n "$_agh_value" ] || return 1
+    printf '%s\n' "$_agh_value"
+}
+
+# _exakit_addon_repo <id> — the add-on's repository, as owner/name, from the
+# catalog's GitHub block.
 #
 # This value is interpolated into a URL, so it is validated as two plain path
-# segments and nothing else. A document that says anything more interesting than
+# segments and nothing else. A catalog that says anything more interesting than
 # that has no repository as far as this code is concerned.
+# _exakit_about_cache_matches <id> — the cached lines are this add-on's: their
+# fifth line names the repository they were fetched from, and that is still the
+# one the catalog names. The cache is keyed by add-on id, so a kit update that
+# points an add-on at another repository otherwise showed the old one's name,
+# link and About until the cache aged out (audit DAY-05). A cache from before
+# the fifth line was written counts as another repository's.
+_exakit_about_cache_matches() {
+    _acm_repo="$(_exakit_addon_repo "$1" 2>/dev/null || true)"
+    [ -n "$_acm_repo" ] && [ "$(sed -n 5p "$(_exakit_about_cache_path "$1")" 2>/dev/null)" = "$_acm_repo" ]
+}
+
 _exakit_addon_repo() {
-    _aar_repo="$(_exakit_addon_doc_field "$1" repo 2>/dev/null || true)"
+    _aar_repo="$(_exakit_addon_github "$1" repo 2>/dev/null || true)"
     case "$_aar_repo" in
-        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/) return 1 ;;
+        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/|*..*) return 1 ;;
         */*) printf '%s\n' "$_aar_repo" ;;
         *) return 1 ;;
     esac
@@ -4085,10 +5639,19 @@ _exakit_about_cache_fresh() {
 _exakit_about_sanitise() {
     _abs_esc="$(printf '\033')"
     _abs_bel="$(printf '\007')"
+    # Also the C1 controls (U+0080-U+009F, UTF-8 C2 80..9F) and the bidi
+    # embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069): the first
+    # are terminal controls in their own right, the second reorder what is
+    # printed after them. The PowerShell twin strips both (audit SEC-10).
+    _abs_c2="$(printf '\302')"; _abs_80="$(printf '\200')"; _abs_9f="$(printf '\237')"
+    _abs_e2="$(printf '\342')"; _abs_80b="$(printf '\200')"; _abs_81="$(printf '\201')"
     LC_ALL=C sed \
         -e "s/${_abs_esc}\[[0-9;?]*[A-Za-z]//g" \
         -e "s/${_abs_esc}]8;;[^${_abs_bel}${_abs_esc}]*${_abs_bel}//g" \
         -e "s/${_abs_esc}]8;;[^${_abs_bel}${_abs_esc}]*${_abs_esc}\\\\//g" \
+        -e "s/${_abs_c2}[${_abs_80}-${_abs_9f}]/ /g" \
+        -e "s/${_abs_e2}${_abs_80b}[$(printf '\252')-$(printf '\256')]//g" \
+        -e "s/${_abs_e2}${_abs_81}[$(printf '\246')-$(printf '\251')]//g" \
         | LC_ALL=C tr '\n\r\t' '   ' \
         | LC_ALL=C tr -d '\000-\037\177' \
         | LC_ALL=C tr -s ' ' \
@@ -4109,22 +5672,30 @@ _exakit_about_cap() {
     printf '%s\n' "$_abc_text"
 }
 
-# _exakit_about_extract <json> — the About field out of a repository response.
+# _exakit_about_extract <json> [field] — one field out of a repository
+# response: the About (description, the default), or full_name, html_url or
+# archived ("true"/"false").
 _exakit_about_extract() {
+    _abx_field="${2:-description}"
     if exakit_can_run_python; then
         printf '%s' "$1" | run_python -c 'import json,sys
 try:
-    print((json.load(sys.stdin).get("description") or "").strip())
+    value = json.load(sys.stdin).get(sys.argv[1])
+    print(("true" if value else "false") if isinstance(value, bool) else (value or "").strip())
 except Exception:
-    pass' 2>/dev/null
+    pass' "$_abx_field" 2>/dev/null
         return 0
     fi
-    printf '%s' "$1" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+    case "$_abx_field" in
+        archived) printf '%s' "$1" | grep -q '"archived"[[:space:]]*:[[:space:]]*true' && echo true || echo false ;;
+        *) printf '%s' "$1" | sed -n 's/.*"'"$_abx_field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
+    esac
 }
 
 # _exakit_about_fetch <id> — refresh one add-on's cached About line.
-# 0 = a line was cached, 2 = the fetch was skipped as unnecessary, 1 = nothing
-# was cached (and the caller falls back; it never fails a screen).
+# 0 = a line was cached, 2 = the fetch was skipped as unnecessary, 3 = the
+# request got no answer (offline, timed out, refused), 1 = nothing else was
+# cached. Whatever it returns, what is on disk stays and the caller falls back.
 _exakit_about_fetch() {
     _abf_id="$1"
     [ "$EXAKIT_ABOUT_OFFLINE" = "1" ] && return 1
@@ -4136,6 +5707,10 @@ _exakit_about_fetch() {
     [ -n "$_abf_repo" ] || return 1
     _abf_cache="$(_exakit_about_cache_path "$_abf_id")"
     _abf_attempt="$EXAKIT_ABOUT_CACHE_DIR/.attempt-$_abf_id"
+    # Another repository's lines (or ones from before line 5): asked again now.
+    if [ -f "$_abf_cache" ] && ! _exakit_about_cache_matches "$_abf_id"; then
+        rm -f "$_abf_cache" "$_abf_attempt" 2>/dev/null
+    fi
     _exakit_about_cache_fresh "$_abf_cache" && return 2
     # The stamp is what keeps a rate-limited or offline machine from asking
     # again on every single run: it is written BEFORE the request, so the
@@ -4148,49 +5723,138 @@ _exakit_about_fetch() {
         --connect-timeout "$EXAKIT_VERSION_LOOKUP_CONNECT_TIMEOUT" \
         --max-time "$EXAKIT_VERSION_LOOKUP_MAX_TIME" \
         -A "$(exakit_versions_user_agent 2>/dev/null || true)" \
-        "$EXAKIT_ABOUT_URL/$_abf_repo" 2>/dev/null || true)"
+        "$EXAKIT_ABOUT_URL/$_abf_repo" 2>/dev/null)"
+    _abf_rc=$?
     if [ -z "$_abf_json" ]; then
         _exakit_log_file "INFO  About fetch failed for $_abf_id — keeping whatever is on disk"
-        return 1
+        # curl 22 is GitHub answering with an error (a deleted repository's 404,
+        # a rate limit's 403): the next add-on may still be asked. Anything else
+        # is no answer at all.
+        [ "$_abf_rc" -eq 22 ] && return 1
+        return 3
     fi
     _abf_text="$(_exakit_about_cap "$(_exakit_about_extract "$_abf_json" | _exakit_about_sanitise)")"
     if [ -z "$_abf_text" ]; then
         _exakit_log_file "INFO  $_abf_repo has no About text to show for $_abf_id"
         return 1
     fi
+    # The repository as GitHub names it now. A renamed or transferred one
+    # answers under its new owner/name (curl follows the redirect); anything
+    # that is not plain owner/name, with the matching link, is not kept.
+    _abf_full="$(_exakit_about_extract "$_abf_json" full_name)"
+    _abf_url="$(_exakit_about_extract "$_abf_json" html_url)"
+    case "$_abf_full" in
+        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/|*..*) _abf_full="" ;;
+        */*) ;;
+        *) _abf_full="" ;;
+    esac
+    [ -n "$_abf_full" ] && [ "$_abf_url" = "https://github.com/$_abf_full" ] || { _abf_full=""; _abf_url=""; }
+    [ -n "$_abf_full" ] && [ "$_abf_full" != "$_abf_repo" ] && \
+        _exakit_log_file "INFO  $_abf_repo is now $_abf_full on GitHub (refresh with tools/addon_github.py)"
+    _abf_archived="$(_exakit_about_extract "$_abf_json" archived)"
+    [ "$_abf_archived" = true ] && _exakit_log_file "WARN  $_abf_repo is archived on GitHub ($_abf_id)"
     _abf_tmp="$_abf_cache.tmp.$$"
-    printf '%s\n' "$_abf_text" > "$_abf_tmp" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
+    # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived,
+    # 5 the catalog's repository it was asked of (_exakit_about_cache_matches).
+    printf '%s\n%s\n%s\n%s\n%s\n' "$_abf_text" "${_abf_full##*/}" "$_abf_url" "${_abf_archived:-false}" "$_abf_repo" \
+        > "$_abf_tmp" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     mv -f "$_abf_tmp" "$_abf_cache" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     _exakit_log_file "INFO  About refreshed for $_abf_id from $_abf_repo"
     return 0
 }
 
-# exakit_marketplace_addon_description <id> — the one-liner a screen shows.
-# Always answers something; the chain degrades instead of blanking a column:
-#   1. a cached About younger than the TTL     — the common case, no network
-#   2. a fresh fetch                           — one request, timeouts bounded
-#   3. a STALE cached About, any age           — old wording beats no wording
-#   4. the help document's own tagline         — on disk, so this is the answer
-#                                                offline and when rate-limited
-#   5. a pointer at the help screen            — only if even that is missing
+# exakit_marketplace_addon_description <id> — the one-liner a screen shows: the
+# add-on repository's GitHub About. Always answers something; the chain degrades
+# instead of blanking a column:
+#   1. the cached About, any age               — what the last lookup saw
+#   2. the catalog's copy of the About         — on disk, so this is the answer
+#                                                before any lookup, offline and
+#                                                when rate-limited
+#   3. a pointer at the help screen            — only if even that is missing
+# It never fetches: _exakit_marketplace_warm_about does, on demand (install and
+# update). A repository GitHub reports as archived says so after its About.
 exakit_marketplace_addon_description() {
+    # Offered for a persona: the persona's own line for this add-on wins
+    # (EXAKIT_MARKETPLACE_REASONS, addon|reason lines; NEW-10).
+    if [ -n "${EXAKIT_MARKETPLACE_REASONS:-}" ]; then
+        _mad_reason="$(printf '%s\n' "$EXAKIT_MARKETPLACE_REASONS" | awk -F'|' -v id="$1" '$1 == id { sub(/^[^|]*\|/, ""); print; exit }')"
+        if [ -n "$_mad_reason" ]; then
+            printf '%s\n' "$_mad_reason"
+            return 0
+        fi
+    fi
+    _mad_text="$(_exakit_addon_kit_about "$1" 2>/dev/null)"
+    if [ -n "$_mad_text" ]; then
+        printf '%s\n' "$_mad_text"
+        return 0
+    fi
     _mad_cache="$(_exakit_about_cache_path "$1")"
-    _exakit_about_cache_fresh "$_mad_cache" || _exakit_about_fetch "$1" >/dev/null 2>&1 || true
-    if [ -f "$_mad_cache" ]; then
-        _mad_text="$(head -1 "$_mad_cache" 2>/dev/null || true)"
+    if [ -f "$_mad_cache" ] && _exakit_about_cache_matches "$1"; then
+        # Cleaned again on the way out: the cache is a file anyone could have
+        # written, not only the fetch that sanitised it (audit SEC-18).
+        _mad_text="$(_exakit_about_cap "$(head -1 "$_mad_cache" 2>/dev/null | _exakit_about_sanitise)")"
         if [ -n "$_mad_text" ]; then
+            [ "$(sed -n 4p "$_mad_cache" 2>/dev/null)" = true ] && _mad_text="$_mad_text (archived on GitHub)"
             printf '%s\n' "$_mad_text"
             return 0
         fi
     fi
-    _mad_text="$(_exakit_addon_doc_field "$1" tagline 2>/dev/null || true)"
+    _mad_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
     if [ -n "$_mad_text" ]; then
-        # A tagline is written as a help-screen header and ends in a period; a
-        # table cell does not.
-        printf '%s\n' "${_mad_text%.}"
+        printf '%s\n' "$_mad_text"
         return 0
     fi
     printf 'Details: exakit help %s\n' "$1"
+}
+
+# exakit_marketplace_addon_name <id> — the add-on repository's name on GitHub:
+# the one the last fetch saw (a renamed repository shows its new name), else the
+# catalog's copy, else the id itself. Never fetches: the description's lookup
+# fills the cache this reads.
+exakit_marketplace_addon_name() {
+    _man_name=""
+    _exakit_about_cache_matches "$1" && _man_name="$(sed -n 2p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="" ;; esac
+    [ -n "$_man_name" ] || _man_name="$(_exakit_addon_github "$1" name 2>/dev/null || true)"
+    case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="$1" ;; esac
+    printf '%s\n' "$_man_name"
+}
+
+# _exakit_marketplace_addon_about_offline <id> — the About with no lookup: the
+# cached one at any age, else the catalog's copy; empty when neither exists.
+# _exakit_addon_kit_about <id> — the line the kit writes for an add-on it builds
+# itself (catalog kit_about, DOC-13): its github block names the upstream it is
+# built on, whose About describes that upstream. Empty for every other add-on.
+_exakit_addon_kit_about() {
+    _aka_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_aka_cat" ] || return 1
+    grep -F "{\"id\": \"$1\"," "$_aka_cat" 2>/dev/null | head -1 | sed -n 's/.*"kit_about": "\([^"]*\)".*/\1/p'
+}
+
+_exakit_marketplace_addon_about_offline() {
+    _mao_text="$(_exakit_addon_kit_about "$1" 2>/dev/null)"
+    if [ -n "$_mao_text" ]; then printf '%s\n' "$_mao_text"; return 0; fi
+    _exakit_about_cache_matches "$1" && \
+        _mao_text="$(_exakit_about_cap "$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null | _exakit_about_sanitise)")"
+    [ -n "$_mao_text" ] || _mao_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
+    printf '%s\n' "$_mao_text"
+}
+
+# exakit_marketplace_addon_label <id> — what a table row says: the repository's
+# name, with the id typed in commands beside it when the two differ.
+exakit_marketplace_addon_label() {
+    _mal_name="$(exakit_marketplace_addon_name "$1")"
+    if [ "$_mal_name" = "$1" ]; then printf '%s\n' "$1"; else printf '%s (%s)\n' "$_mal_name" "$1"; fi
+}
+
+# exakit_marketplace_addon_url <id> — the add-on repository's link on GitHub:
+# the last fetch's (it follows a rename), else the catalog's.
+exakit_marketplace_addon_url() {
+    _mau_url=""
+    _exakit_about_cache_matches "$1" && _mau_url="$(sed -n 3p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) _mau_url="" ;; https://github.com/*/*) ;; *) _mau_url="" ;; esac
+    [ -n "$_mau_url" ] || _mau_url="$(_exakit_addon_github "$1" url 2>/dev/null || true)"
+    case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) return 1 ;; https://github.com/*/*) printf '%s\n' "$_mau_url" ;; *) return 1 ;; esac
 }
 
 # exakit_about_wrap <text> [width] [continuation-indent] — the text in full,
@@ -4239,22 +5903,43 @@ exakit_about_wrap() {
     fi
 }
 
-# _exakit_marketplace_warm_about — fill the cache for the rows that will show a
-# description, before a screen is drawn.
-#
-# This exists for the closing offer: it runs its gate question ("Browse it
-# now?") before the table exists, so the requests land while the user is reading
-# two sentences of prose rather than in front of a half-drawn table.
+# _exakit_marketplace_warm_about [all] — the ONE place an add-on's GitHub name,
+# link and About are looked up, and only on demand: the install's closing offer
+# (the add-ons it can offer, before its table exists, so the requests land while
+# the user reads the gate question) and exakit update ("all": installed ones
+# too, as an update shows them). The cache's TTL and attempt stamp still keep a
+# re-run from asking again. Every other screen reads what this cached.
 _exakit_marketplace_warm_about() {
+    _mw_probed=0
+    _mw_pids=""
     while read -r _mw_id <&3; do
         [ -n "$_mw_id" ] || continue
-        _exakit_addon_offerable "$_mw_id" || continue
-        _exakit_marketplace_addon_present "$_mw_id" && continue
-        exakit_marketplace_addon_available "$_mw_id" || continue
-        _exakit_about_fetch "$_mw_id" >/dev/null 2>&1 || true
+        if [ "${1:-}" != all ]; then
+            _exakit_addon_offerable "$_mw_id" || continue
+            _exakit_marketplace_addon_present "$_mw_id" && continue
+            exakit_marketplace_addon_available "$_mw_id" || continue
+        fi
+        # The first request that goes out is asked alone: one that gets no
+        # answer means GitHub is out of reach for this run, so the rest are not
+        # asked (each would wait out its own timeout) and every screen goes on
+        # with the cached or the catalog's copy. Once one is answered, the rest
+        # are asked at the same time, not one after another (each writes its
+        # own cache file). Only these are waited for: a spinner may be running.
+        if [ "$_mw_probed" = 0 ]; then
+            _exakit_about_fetch "$_mw_id" >/dev/null 2>&1
+            case "$?" in
+                3) break ;;
+                2) ;;                               # fresh in the cache: nothing was asked
+                *) _mw_probed=1 ;;
+            esac
+        else
+            _exakit_about_fetch "$_mw_id" >/dev/null 2>&1 &
+            _mw_pids="$_mw_pids $!"
+        fi
     done 3<<EXAKIT_MW_EOF
 $(exakit_marketplace_addons | cut -d'|' -f1)
 EXAKIT_MW_EOF
+    for _mw_pid in $_mw_pids; do wait "$_mw_pid" 2>/dev/null; done
     return 0
 }
 
@@ -4265,28 +5950,9 @@ exakit_marketplace_addon_available() {
     command -v "$(_exakit_addon_fn "$1" install)" >/dev/null 2>&1
 }
 
-# _exakit_marketplace_load_modules — source any add-on module that is not
-# loaded yet. The setup scripts deliberately do not source the modules (the
-# marketplace is not part of the install flow), so the closing offer and the
-# menu load them here on demand. A module that fails to load only makes its
-# own row unavailable.
+# A missing Python module leaves its marketplace row unavailable.
 _exakit_marketplace_load_modules() {
-    # The sourcing must happen in THIS shell so the loaded functions stick —
-    # ids are collected via command substitution, never through a pipeline
-    # (whose stages are subshells).
-    _ml_root="$(exakit_repo_root 2>/dev/null || true)"
-    _ml_ids="$(exakit_marketplace_addons | cut -d'|' -f1)"
-    for _ml_id in $_ml_ids; do
-        exakit_marketplace_addon_available "$_ml_id" && continue
-        for _ml_dir in ${_ml_root:+"$_ml_root/setup/lib"} "$EXAKIT_HOME/kit/setup/lib"; do
-            if [ -f "$_ml_dir/$_ml_id.sh" ]; then
-                . "$_ml_dir/$_ml_id.sh" 2>/dev/null || \
-                    warn "The $_ml_id module could not be loaded from $_ml_dir (corrupted kit copy?)"
-                break
-            fi
-        done
-    done
-    return 0
+    _exakit_marketplace_python_hooks || true
 }
 
 # _exakit_addon_applicable <id> — does this add-on make sense on THIS machine
@@ -4320,6 +5986,7 @@ _exakit_addon_applicable_reason() {
 # tool the user can see for themselves.
 _exakit_addon_offerable() {
     _exakit_marketplace_addon_present "$1" && return 0
+    _exakit_addon_visible "$1" || return 1
     _exakit_addon_applicable "$1"
 }
 
@@ -4330,6 +5997,19 @@ _exakit_addon_offerable() {
 # ever updates what it manages.
 exakit_marketplace_addon_installed() {
     exakit_component_current "$1" >/dev/null 2>&1
+}
+
+# _exakit_addon_needs_update <id> — installed, at the advertised version, and
+# still in need of an update: the module's <id>_needs_update says so (JSON
+# Tables with a launcher an earlier kit wrote). Such an add-on is installed
+# everywhere it is listed, and `exakit update` updates it even though the
+# version matches. A module without the hook never needs one.
+# ⇄ twin: Test-ExakitAddonNeedsUpdate in setup/lib/exakit-common.ps1.
+_exakit_addon_needs_update() {
+    _exakit_addon_registered "$1" || return 1
+    _nu_fn="$(_exakit_addon_fn "$1" needs_update)"
+    command -v "$_nu_fn" >/dev/null 2>&1 || return 1
+    "$_nu_fn" >/dev/null 2>&1
 }
 
 # _exakit_addon_system_present <id> — is the tool already on this machine
@@ -4385,10 +6065,44 @@ EXAKIT_MA_EOF
     return 0
 }
 
+# _exakit_addon_install_interrupted <id> — the kit's receipt says an install
+# began and never finished (ownership=kit, state=installing: Semantic Views and
+# the VS Code extension write it before their installer runs, audit MKT-06).
+# Not installed, so the probes above say no, yet what that install made may be
+# there; uninstall removes it with the add-on's own removal.
+# ⇄ twin: Test-ExakitAddonInstallInterrupted in setup/lib/exakit-common.ps1.
+_exakit_addon_install_interrupted() {
+    _exakit_addon_registered "$1" || return 1
+    _aii_key="$(exakit_ownership_key "$1")"
+    [ "$(manifest_get "$_aii_key.state" 2>/dev/null || true)" = installing ] || return 1
+    [ "$(manifest_get "$_aii_key.ownership" 2>/dev/null || true)" = kit ]
+}
+
+# exakit_marketplace_removable_addons — what an uninstall removes: the
+# installed add-ons, plus any whose install was interrupted.
+exakit_marketplace_removable_addons() {
+    _mr_installed="$(exakit_marketplace_installed_addons)"
+    [ -z "$_mr_installed" ] || printf '%s\n' "$_mr_installed"
+    while IFS='|' read -r _mr_id _mr_label <&3; do
+        [ -n "$_mr_id" ] || continue
+        case "
+$_mr_installed
+" in *"
+$_mr_id
+"*) continue ;; esac
+        _exakit_addon_install_interrupted "$_mr_id" && printf '%s\n' "$_mr_id"
+    done 3<<EXAKIT_MR_EOF
+$(exakit_marketplace_addons)
+EXAKIT_MR_EOF
+    return 0
+}
+
 # exakit_marketplace_has_pending — true while at least one add-on is not on
 # this machine yet (neither kit-managed nor a system install). Drives the
 # discovery one-liners and the closing offer.
 exakit_marketplace_has_pending() {
+    _exakit_prefetched pending
+    case $? in 0) return 0 ;; 1) return 1 ;; esac
     [ -n "$(while IFS='|' read -r _mp_id _mp_label <&3; do
         [ -n "$_mp_id" ] || continue
         _exakit_addon_offerable "$_mp_id" || continue
@@ -4484,16 +6198,93 @@ EXAKIT_ADDON_NOTES_EOF
 # would be the same fact twice — the data-load table leaves already-loaded
 # datasets out for exactly that reason. This is also what keeps the group's
 # child range contiguous.
+#
+# An add-on may bring CHILD ROWS of its own, one level deeper under its row
+# (the optional <id>_table_children hook), passed in through
+# EXAKIT_ADDON_TABLE_CHILDREN as "<id>|<key>|<label>|<version>|<description>|<tick>"
+# lines -- resolved by the caller, for the same reason as the metadata below.
+# Each is ticked right there; the add-on row is their parent ("claim": a child
+# ticks it, unticking it unticks them, and it may stand with none ticked), and
+# Select All spans them too. Their ids are "<id>:<key>", which no add-on id
+# matches, so nothing that looks an add-on's row up finds one of them.
+# _exakit_addon_table_label <id> — the row's name from EXAKIT_ADDON_TABLE_LABELS
+# ("<id>|<label>" lines the caller resolved, like the versions and descriptions):
+# the repository's name, with the id beside it when they differ. An id with no
+# line is its own label.
+_exakit_addon_table_label() {
+    while IFS='|' read -r _atl_id _atl_label; do
+        [ "$_atl_id" = "$1" ] && [ -n "$_atl_label" ] && { printf '%s\n' "$_atl_label"; return 0; }
+    done <<EXAKIT_ATL_LABELS
+${EXAKIT_ADDON_TABLE_LABELS:-}
+EXAKIT_ATL_LABELS
+    printf '%s\n' "$1"
+}
+
 _exakit_addon_table_build() {
     _atb_f="$1"; shift
     : > "$_atb_f"
+    : > "$_atb_f.activity"
     _atb_n=$#
-    printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
+    # Rows drawn so far (the group row is 1), and the defaults and inner group
+    # specs the children add as they are drawn.
+    _atb_row=1
+    _atb_kids=0
+    _atb_kdefaults=""
+    _atb_inner=""
+    _atb_allticked=1
+    # A persona's add-ons (EXAKIT_MARKETPLACE_PRESELECT) start ticked and every
+    # other one is listed unticked; "all": every add-on ticked. No preselection
+    # (a bare `exakit marketplace`): nothing ticked, Skip answers Enter - the
+    # user ticks what they want. ⇄ twin: $pre in Show-ExakitMarketplaceMenu.
+    _atb_pre="$(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    _atb_every=0
+    [ "$_atb_pre" = all ] && { _atb_pre=""; _atb_every=1; }
+    # EXAKIT_ADDON_TABLE_NO_GROUP: no "Select All" row and no tree - the install's
+    # table, where two rows install on their own and the rest are single picks.
+    _atb_flat=0
+    _atb_top=0
+    [ "${EXAKIT_ADDON_TABLE_NO_GROUP:-0}" = 1 ] && _atb_flat=1
     # Via a newline-separated STRING, one line per row, so a row that is not an
     # add-on is an EMPTY line rather than a gap a space-separated list would
     # close up — the row number is the index, and it has to stay one.
-    EXAKIT_ADDON_TABLE_IDS="
+    # The rows on top that this run auto-installed (" 1 2 "): drawn checked and
+    # locked, like the ones installing in the table (UI_TABLE_LOCKED).
+    EXAKIT_ADDON_TABLE_TOP_AUTO=""
+    if [ "$_atb_flat" = 1 ]; then
+        _atb_row=0
+        EXAKIT_ADDON_TABLE_IDS=""
+        # EXAKIT_ADDON_TABLE_DISABLED_TOP: rows that cannot be picked (in already)
+        # drawn ABOVE the pickable ones - the install's two, on top either way.
+        while IFS='|' read -r _atb_tid _atb_twhy _atb_tver; do
+            [ -n "$_atb_tid" ] || continue
+            # Drawn as a row this install settled ("✓ installed"), not a dim
+            # "covered" one: the same table either way. No checkbox (UI_TABLE_NOBOX).
+            # "Auto installed" only for one this run put in (the early run,
+            # EXAKIT_ADDONS_EARLY_DONE); one that was there before says
+            # "Installed" and its version. ⇄ twin: the coveredTop rows in
+            # Show-ExakitMarketplaceMenu.
+            case " ${EXAKIT_ADDONS_EARLY_DONE:-} " in
+                *" $_atb_tid "*) _atb_tsay="Auto installed"
+                                 EXAKIT_ADDON_TABLE_TOP_AUTO="${EXAKIT_ADDON_TABLE_TOP_AUTO:- }$(( _atb_row + 1 )) " ;;
+                *) case "$_atb_tver" in
+                       ''|'?') _atb_tsay="Installed" ;;
+                       *) _atb_tsay="Installed $_atb_tver" ;;
+                   esac ;;
+            esac
+            printf 'plain|%s|0|done|||||%s|%s|%s|%s\n' \
+                "$(_exakit_addon_table_label "$_atb_tid")" "" "$(_exakit_addon_table_cell "$_atb_tsay" "")" "$_atb_tver" "$_atb_twhy" >> "$_atb_f"
+            EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
+            _atb_row=$(( _atb_row + 1 ))
+        done <<EXAKIT_ATB_TOP
+${EXAKIT_ADDON_TABLE_DISABLED_TOP:-}
+EXAKIT_ATB_TOP
+        _atb_top=$_atb_row
+    else
+        printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
+        EXAKIT_ADDON_TABLE_IDS="
+"
+    fi
     # How many unpickable rows follow, counted BEFORE the loop: the corner
     # connector belongs to the last row of the tree, and when a disabled row
     # comes after the installable ones the corner is not the last installable.
@@ -4508,7 +6299,9 @@ EXAKIT_ATB_COUNT
     _atb_i=0
     for _atb_id in "$@"; do
         _atb_i=$(( _atb_i + 1 ))
-        if [ "$_atb_i" -eq "$_atb_n" ] && [ "$_atb_dn" -eq 0 ]; then
+        if [ "$_atb_flat" = 1 ]; then
+            _atb_kind=plain
+        elif [ "$_atb_i" -eq "$_atb_n" ] && [ "$_atb_dn" -eq 0 ]; then
             _atb_kind=corner
         else
             _atb_kind=tee
@@ -4529,10 +6322,50 @@ EXAKIT_ATB_COUNT
         done <<EXAKIT_ATB_META
 ${EXAKIT_ADDON_TABLE_META:-}
 EXAKIT_ATB_META
-        printf '%s|%s|1|idle|||||| |%s|%s\n' "$_atb_kind" "$_atb_id" \
+        printf '%s|%s|1|idle|||||| |%s|%s\n' "$_atb_kind" "$(_exakit_addon_table_label "$_atb_id")" \
             "$_atb_ver" "$_atb_desc" >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id
 "
+        _atb_row=$(( _atb_row + 1 ))
+        _atb_prow="$_atb_row"
+        _atb_pick="$_atb_every"
+        case ",$_atb_pre," in *",$_atb_id,"*) _atb_pick=1 ;; esac
+        if [ "$_atb_pick" = 1 ]; then
+            _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
+        else
+            _atb_allticked=0
+        fi
+        # This add-on's child rows, counted first: the last one is the corner.
+        _atb_kn=0
+        while IFS='|' read -r _atb_kp _atb_krest; do
+            [ "$_atb_kp" = "$_atb_id" ] && _atb_kn=$(( _atb_kn + 1 ))
+        done <<EXAKIT_ATB_KCOUNT
+${EXAKIT_ADDON_TABLE_CHILDREN:-}
+EXAKIT_ATB_KCOUNT
+        [ "$_atb_kn" -gt 0 ] || continue
+        _atb_ki=0
+        while IFS='|' read -r _atb_kp _atb_kkey _atb_klabel _atb_kver _atb_kdesc _atb_ktick; do
+            [ "$_atb_kp" = "$_atb_id" ] || continue
+            _atb_ki=$(( _atb_ki + 1 ))
+            if [ "$_atb_ki" -eq "$_atb_kn" ]; then _atb_kk=corner; else _atb_kk=tee; fi
+            printf '%s-%s|%s|0|idle|||||| |%s|%s\n' "$_atb_kind" "$_atb_kk" "$_atb_klabel" \
+                "$_atb_kver" "$_atb_kdesc" >> "$_atb_f"
+            EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id:$_atb_kkey
+"
+            _atb_row=$(( _atb_row + 1 ))
+            if [ "${_atb_ktick:-1}" = 1 ] && [ "$_atb_pick" = 1 ]; then
+                _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
+            else
+                _atb_allticked=0
+            fi
+        done <<EXAKIT_ATB_KIDS
+${EXAKIT_ADDON_TABLE_CHILDREN:-}
+EXAKIT_ATB_KIDS
+        _atb_kids=$(( _atb_kids + _atb_kn ))
+        # Innermost first: _ui_checkbox_apply_group applies the specs in order,
+        # and this one has to settle the add-on row before Select All re-reads
+        # it as one of its own children.
+        _atb_inner="$_atb_inner$_atb_prow:$(( _atb_prow + 1 )):$_atb_row:claim "
     done
     # The add-ons that cannot be installed, AFTER the installable ones so the
     # group's child range stays contiguous, and unpickable so a checkbox never
@@ -4542,36 +6375,47 @@ EXAKIT_ATB_META
     while IFS='|' read -r _atb_did _atb_dwhy _atb_dver; do
         [ -n "$_atb_did" ] || continue
         _atb_d=$(( _atb_d + 1 ))
-        if [ "$_atb_d" -eq "$_atb_dn" ]; then _atb_dkind=corner; else _atb_dkind=tee; fi
+        if [ "$_atb_flat" = 1 ]; then _atb_dkind=plain
+        elif [ "$_atb_d" -eq "$_atb_dn" ]; then _atb_dkind=corner; else _atb_dkind=tee; fi
         # The state word goes to BOTH the status cell (field 10) and the
         # Description column (field 12): the selection screen has Description
         # and no Status, the install screen has Status and no Description, and
         # the row should say the same thing on either.
         printf '%s|%s|0|disabled|||||%s|%s|%s|%s\n' \
-            "$_atb_dkind" "$_atb_did" "" "$_atb_dwhy" "$_atb_dver" "$_atb_dwhy" >> "$_atb_f"
+            "$_atb_dkind" "$(_exakit_addon_table_label "$_atb_did")" "" "$_atb_dwhy" "$_atb_dver" "$_atb_dwhy" >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
     done <<EXAKIT_ATB_DISABLED
 ${EXAKIT_ADDON_TABLE_DISABLED:-}
 EXAKIT_ATB_DISABLED
-    printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
+    # The install's table (flat): the two are in either way, so the last row goes on
+    # rather than skips. Twin of the same row in Show-ExakitMarketplaceMenu.
+    if [ "$_atb_flat" = 1 ]; then
+        printf 'plain|Continue|0|idle|||||| \n' >> "$_atb_f"
+    else
+        printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
+    fi
     EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
-    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_d + 2 ))
+    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 - _atb_flat + ${_atb_top:-0} ))
+    # How many rows on top are add-ons in already (_exakit_addon_table_top_rows).
+    EXAKIT_ADDON_TABLE_TOP_N="${_atb_top:-0}"
     EXAKIT_TABLE_EXCLUSIVE="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # "all": the parent is a master toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
     # summary row read "everything is selected" when it was not — on the row a
-    # user glances at to confirm what is about to be installed.
-    EXAKIT_TABLE_GROUP="1:2:$(( _atb_n + 1 )):all"
+    # user glances at to confirm what is about to be installed. Its range takes
+    # in the add-ons' own child rows, so Select All means every row.
+    EXAKIT_TABLE_GROUP="${_atb_inner}1:2:$(( _atb_n + _atb_kids + 1 )):all"
+    [ "$_atb_flat" = 1 ] && EXAKIT_TABLE_GROUP="$_atb_inner"
     # The group AND every add-on pre-selected, so Enter alone installs what is
     # on offer and Skip is the explicit opt-out. Mirrors exakit_data_load_select.
-    EXAKIT_TABLE_DEFAULTS=""
-    _atb_i=1
-    while [ "$_atb_i" -le $(( _atb_n + 1 )) ]; do
-        EXAKIT_TABLE_DEFAULTS="${EXAKIT_TABLE_DEFAULTS:+$EXAKIT_TABLE_DEFAULTS,}$_atb_i"
-        _atb_i=$(( _atb_i + 1 ))
-    done
+    # A child row its add-on starts unticked (a choice recorded earlier) leaves
+    # Select All unticked too, which is what "all" means.
+    EXAKIT_TABLE_DEFAULTS="$_atb_kdefaults"
+    [ "$_atb_allticked" = 1 ] && [ "$_atb_flat" = 0 ] && EXAKIT_TABLE_DEFAULTS="1${EXAKIT_TABLE_DEFAULTS:+,$EXAKIT_TABLE_DEFAULTS}"
+    # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
+    [ -n "$EXAKIT_TABLE_DEFAULTS" ] || EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # Every row here can be checked, and saying so is not optional:
     # _UI_CHECKBOX_SELECTABLE is published by ui_checkbox_menu and never cleared,
     # so the offer's two-row "Explore ?" question leaves "1 2" behind — and the
@@ -4579,6 +6423,16 @@ EXAKIT_ATB_DISABLED
     # toggle the first add-on and nothing else. Empty means "every row".
     _UI_CHECKBOX_SELECTABLE=""
     return 0
+}
+
+# _exakit_addon_table_top_rows — the rows of the add-ons in already that the
+# install's table draws on top ("1 2 "), never a choice.
+_exakit_addon_table_top_rows() {
+    _att_i=1; _att_out=""
+    while [ "$_att_i" -le "${EXAKIT_ADDON_TABLE_TOP_N:-0}" ]; do
+        _att_out="$_att_out$_att_i "; _att_i=$(( _att_i + 1 ))
+    done
+    printf '%s' "$_att_out"
 }
 
 # _exakit_addon_table_row <id> — which row that add-on is on, or 0.
@@ -4591,6 +6445,52 @@ _exakit_addon_table_row() {
 $EXAKIT_ADDON_TABLE_IDS
 EXAKIT_ATR_EOF
     printf '0\n'
+}
+
+# _exakit_addon_table_child_rows <id> — "<key>:<row>,..." for that add-on's
+# child rows in the table (see _exakit_addon_table_build), empty when it has
+# none.
+_exakit_addon_table_child_rows() {
+    _atk_i=0
+    _atk_out=""
+    while IFS= read -r _atk_id; do
+        _atk_i=$(( _atk_i + 1 ))
+        case "$_atk_id" in
+            "$1":*) _atk_out="${_atk_out:+$_atk_out,}${_atk_id#"$1":}:$_atk_i" ;;
+        esac
+    done <<EXAKIT_ATK_EOF
+$EXAKIT_ADDON_TABLE_IDS
+EXAKIT_ATK_EOF
+    printf '%s\n' "$_atk_out"
+}
+
+# EXAKIT_ADDON_TABLE_CHILD_ROWS — "<key>:<row>,..." for the add-on being
+# installed: where its child rows are in the live table, so its install can say
+# how each one settled (exakit_addon_table_child). Empty when no table is live.
+EXAKIT_ADDON_TABLE_CHILD_ROWS=""
+
+# exakit_addon_table_child <key> <done|failed|skipped> [final] — an add-on that
+# brought child rows says, from inside its own install, how one of them
+# settled, and that row's Status column shows it. Returns 1 when there is no
+# such row on screen (no live table, a scripted answer, a key the table does
+# not carry): the caller's own line is then the record, exactly as before. The
+# line it prints anyway is not lost either way -- under a live table it goes to
+# the logfile, like every other detail of the install.
+exakit_addon_table_child() {
+    _exakit_addon_table_live || return 1
+    [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] || return 1
+    _atx_row=""
+    for _atx_pair in $(printf '%s' "${EXAKIT_ADDON_TABLE_CHILD_ROWS:-}" | tr ',' ' '); do
+        [ "${_atx_pair%:*}" = "$1" ] && _atx_row="${_atx_pair##*:}"
+    done
+    [ -n "$_atx_row" ] || return 1
+    # Cut to the column's floor, for the reason _exakit_addon_table_cell gives:
+    # a final that overruns the column is a row that wraps.
+    _atx_text="${3:-}"
+    _atx_tick="${UI_TICK:-[ok]}"
+    _atx_room=$(( ${UI_TABLE_STAT_MIN:-44} - ${#_atx_tick} - 1 ))
+    [ "${#_atx_text}" -le "$_atx_room" ] || _atx_text="${_atx_text:0:$(( _atx_room - 1 ))}…"
+    ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$_atx_row" "$2" "" "" "" "" "$_atx_text"
 }
 
 # _exakit_addon_table_cell <summary> <seconds> — the Status column for a
@@ -4608,6 +6508,8 @@ EXAKIT_ATR_EOF
 # text is in the logfile either way.
 _exakit_addon_table_cell() {
     _atc_el="$(printf '%5s' "(${2}s)")"
+    # No time (a row that was in before this run): the same width, blank.
+    [ -n "${2:-}" ] || _atc_el="     "
     _atc_text="${1:-installed}"
     # The room is what is left of the column's FLOOR after the tick glyph and
     # its space, the space before the elapsed time, and the time itself: the
@@ -4630,8 +6532,20 @@ _exakit_addon_table_cell() {
 _exakit_addon_table_cleanup() {
     [ -n "$EXAKIT_ADDON_TABLE_STATE" ] || return 0
     rm -f "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_STATE.new" \
-          "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop"
+          "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
+          "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    rm -f "$EXAKIT_ADDON_TABLE_STATE".behind*
+    UI_TABLE_NOBOX=""
+    UI_TABLE_LOCKED=""
     EXAKIT_ADDON_TABLE_STATE=""
+    UI_TABLE_COL2=""
+    UI_TABLE_COL2_YIELDS=0
+    UI_TABLE_COL3=""
+    # The rows' ids and the child rows go with it: a later scripted run in the
+    # same shell must not find this table's children and skip a question.
+    EXAKIT_ADDON_TABLE_IDS=""
+    EXAKIT_ADDON_TABLE_CHILDREN=""
+    EXAKIT_ADDON_TABLE_CHILD_ROWS=""
     return 0
 }
 
@@ -4669,6 +6583,7 @@ _exakit_marketplace_install_one() {
     EXAKIT_QUIET_DETAIL=1
     _mi_state="$(mktemp "${TMPDIR:-/tmp}/exakit-addon.XXXXXX")" || _mi_state=""
     _mi_t0="$(date +%s 2>/dev/null || echo 0)"
+    _mi_bar=0
     if [ -n "$_mi_state" ]; then
         _exakit_addon_progress "$_mi_state" "$1" 0 65 40 "installing"
         # The TABLE is already painting this add-on's row, and it holds the UI
@@ -4676,17 +6591,22 @@ _exakit_marketplace_install_one() {
         # the cursor, and the ui_progress_end below would kill the TABLE's
         # animator instead of a bar of its own -- mid-frame, which leaves half a
         # table on screen with the finished one printed under it.
-        _exakit_addon_table_live || { ui_progress_begin "$_mi_state" "$_mi_t0" || true; EXAKIT_ADDON_BAR_LIVE=1; }
+        # Only a bar this call started is ended below: off a terminal (the
+        # output in the log) the begin draws nothing, and an end without it
+        # stopped the CALLER's spinner -- its line-clear written into the log,
+        # its last frame left frozen on screen.
+        _exakit_addon_table_live || { ui_progress_begin "$_mi_state" "$_mi_t0" && _mi_bar=1; EXAKIT_ADDON_BAR_LIVE=1; }
     fi
     "$_mi_install"
     _mi_rc=$?
     if [ "$_mi_rc" -ne 0 ]; then
-        _exakit_addon_table_live || { ui_progress_end; EXAKIT_ADDON_BAR_LIVE=0; }
+        _exakit_addon_table_live || { [ "$_mi_bar" = 1 ] && ui_progress_end; EXAKIT_ADDON_BAR_LIVE=0; }
         [ -n "$_mi_state" ] && rm -f "$_mi_state"
         EXAKIT_QUIET_DETAIL="$_mi_prev_quiet"
         EXAKIT_ACTIVE_LABEL="$_mi_prev_label"
         return 1
     fi
+    exakit_record_ownership "$1" kit
     if command -v "$_mi_validate" >/dev/null 2>&1; then
         [ -n "$_mi_state" ] && _exakit_addon_progress "$_mi_state" "$1" 65 90 8 "validating"
         "$_mi_validate" || true
@@ -4713,7 +6633,7 @@ _exakit_marketplace_install_one() {
         "$_mi_start" >/dev/null 2>&1 || \
             _exakit_addon_note warn "$1 installed but did not start — start it with: exakit start"
     fi
-    _exakit_addon_table_live || { ui_progress_end; EXAKIT_ADDON_BAR_LIVE=0; }
+    _exakit_addon_table_live || { [ "$_mi_bar" = 1 ] && ui_progress_end; EXAKIT_ADDON_BAR_LIVE=0; }
     [ -n "$_mi_state" ] && rm -f "$_mi_state"
     EXAKIT_QUIET_DETAIL="$_mi_prev_quiet"
     EXAKIT_ACTIVE_LABEL="$_mi_prev_label"
@@ -4729,10 +6649,25 @@ _exakit_marketplace_install_one() {
 # capped below the next stage, so a slow PyPI resolve makes the bar wait rather
 # than walk into "validating".
 # ⇄ twin: Set-ExakitAddonProgress in exakit-common.ps1.
+exakit_addon_activity() {
+    [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] || return 0
+    # One "row|text" record per add-on (several install side by side): this row's
+    # replaces its own, the others stay. Written whole, then moved in, so the
+    # table animator never reads half a file.
+    # grep -v exits 1 when this row was the only record: nothing to keep is
+    # not an error, and under a `set -e` caller it would end the whole run.
+    {
+        if [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ]; then
+            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null || :
+        fi
+        printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$(printf '%s' "$1" | tr '\r\n' '  ')"
+    } > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
+}
+
 _exakit_addon_progress() {
-    # An add-on being installed from the TABLE reports into its ROW; the row
-    # already names it, so the "<id> · " prefix the one-line bar needs would be
-    # the same fact twice, in a cell that has to spell a phase in a fixed width.
+    exakit_addon_activity "$6"
+    # Table rows already show the add-on ID.
     if [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
         ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
             "$3" "$4" "$5" "$6"
@@ -4741,53 +6676,212 @@ _exakit_addon_progress() {
     ui_progress_state "$1" "$3" "$4" "$5" "$2 · $6"
 }
 
-# exakit_marketplace_menu — the `exakit marketplace` command body, wearing the
-# kit's two established looks so nothing here reads foreign:
-#   1. the STATE, as the same aligned table `exakit version` prints
-#      (Add-on / Status / Version / Action, one row per add-on, whatever its
-#      state — installed, on the system, missing module, or available);
-#   2. the SELECTION, as the same live table the data-load menu uses: a group
-#      row with the add-ons hanging off UI_TEE/UI_CORNER connectors, Space
-#      toggles, Enter installs, Skip as the exclusive default — and the Status
-#      column of those very rows is what the install then fills in.
-# Only installable add-ons become menu rows — everything else is answered by
-# the table, exactly like already-loaded datasets are not re-offered.
-#
-# Non-interactive runs answer with EXAKIT_MARKETPLACE_ADDONS: a csv of add-on
-# ids, "all", or "none" — same contract as EXAKIT_MCP_CLIENTS / EXAKIT_DATASETS.
+# The install's own add-ons install BEHIND its add-ons table while the same
+# table asks about the rest: their rows are drawn checked and locked, with the
+# bar in the Status column, and the reader moves and ticks the others meanwhile.
+# One writer per file: the install (a subshell) keeps <state>.behind up to date,
+# and the menu in front copies those rows' progress into its own state file
+# before each frame (_exakit_addon_table_behind_merge), so a tick and a stage
+# never overwrite each other. ⇄ twin: Invoke-ExakitMarketplaceApplyPython -Behind.
+# _exakit_addon_table_behind_begin <ids> <rows " 1 2 ">
+_exakit_addon_table_behind_begin() {
+    _atbb_f="$EXAKIT_ADDON_TABLE_STATE"
+    EXAKIT_ADDON_TABLE_BEHIND_ROWS="$2"
+    rm -f "$_atbb_f".behind*
+    cp -f "$_atbb_f" "$_atbb_f.behind" 2>/dev/null || return 1
+    (
+        ui_table_detach
+        EXAKIT_ADDON_TABLE_STATE="$_atbb_f.behind"
+        EXAKIT_ADDON_TABLE_BEHIND=1 EXAKIT_ADDON_TABLE_KEEP=1 \
+            _exakit_marketplace_apply_python "$1" </dev/null >/dev/null 2>&1
+        _atbb_rc=$?
+        # What the parent shell would have kept: the installs' notes, and any
+        # warning deferred while the table was up.
+        printf '%s' "${EXAKIT_ADDON_TABLE_NOTES:-}" > "$_atbb_f.behind.notes"
+        printf '%s' "${EXAKIT_ADDON_NOTES:-}" > "$_atbb_f.behind.deferred"
+        printf '%s\n' "$_atbb_rc" > "$_atbb_f.behind.rc.new" && mv -f "$_atbb_f.behind.rc.new" "$_atbb_f.behind.rc"
+    ) &
+    EXAKIT_ADDON_TABLE_BEHIND_PID=$!
+    return 0
+}
+
+# _exakit_addon_table_behind_merge - the behind rows' progress (fields 4-10)
+# into the menu's state file; every other field stays the menu's own.
+_exakit_addon_table_behind_merge() {
+    _atbm_f="$EXAKIT_ADDON_TABLE_STATE"
+    [ -n "$_atbm_f" ] && [ -f "$_atbm_f.behind" ] || return 0
+    _atbm_i=0
+    # Opened once: the install replaces the file whole (mv), so this reads one copy.
+    exec 7<"$_atbm_f.behind" || return 0
+    while IFS='|' read -r _u1 _u2 _u3 _u4 _u5 _u6 _u7 _u8 _u9 _u10 _u11 _u12; do
+        [ -n "$_u1" ] || continue
+        _atbm_i=$(( _atbm_i + 1 ))
+        _b4=""; _b1=""
+        IFS='|' read -r _b1 _b2 _b3 _b4 _b5 _b6 _b7 _b8 _b9 _b10 _b11 _b12 <&7 || _b1=""
+        case "${EXAKIT_ADDON_TABLE_BEHIND_ROWS:- }" in
+            *" $_atbm_i "*)
+                if [ -n "$_b1" ]; then
+                    _u4="$_b4"; _u5="$_b5"; _u6="$_b6"; _u7="$_b7"; _u8="$_b8"; _u9="$_b9"; _u10="$_b10"
+                fi ;;
+        esac
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$_u1" "$_u2" "$_u3" "$_u4" \
+            "$_u5" "$_u6" "$_u7" "$_u8" "$_u9" "$_u10" "$_u11" "$_u12"
+    done < "$_atbm_f" > "$_atbm_f.merge"
+    exec 7<&-
+    mv -f "$_atbm_f.merge" "$_atbm_f"
+    return 0
+}
+
+# _exakit_addon_table_behind_live - for UI_TABLE_MENU_LIVE: merge, and true while
+# the install behind is still going.
+_exakit_addon_table_behind_live() {
+    _exakit_addon_table_behind_merge
+    [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ ! -f "$EXAKIT_ADDON_TABLE_STATE.behind.rc" ]
+}
+
+# _exakit_addon_table_behind_finish - once the menu is answered: the table keeps
+# moving (animated) until the install behind is over, then its notes are this
+# shell's (EXAKIT_ADDON_TABLE_NOTES, EXAKIT_ADDON_NOTES). Returns its status.
+_exakit_addon_table_behind_finish() {
+    _atbf_f="$EXAKIT_ADDON_TABLE_STATE"
+    if _exakit_addon_table_behind_live; then
+        _atbf_anim=0
+        ui_table_begin "$_atbf_f" && _atbf_anim=1
+        while _exakit_addon_table_behind_live; do
+            # Gone without its answer (killed): nothing more will come.
+            kill -0 "${EXAKIT_ADDON_TABLE_BEHIND_PID:-0}" 2>/dev/null || break
+            sleep 0.2
+        done
+        _exakit_addon_table_behind_merge
+        [ "$_atbf_anim" = 1 ] && ui_table_end "$_atbf_f"
+    fi
+    wait "${EXAKIT_ADDON_TABLE_BEHIND_PID:-0}" 2>/dev/null || true
+    # What this shell remembered about those add-ons predates their install.
+    _exakit_hook_memo_forget
+    EXAKIT_ADDON_TABLE_NOTES="$(cat "$_atbf_f.behind.notes" 2>/dev/null || true)"
+    _atbf_deferred="$(cat "$_atbf_f.behind.deferred" 2>/dev/null || true)"
+    [ -z "$_atbf_deferred" ] || EXAKIT_ADDON_NOTES="${EXAKIT_ADDON_NOTES:-}$_atbf_deferred
+"
+    _atbf_rc="$(cat "$_atbf_f.behind.rc" 2>/dev/null || echo 1)"
+    rm -f "$_atbf_f".behind*
+    EXAKIT_ADDON_TABLE_BEHIND_ROWS=""
+    EXAKIT_ADDON_TABLE_BEHIND_PID=""
+    case "$_atbf_rc" in ''|*[!0-9]*) _atbf_rc=1 ;; esac
+    return "$_atbf_rc"
+}
+
+# Interactive selection uses Textual - drawing this same table, in the terminal's
+# colours - then the existing table if Textual cannot
+# start. EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
 exakit_marketplace_menu() {
+    if [ "${EXAKIT_MARKETPLACE_PYTHON_APPLY:-0}" = 1 ]; then
+        _mm_root="$(_exakit_marketplace_root)"
+        _mm_catalog="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" registry 2>&1)" || \
+            die "$_mm_catalog"
+    fi
+    # The interactive selection and its progress view share one Textual app.
+    # Explicit environment answers stay headless and enter the Python batch
+    # controller through the platform progress adapter below.
+    if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && [ "${EXAKIT_MARKETPLACE_NO_TEXTUAL:-0}" != 1 ] && \
+       [ "${UI_TABLE_AUTO:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
+        _mm_root="$(_exakit_marketplace_root)"
+        _mm_state="$(mktemp "${TMPDIR:-/tmp}/exakit-market-state.XXXXXX")" || _mm_state=""
+        _mm_result="$(mktemp "${TMPDIR:-/tmp}/exakit-market-ui.XXXXXX")" || _mm_result=""
+        if [ -n "$_mm_state" ] && [ -n "$_mm_result" ]; then
+            rm -f "$_mm_result"
+            # The add-ons' states, their descriptions and Textual itself (a download
+            # on a fresh machine) are got ready under the spinner; the table then
+            # opens at once.
+            ui_spin_begin "Opening the add-ons"
+            # THREE THINGS AT ONCE, not in turn: the states, the descriptions and
+            # Textual's warm-up do not need each other, and one after the other
+            # they were most of the wait before the table.
+            ( exakit_marketplace_list 1 >"$_mm_state" ) &
+            _mm_p_list=$!
+            (
+               # Each row's name and Description, the add-on repository's on
+               # GitHub: id|label|About. The About first, as its lookup fills the
+               # cache the name is read from.
+               while IFS='|' read -r _mm_aid _mm_arest; do
+                   [ -n "$_mm_aid" ] || continue
+                   _mm_adesc="$(exakit_marketplace_addon_description "$_mm_aid" 2>/dev/null || true)"
+                   printf '%s|%s|%s\n' "$_mm_aid" "$(exakit_marketplace_addon_label "$_mm_aid")" "$_mm_adesc"
+               done <<EXAKIT_MM_ABOUT >"$_mm_state.about"
+$(exakit_marketplace_addons)
+EXAKIT_MM_ABOUT
+            ) &
+            _mm_p_about=$!
+            ( run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" warm >/dev/null 2>&1 || true ) &
+            _mm_p_warm=$!
+            wait "$_mm_p_about" 2>/dev/null || true
+            wait "$_mm_p_warm" 2>/dev/null || true
+            if wait "$_mm_p_list"; then
+               ui_spin_end
+               # The table below is drawn by Python, not ui_table_menu, so nothing
+               # else stops a spinner a caller started around this one (the
+               # install's add-on offer does): its frame stayed frozen above the
+               # table. The line is the table's now: stopped, nesting zeroed.
+               # Twin of the same block in Show-ExakitMarketplaceMenu.
+               [ -n "${_UI_SPIN_PID:-}" ] && ui_spin_end_all
+               EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+               run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
+                   --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
+                   --defaults "${EXAKIT_MARKETPLACE_PRESELECT:-}" \
+                   --only "${EXAKIT_MARKETPLACE_ONLY:-}" --apply
+                _mm_ui_rc=$?
+                rm -f "$_mm_state" "$_mm_state.about" "$_mm_result"
+                [ "$_mm_ui_rc" -eq 0 ] && return 0
+                [ "$_mm_ui_rc" -eq 10 ] && { info "Marketplace closed — nothing was installed."; return 0; }
+                [ "$_mm_ui_rc" -eq 11 ] || return "$_mm_ui_rc"
+                warn "The Textual marketplace did not start; using the kit's table menu."
+            else
+                ui_spin_end
+                rm -f "$_mm_state" "$_mm_result"
+                warn "The marketplace state could not be read; using the kit's table menu."
+            fi
+        fi
+        rm -f "$_mm_state" "$_mm_result"
+    fi
+    # The probes below (installed? on the system? which version?) each start
+    # Python: on a kit with every add-on in they held the screen blank for
+    # seconds before the first line. A bare interactive run says what it is
+    # doing from the first moment; the install's offer has its own spinner.
+    _mm_cli_spin=0
+    if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" != 1 ] && \
+       [ "${UI_TABLE_AUTO:-0}" != 1 ] && [ -z "${_UI_SPIN_PID:-}" ] && [ -n "$(_exakit_prompt_tty)" ]; then
+        ui_spin_begin "Reading the add-ons" && _mm_cli_spin=1
+    fi
     _mm_ids=()
     _mm_selectable=0
-    # One "<id>|<why>" per add-on that cannot be installed. The reference panel
-    # used to carry these; deleting it took the answer to "why is this one not
-    # on offer?" with it, and on the all-covered path took the ONLY output that
-    # path produced. They come back as dim, unpickable rows inside the one
-    # table -- the way the MCP client list shows "Cursor · not installed" --
-    # and as plain lines when there is no table to put them in.
+    # <id>|<reason>|<version> for unavailable add-ons.
     _mm_covered=""
-    # "<id>|<version>|<description>" for each installable add-on, handed to the
-    # row builder so it never has to look either up itself.
+    # <id>|<version>|<description> for selectable add-ons.
     _mm_meta=""
+    # <id>|<label> for every row: the repository's name.
+    _mm_labels=""
+    # <id>|<key>|<label>|<version>|<description>|<tick> for child rows.
+    _mm_children=""
     while IFS='|' read -r _mm_id _mm_label <&3; do
         [ -n "$_mm_id" ] || continue
         # Not applicable here and not installed: it is not an option on this
         # machine, so it is not shown at all — no row, no table line.
         _exakit_addon_offerable "$_mm_id" || continue
-        # Every add-on gets a STATE row; only an installable one also gets a
-        # selection row. A state that cannot be installed is answered by the
-        # "__disabled__" keeps the row in _mm_ids so the env answer can still
-        # tell a real add-on it names from an unknown one, and so the row
-        # numbering the selection is built from stays intact. It carries no
-        # text of its own any more: the reference panel that used to print a
-        # version and a reason for each of these is gone (see below), and the
-        # selection only ever listed installable add-ons.
+        # Only the personas' add-ons, when the closing offer is theirs.
+        if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
+            case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
+        fi
+        # The row's name: the repository's on GitHub, the id beside it when different
+        # - except in the install's table, where the name alone says it.
+        if [ "${EXAKIT_MARKETPLACE_INSTALL_TABLE:-0}" = 1 ]; then
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_name "$_mm_id")
+"
+        else
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+"
+        fi
+        # Disabled placeholders keep menu row indexes stable.
         if exakit_marketplace_addon_installed "$_mm_id"; then
-            # "Installed" and the version travel SEPARATELY now: the version
-            # belongs in the Version column beside every other add-on's, and the
-            # word belongs wherever the table puts a state -- Description on the
-            # selection screen, Status while installing. Bundling them into the
-            # name read as "json-tables · Installed (0.2)" with the Version
-            # column empty right next to it.
+            # Keep the version in its own table column.
             _mm_cv="$(exakit_component_current "$_mm_id" 2>/dev/null || true)"
             _mm_covered="$_mm_covered$_mm_id|Installed|$(exakit_version_plain "${_mm_cv:-?}")
 "
@@ -4800,6 +6894,10 @@ exakit_marketplace_menu() {
             _mm_ids+=("__disabled__")
         elif ! exakit_marketplace_addon_available "$_mm_id"; then
             _mm_covered="$_mm_covered$_mm_id|not in this kit copy|
+"
+            _mm_ids+=("__disabled__")
+        elif ! _exakit_addon_visible "$_mm_id"; then
+            _mm_covered="$_mm_covered$_mm_id|disabled in this release|
 "
             _mm_ids+=("__disabled__")
         else
@@ -4827,6 +6925,22 @@ exakit_marketplace_menu() {
                 _mm_adv="$(exakit_component_available "$_mm_id" 2>/dev/null || printf 'unknown')"
                 _mm_meta="$_mm_meta$_mm_id|$(exakit_version_plain "${_mm_adv:-unknown}")|$(printf '%s' "$_mm_mdesc" | tr '\n' ' ')
 "
+                # The add-on's own child rows (the optional <id>_table_children
+                # hook, one "<key>|<label>|<version>|<description>|<tick>" line
+                # each), each saying what will become of it, ticked in the same
+                # table rather than asked about later.
+                # Local probes only, and like the description only on the path
+                # that draws them.
+                _mm_kfn="$(_exakit_addon_fn "$_mm_id" table_children)"
+                if command -v "$_mm_kfn" >/dev/null 2>&1; then
+                    while IFS= read -r _mm_kline; do
+                        [ -n "$_mm_kline" ] || continue
+                        _mm_children="$_mm_children$_mm_id|$_mm_kline
+"
+                    done <<EXAKIT_MM_KIDS
+$("$_mm_kfn")
+EXAKIT_MM_KIDS
+                fi
             fi
             _mm_ids+=("$_mm_id")
             _mm_selectable=$((_mm_selectable + 1))
@@ -4834,11 +6948,15 @@ exakit_marketplace_menu() {
     done 3<<EXAKIT_MM_EOF
 $(exakit_marketplace_addons)
 EXAKIT_MM_EOF
+    [ "$_mm_cli_spin" = 1 ] && { ui_spin_end_all; _mm_cli_spin=0; }
 
     # The env answer wins over any menu, so agents and CI never need a TTY.
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
-        _mm_answer="$(printf '%s' "$EXAKIT_MARKETPLACE_ADDONS" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+        _mm_root="$(_exakit_marketplace_root)"
+        # Bad input, not a failed install: reject (exit 2, no .last-failure note), the same on Windows.
+        _mm_answer="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || reject "$_mm_answer"
         _mm_picked=""
+        _mm_skipped=0
         case "$_mm_answer" in
             none) info "EXAKIT_MARKETPLACE_ADDONS=none — installing nothing."; return 0 ;;
             all)
@@ -4862,20 +6980,34 @@ EXAKIT_MM_EOF
                         info "$_mm_tok is already installed — update it with: exakit update"
                     elif _exakit_addon_registered "$_mm_tok" && _exakit_addon_system_present "$_mm_tok"; then
                         info "$_mm_tok is already on this system — the kit leaves it alone"
+                    elif _exakit_addon_registered "$_mm_tok" && ! _exakit_addon_visible "$_mm_tok"; then
+                        warn "Skipping $_mm_tok — it is disabled in marketplace/catalog.json"
+                        _mm_skipped=1
                     elif _exakit_addon_registered "$_mm_tok" && ! _exakit_addon_applicable "$_mm_tok"; then
+                        # A real add-on that does not run here. One such id
+                        # (a persona's list is written for every platform)
+                        # used to end the answer before anything installed; it
+                        # is skipped with the reason, and the rest go ahead.
                         _mm_why="$(_exakit_addon_applicable_reason "$_mm_tok")"
-                        die "$_mm_tok is not available on this machine${_mm_why:+: $_mm_why}"
+                        warn "Skipping $_mm_tok — it is not available on this machine${_mm_why:+: $_mm_why}"
+                        _mm_skipped=1
                     elif _exakit_addon_registered "$_mm_tok"; then
                         # Registered but no module in this kit copy: a real
                         # add-on the user asked for by name — say what fixes it
-                        # instead of calling it unknown.
-                        die "The $_mm_tok module is not part of this kit copy — update the kit first: exakit update"
+                        # instead of calling it unknown, and install the rest.
+                        warn "Skipping $_mm_tok — its module is not part of this kit copy; update the kit first: exakit update"
+                        _mm_skipped=1
                     else
                         die "Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '$_mm_tok' (known: $(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'))"
                     fi
                 done
                 ;;
         esac
+        if [ -z "$_mm_picked" ] && [ "$_mm_skipped" = 1 ]; then
+            # The warnings above already said why each one was left out.
+            info "Nothing to install on this machine."
+            return 0
+        fi
         if [ -z "$_mm_picked" ]; then
             # Say WHY this is a refusal and not a failure. A reader who arrives
             # here straight after an add-on failed to install reads "nothing to
@@ -4896,64 +7028,57 @@ EXAKIT_MM_EOF
     # in the selection itself as columns, so the reader picks from the thing
     # that describes them.
     #
-    # What that costs, on the all-covered path only: the rows for add-ons that
-    # are NOT installable (already installed, already on this system, missing
-    # from this kit copy) had nowhere else to go, and the panel was the only
-    # output that path produced. They are represented by the count below
-    # instead. ui_table_disable is how they would come back -- as dim,
-    # unpickable rows inside the one table, the way the MCP client list shows
-    # "Cursor · not installed".
-    printf '\n'
+    # The install's spinner owns this line until the table is drawn (below).
+    [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] || printf '\n'
+    # THE INSTALL'S TABLE: the offer's one table, whether or not the two still
+    # have to install - one flat list (no Select All, no tree, no hint), the two
+    # on top. Before this, a re-run (both already in) fell back to the
+    # marketplace's own tree menu with the spinner still drawing beside it.
+    _mm_install_table=0
+    if [ "${UI_TABLE_AUTO:-0}" != 1 ] && \
+       { [ "${EXAKIT_MARKETPLACE_INSTALL_TABLE:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ]; }; then
+        _mm_install_table=1
+    fi
 
     if [ "$_mm_selectable" -eq 0 ]; then
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "Everything available is already covered."
-        # Named, not just counted: "everything is covered" without saying WHICH
-        # things, or how, is the whole of what this path prints.
-        # Three fields per line (id|why|version), so the version has to be read
-        # into its own name: with two names the third field rode along inside
-        # the second and every line ended in a stray "|" ("managed outside the
-        # kit|"). An installed add-on shows its version, the others show why.
+        # Show each covered add-on and its state, in columns as wide as the
+        # longest name and state: a fixed 14 let "exasol-scheduler" push its
+        # row out of line. ⇄ twin: the covered list in Show-ExakitMarketplaceMenu.
+        _mm_cw=0; _mm_sw=0
         while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
             [ -n "$_mm_cid" ] || continue
-            info "$(printf '%-14s %s' "$_mm_cid" "$_mm_cwhy${_mm_cver:+ $_mm_cver}")"
+            [ "${#_mm_cid}" -gt "$_mm_cw" ] && _mm_cw=${#_mm_cid}
+            [ "${#_mm_cwhy}" -gt "$_mm_sw" ] && _mm_sw=${#_mm_cwhy}
+        done <<EXAKIT_MM_CWIDTH
+$_mm_covered
+EXAKIT_MM_CWIDTH
+        while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
+            [ -n "$_mm_cid" ] || continue
+            info "$(printf '%-*s  %-*s  %s' "$_mm_cw" "$_mm_cid" "$_mm_sw" "$_mm_cwhy" "$_mm_cver" | sed 's/ *$//')"
         done <<EXAKIT_MM_COVERED
 $_mm_covered
 EXAKIT_MM_COVERED
         return 0
     fi
 
-    # WITHOUT A TERMINAL, THE ANSWER IS SKIP. The pre-ticked rows exist so a
-    # human's bare Enter installs what is on offer; keeping them as the answer
-    # when nobody could see the question turned `exakit marketplace` from a
-    # browse into a full multi-hundred-MB install with a live daemon — run by
-    # agents that were told to look, not to install. Installing without a
-    # terminal takes an explicit answer: EXAKIT_MARKETPLACE_ADDONS, or ids on
-    # the command line. ⇄ twin: the same guard in Show-ExakitMarketplaceMenu.
-    if [ -z "$(_exakit_prompt_tty)" ]; then
+    # A headless run needs an explicit selection; persona add sets UI_TABLE_AUTO.
+    if [ -z "$(_exakit_prompt_tty)" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "No terminal to ask on — nothing was installed."
         info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         info "Install explicitly: exakit marketplace <id>   or EXAKIT_MARKETPLACE_ADDONS=<ids>|all exakit marketplace"
         return 0
     fi
 
-    # The selection — the same live table the data-load menu draws: a group row
-    # with the add-ons hanging off connectors (UI_TEE/UI_CORNER from the ui
-    # palette; ASCII in plain mode), the available add-ons pre-selected so Enter
-    # alone installs what is on offer, and Skip as the exclusive opt-out. An
-    # interactive run that cannot draw still keeps the pre-selected defaults
-    # (EXAKIT_MARKETPLACE_ADDONS=none is the scripted opt-out); a run with no
-    # terminal at all never reaches this point.
-    # Mirrors exakit_data_load_select / Show-ExakitMarketplaceMenu.
-    #
-    # The rows the reader ticks here are the rows _exakit_marketplace_apply then
-    # fills in, so the choice and the progress are one screen. The disabled rows
-    # the checkbox version carried are gone: the state table directly above
-    # already gives each of them a version and a status, in more room than a
-    # dimmed one-line label had.
+    # The fallback table uses these rows for selection and progress.
     EXAKIT_ADDON_TABLE_STATE="$(mktemp "${TMPDIR:-/tmp}/exakit-addons.XXXXXX")" || {
         warn "Could not create a temporary file for the add-ons table."
         return 1
     }
+    # Also cleaned on exit and interrupts.
+    exakit_track_tmp "$EXAKIT_ADDON_TABLE_STATE"
     _mm_pick_ids=()
     _mm_i=0
     while [ "$_mm_i" -lt "${#_mm_ids[@]}" ]; do
@@ -4965,33 +7090,164 @@ EXAKIT_MM_COVERED
     done
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
-    # Above the table, not under it: the Description column is a repository's
-    # About line, which is a table cell and not a reference. The reference is
-    # the help document, and nothing on this screen named it. ⇄ twin:
-    # Show-ExakitMarketplaceMenu.
-    info "Details on any add-on: exakit help <id>"
+    EXAKIT_ADDON_TABLE_LABELS="$_mm_labels"
+    EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
+    # The help command supplies details beyond the table.
+    [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ "$_mm_install_table" = 1 ] || info "Details on any add-on: exakit help <id>"
+    EXAKIT_ADDON_TABLE_DISABLED_TOP=""
+    if [ "$_mm_install_table" = 1 ]; then
+        EXAKIT_ADDON_TABLE_NO_GROUP=1
+        # The two that install on their own and are in already: on top, like
+        # when they install here, not at the bottom as "covered".
+        _mm_ctop=""
+        _mm_crest=""
+        while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
+            [ -n "$_mm_cid" ] || continue
+            case " $EXAKIT_AUTO_ADDONS " in
+                *" $_mm_cid "*) _mm_ctop="$_mm_ctop$_mm_cid|$_mm_cwhy|$_mm_cver
+" ;;
+                *) _mm_crest="$_mm_crest$_mm_cid|$_mm_cwhy|$_mm_cver
+" ;;
+            esac
+        done <<EXAKIT_MM_CSPLIT
+$_mm_covered
+EXAKIT_MM_CSPLIT
+        EXAKIT_ADDON_TABLE_DISABLED_TOP="$_mm_ctop"
+        EXAKIT_ADDON_TABLE_DISABLED="$_mm_crest"
+        # The ones that install on their own on top, then the rest in the registry's order.
+        _mm_first=()
+        _mm_rest=()
+        for _mm_one in "${_mm_pick_ids[@]}"; do
+            case ",$EXAKIT_MARKETPLACE_AUTO_FIRST," in
+                *",$_mm_one,"*) _mm_first+=("$_mm_one") ;;
+                *) _mm_rest+=("$_mm_one") ;;
+            esac
+        done
+        # Each group A-Z by the name the row shows.
+        _mm_first=($(for _mm_one in ${_mm_first[@]+"${_mm_first[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
+        _mm_rest=($(for _mm_one in ${_mm_rest[@]+"${_mm_rest[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
+        _mm_pick_ids=(${_mm_first[@]+"${_mm_first[@]}"} ${_mm_rest[@]+"${_mm_rest[@]}"})
+    fi
+    # Nobody to ask (UI_TABLE_AUTO: the install's two, with no terminal): the
+    # same flat list as the install's own table - no Select All, Continue last.
+    # Twin of $flat in Show-ExakitMarketplaceMenu.
+    [ "${UI_TABLE_AUTO:-0}" = 1 ] && EXAKIT_ADDON_TABLE_NO_GROUP=1
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
+    EXAKIT_ADDON_TABLE_NO_GROUP=0
+    EXAKIT_ADDON_TABLE_DISABLED_TOP=""
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
     UI_TABLE_COL1="Add-on"
-    # The two the reference panel used to carry. Module state, like COL1, so
-    # they are cleared the moment this menu is done -- a heading left behind is
-    # how the next table ends up wearing this one's columns.
+    # Reset these headings after the menu.
     UI_TABLE_COL2="Version"
     UI_TABLE_COL3="Description"
-    ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
-    UI_TABLE_COL2=""
+    # Once an install runs, the Version gives way before the names (ui_table_widths).
+    UI_TABLE_COL2_YIELDS=1
+    # THE INSTALL'S ADD-ONS TABLE (EXAKIT_MARKETPLACE_AUTO_FIRST): every add-on on
+    # offer is listed; the ones named install at once, in this table - no checkbox
+    # on their rows, the bar to the right - and then the same table asks about
+    # the rest, Skip ticked so Enter goes on. No Description column: the table
+    # stays inside the terminal while it changes from progress to question.
+    _mm_auto_notes=""
+    _mm_auto_done=0
+    _mm_behind=0
+    if [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+        _mm_auto_rows=" "
+        for _mm_aid in $(printf '%s' "$EXAKIT_MARKETPLACE_AUTO_FIRST" | tr ',' ' '); do
+            _mm_arow="$(_exakit_addon_table_row "$_mm_aid")"
+            case "$_mm_arow" in ''|0|*[!0-9]*) continue ;; esac
+            _mm_auto_rows="$_mm_auto_rows$_mm_arow "
+        done
+        if [ "$_mm_auto_rows" != " " ]; then
+            UI_TABLE_COL3=""
+            # Never a choice, on these and on the ones in already above them:
+            # the cursor steps over them and no key unticks them. The ones this
+            # run installs are drawn CHECKED and dimmed (UI_TABLE_LOCKED) from
+            # the start - they are being installed - and stay so; one in before
+            # this run has no checkbox.
+            UI_TABLE_NOBOX="$_mm_auto_rows$(_exakit_addon_table_top_rows)"
+            UI_TABLE_LOCKED="$_mm_auto_rows${EXAKIT_ADDON_TABLE_TOP_AUTO:-}"
+            UI_TABLE_LINES=0
+            # The spinner's line becomes the blank line above the table. A real
+            # stop, not a count-down: a reference a nested ui_spin_begin never
+            # gave back left the offer's frame frozen above the table.
+            if [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] || [ -n "${_UI_SPIN_PID:-}" ]; then ui_spin_end_all; fi
+            printf '\n\n'
+            # A terminal to ask on: the two install BEHIND the table, which asks
+            # about the rest at once (their bars move in it meanwhile). Without
+            # one they install first, in the table, as before.
+            if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ] && \
+               _exakit_addon_table_behind_begin "$EXAKIT_MARKETPLACE_AUTO_FIRST" "$_mm_auto_rows"; then
+                _mm_behind=1
+            else
+                ui_table_tick "$EXAKIT_ADDON_TABLE_STATE" ""
+                EXAKIT_ADDON_TABLE_KEEP=1 _exakit_marketplace_apply_python "$EXAKIT_MARKETPLACE_AUTO_FIRST" || true
+                _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
+                EXAKIT_ADDON_TABLE_NOTES=""
+                # Their activity line goes with them: the question has no blank line in it.
+                rm -f "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+                UI_TABLE_MENU_ONSCREEN="${UI_TABLE_LINES:-0}"
+            fi
+            _mm_auto_done=1
+            EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
+        fi
+    fi
+    if [ "$_mm_install_table" = 1 ] && [ "$_mm_auto_done" != 1 ]; then
+        UI_TABLE_COL3=""
+        # The two that are in already: on top, no checkbox.
+        _mm_trows="$(_exakit_addon_table_top_rows)"
+        # The ones this run auto-installed (the early run) checked and locked.
+        [ -z "$_mm_trows" ] || { UI_TABLE_NOBOX=" $_mm_trows"; UI_TABLE_LOCKED="${EXAKIT_ADDON_TABLE_TOP_AUTO:-}"; }
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
+        printf '\n\n'
+    fi
+    # The install's table has no room for its Description column: the row
+    # under the cursor says what it is, under the hint.
+    if [ "$_mm_behind" = 1 ]; then
+        UI_TABLE_MENU_LIVE=_exakit_addon_table_behind_live UI_TABLE_DESC_UNDER=1 ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
+        # Answered: the table keeps moving until the two are in, then the rest install.
+        _exakit_addon_table_behind_finish || true
+        _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
+        EXAKIT_ADDON_TABLE_NOTES=""
+        rm -f "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    elif [ "$_mm_install_table" = 1 ]; then
+        UI_TABLE_DESC_UNDER=1 ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
+    else
+        ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
+    fi
+    # The Description helps the choice and goes once it is made (see below).
     UI_TABLE_COL3=""
-    # ONLY A PRESSED ENTER INSTALLS. The menu pre-selects everything so that
-    # Enter alone acts on what is on offer - which is only a safe posture while
-    # there is an Enter. Without one (a dumb terminal where the interactive
-    # table cannot draw, a stdin that hit EOF mid-menu), ui_table_menu returns
-    # those same defaults as the standing selection, and applying them here
-    # installed EVERY add-on on a machine where nobody chose anything - real
-    # venvs, real downloads. The scripted route stays EXAKIT_MARKETPLACE_ADDONS.
+    # The two keep no checkbox while the rest install in the same table; the
+    # table is gone once this returns (_exakit_addon_table_cleanup).
+    [ "$_mm_auto_done" = 1 ] || [ "$_mm_install_table" = 1 ] || UI_TABLE_NOBOX=""
+    if [ "$_mm_auto_done" = 1 ]; then
+        # What the two installs had to say: the table's rows already say it, so the
+        # log keeps the lines (a warning still shows).
+        while IFS='|' read -r _mm_nkind _mm_nmsg; do
+            [ -n "$_mm_nkind" ] || continue
+            if [ "$_mm_nkind" = ok ]; then _exakit_log_file "OK    $_mm_nmsg"; else warn "$_mm_nmsg"; fi
+        done <<EXAKIT_MM_AUTO_NOTES
+$_mm_auto_notes
+EXAKIT_MM_AUTO_NOTES
+    fi
+    if [ "$_mm_install_table" = 1 ]; then
+        # Skip, or nothing more ticked: the two are in, and that is the whole answer.
+        case ",$EXAKIT_TABLE_SELECTION," in
+            *",$EXAKIT_ADDON_TABLE_ROW_SKIP,"*|,none,|,,) _exakit_addon_table_cleanup; return 0 ;;
+        esac
+    fi
+    # The Description helps the choice and goes once it is made: the install
+    # shows each add-on's Version and its Status. _exakit_addon_table_cleanup
+    # drops the Version heading with the table.
+    UI_TABLE_COL3=""
+    # Do not install preselected rows when the menu could not read Enter.
     if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ]; then
         _exakit_addon_table_cleanup
-        info "No interactive terminal to confirm a selection — nothing was installed."
+        if [ "${UI_FANCY:-0}" != 1 ]; then
+            info "The menu is off here (no terminal to read keys, or NO_COLOR, TERM=dumb, EXAKIT_NO_FANCY or a non-UTF-8 locale) — nothing was installed."
+        else
+            info "No interactive terminal to confirm a selection — nothing was installed."
+        fi
         info "Pick add-ons without the menu: EXAKIT_MARKETPLACE_ADDONS=<ids|all> exakit marketplace"
         return 0
     fi
@@ -5003,12 +7259,18 @@ EXAKIT_MM_COVERED
             ;;
     esac
     _mm_picked=""
+    # The ticked CHILD rows, as "<id>:<key>": answers to an add-on's own
+    # question, not add-ons of their own.
+    _mm_kids=""
     for _mm_idx in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         # "none" is a selection too (a read that hit EOF), and it would reach sed
         # as a line address it cannot parse.
         case "$_mm_idx" in ''|*[!0-9]*) continue ;; esac
         _mm_id="$(printf '%s\n' "$EXAKIT_ADDON_TABLE_IDS" | sed -n "${_mm_idx}p")"
         [ -n "$_mm_id" ] || continue
+        case "$_mm_id" in
+            *:*) _mm_kids="$_mm_kids $_mm_id"; continue ;;
+        esac
         _mm_picked="${_mm_picked:+$_mm_picked,}$_mm_id"
     done
     if [ -z "$_mm_picked" ]; then
@@ -5016,6 +7278,23 @@ EXAKIT_MM_COVERED
         info "Nothing selected — nothing was installed."
         return 0
     fi
+    # Each picked add-on that drew child rows takes its ticked ones as its
+    # answer (the optional <id>_table_children_picked hook, given the ticked
+    # keys as a csv, empty for none), so its install asks nothing. An unticked add-on's children cannot be
+    # ticked ("claim"), so there is nothing to hand an add-on that is not
+    # being installed.
+    for _mm_id in $(printf '%s' "$_mm_picked" | tr ',' ' '); do
+        [ -n "$(_exakit_addon_table_child_rows "$_mm_id")" ] || continue
+        _mm_kfn="$(_exakit_addon_fn "$_mm_id" table_children_picked)"
+        command -v "$_mm_kfn" >/dev/null 2>&1 || continue
+        _mm_keys=""
+        for _mm_kid in $_mm_kids; do
+            case "$_mm_kid" in
+                "$_mm_id":*) _mm_keys="${_mm_keys:+$_mm_keys,}${_mm_kid#"$_mm_id":}" ;;
+            esac
+        done
+        "$_mm_kfn" "$_mm_keys"
+    done
     _exakit_marketplace_apply "$_mm_picked"
 }
 
@@ -5026,13 +7305,20 @@ _exakit_marketplace_json_compact() {
     _ml_rows="$1"
     _ml_first=1
     printf '{\n  "addons": [\n'
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs _ml_name _ml_url _ml_about; do
         [ -n "$_ml_id" ] || continue
         [ "$_ml_first" -eq 1 ] || printf ',\n'
         _ml_first=0
         printf '    {"id": "%s", "status": "%s", "installed": %s' \
             "$_ml_id" "$_ml_status" \
             "$([ "$_ml_status" = "installed" ] && echo true || echo false)"
+        _ml_owner=""
+        case "$_ml_status" in
+            installed) _ml_owner="$(exakit_component_ownership "$_ml_id")" ;;
+            "managed outside the kit") _ml_owner=user ;;
+        esac
+        if [ -n "$_ml_owner" ]; then printf ', "ownership": "%s"' "$_ml_owner"; else printf ', "ownership": null'; fi
+        printf ', "installed_by_kit": %s' "$([ "$_ml_owner" = kit ] && echo true || echo false)"
         if [ -n "$_ml_ver" ]; then printf ', "version": "%s"' "$_ml_ver"; else printf ', "version": null'; fi
         [ -n "$_ml_reason" ] && printf ', "reason": "%s"' \
             "$(printf '%s' "$_ml_reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -5043,6 +7329,15 @@ _exakit_marketplace_json_compact() {
             printf ', "docs": "%s"' "$(printf '%s' "$_ml_docs" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         else
             printf ', "docs": null'
+        fi
+        # The add-on repository on GitHub: its name, link and About (as the last
+        # lookup cached them, else the catalog's copy).
+        printf ', "name": "%s"' "${_ml_name:-$_ml_id}"
+        if [ -n "$_ml_url" ]; then printf ', "url": "%s"' "$_ml_url"; else printf ', "url": null'; fi
+        if [ -n "$_ml_about" ]; then
+            printf ', "about": "%s"' "$(printf '%s' "$_ml_about" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        else
+            printf ', "about": null'
         fi
         printf '}'
     done <<EXAKIT_ML_JSON
@@ -5057,44 +7352,80 @@ EXAKIT_ML_JSON
 # state; nothing here writes the manifest, a failure note, or a log. The
 # status vocabulary is fixed: installed / available / managed outside the
 # kit / not in this kit copy / not available on this machine.
+# _exakit_marketplace_list_row <id> - one add-on's listing row on stdout:
+# id|status|version|reason|repo|docs|name|url|about. Its own function so the
+# rows can be worked out side by side (exakit_marketplace_list).
+_exakit_marketplace_list_row() {
+    _ml_id="$1"
+    _ml_ver=""
+    _ml_reason=""
+    if ! _exakit_addon_applicable "$_ml_id" 2>/dev/null && \
+       ! exakit_marketplace_addon_installed "$_ml_id" 2>/dev/null; then
+        _ml_status="not available on this machine"
+        _ml_reason="$(_exakit_addon_applicable_reason "$_ml_id" 2>/dev/null || true)"
+    elif exakit_marketplace_addon_installed "$_ml_id"; then
+        _ml_status="installed"
+        _ml_ver="$(exakit_version_plain "$(exakit_component_current "$_ml_id" 2>/dev/null || true)")"
+    elif _exakit_addon_system_present "$_ml_id"; then
+        _ml_status="managed outside the kit"
+    elif ! exakit_marketplace_addon_available "$_ml_id"; then
+        _ml_status="not in this kit copy"
+    else
+        _ml_status="available"
+        _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
+    fi
+    # Where to read more. A listing of names and version numbers is all an
+    # agent deciding whether an add-on fits a task had to go on; the help
+    # document for every add-on already carries its repository and a
+    # documentation link, so the row points at both. Read from the
+    # document on disk (no network), empty when the document is missing.
+    _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
+    _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
+    case "$_ml_docs" in
+        https://*) ;;
+        *) _ml_docs="" ;;
+    esac
+    # The repository's name, link and About on GitHub, from the cache or the
+    # catalog: this listing never fetches. The About last: prose may hold a "|".
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$_ml_id" "$_ml_status" "$_ml_ver" "$_ml_reason" "$_ml_repo" "$_ml_docs" \
+        "$(exakit_marketplace_addon_name "$_ml_id")" "$(exakit_marketplace_addon_url "$_ml_id" 2>/dev/null || true)" \
+        "$(_exakit_marketplace_addon_about_offline "$_ml_id")"
+}
+
 exakit_marketplace_list() {
     _ml_json="${1:-0}"
     _ml_rows=""
+    # EVERY ADD-ON AT ONCE. A row is a dozen small lookups (installed? which
+    # version? where are its docs?), about a second of forks each, and eight of
+    # them in turn held the add-ons table back for most of ten seconds. Each row
+    # is its own background job writing its own file; they are read back in the
+    # registry's order. Nothing here fetches or writes shared state.
+    _ml_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-mlist.XXXXXX" 2>/dev/null)" || _ml_dir=""
+    _ml_n=0
+    _ml_pids=""
     while IFS='|' read -r _ml_id _ml_label; do
         [ -n "$_ml_id" ] || continue
-        _ml_ver=""
-        _ml_reason=""
-        if ! _exakit_addon_applicable "$_ml_id" 2>/dev/null && \
-           ! exakit_marketplace_addon_installed "$_ml_id" 2>/dev/null; then
-            _ml_status="not available on this machine"
-            _ml_reason="$(_exakit_addon_applicable_reason "$_ml_id" 2>/dev/null || true)"
-        elif exakit_marketplace_addon_installed "$_ml_id"; then
-            _ml_status="installed"
-            _ml_ver="$(exakit_version_plain "$(exakit_component_current "$_ml_id" 2>/dev/null || true)")"
-        elif _exakit_addon_system_present "$_ml_id"; then
-            _ml_status="managed outside the kit"
-        elif ! exakit_marketplace_addon_available "$_ml_id"; then
-            _ml_status="not in this kit copy"
+        _ml_n=$(( _ml_n + 1 ))
+        if [ -n "$_ml_dir" ]; then
+            ( _exakit_marketplace_list_row "$_ml_id" > "$_ml_dir/$_ml_n" 2>/dev/null ) &
+            _ml_pids="$_ml_pids $!"
         else
-            _ml_status="available"
-            _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
-        fi
-        # Where to read more. A listing of names and version numbers is all an
-        # agent deciding whether an add-on fits a task had to go on; the help
-        # document for every add-on already carries its repository and a
-        # documentation link, so the row points at both. Read from the
-        # document on disk (no network), empty when the document is missing.
-        _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
-        _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
-        case "$_ml_docs" in
-            https://*) ;;
-            *) _ml_docs="" ;;
-        esac
-        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs
+            _ml_rows="$_ml_rows$(_exakit_marketplace_list_row "$_ml_id")
 "
+        fi
     done <<EXAKIT_ML_EOF
 $(exakit_marketplace_addons)
 EXAKIT_ML_EOF
+    if [ -n "$_ml_dir" ]; then
+        for _ml_pid in $_ml_pids; do wait "$_ml_pid" 2>/dev/null || true; done
+        _ml_i=0
+        while [ "$_ml_i" -lt "$_ml_n" ]; do
+            _ml_i=$(( _ml_i + 1 ))
+            [ -s "$_ml_dir/$_ml_i" ] && _ml_rows="$_ml_rows$(cat "$_ml_dir/$_ml_i")
+"
+        done
+        rm -rf "$_ml_dir"
+    fi
 
     if [ "$_ml_json" = "1" ]; then
         # Built as one line per add-on, then laid out one key per line by the
@@ -5105,11 +7436,16 @@ EXAKIT_ML_EOF
         return 0
     fi
 
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs _ml_rest; do
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
-        [ -n "$_ml_reason" ] && printf '%-16s %s\n' "" "($_ml_reason)"
+        # Wrapped to the terminal, under the status: a reason is a sentence or two
+        # (VS Code's names five editors), and one line ran past 60 columns.
+        if [ -n "$_ml_reason" ]; then
+            _ml_w=$(( ${COLUMNS:-80} - 17 )); [ "$_ml_w" -ge 30 ] || _ml_w=30
+            printf '(%s)\n' "$_ml_reason" | fold -s -w "$_ml_w" | sed 's/ *$//; s/^/                 /'
+        fi
     done <<EXAKIT_ML_OUT
 $_ml_rows
 EXAKIT_ML_OUT
@@ -5130,6 +7466,37 @@ EXAKIT_ML_OUT
 #     EXAKIT_MARKETPLACE_ADDONS pre-answers, which installs without asking.
 # Best-effort by contract: callers run it in a subshell so nothing in here can
 # end an install that already succeeded. ⇄ twin: Request-ExakitMarketplaceOffer.
+# exakit_ready_line_text — the words of the closing line. Two cases only:
+# with one or more AI clients connected (what mcp-setup recorded in the
+# manifest, so a re-run counts the clients an earlier run connected) it says
+# the kit is connected to them; with none it is the plain "ready to use".
+# Display only: nothing is re-run.
+# Twin: Get-ExakitReadyLineText in exakit-common.ps1.
+exakit_ready_line_text() {
+    _erl_fallback="Your starter kit is ready to use."
+    _erl_text=""
+    if [ -n "${EXAKIT_MANIFEST:-}" ] && [ -f "$EXAKIT_MANIFEST" ] \
+        && exakit_can_run_python_any 2>/dev/null; then
+        _erl_text="$(run_python_any - "$EXAKIT_MANIFEST" 2>/dev/null <<'EXAKIT_READY_LINE'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        doc = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+setup = (doc.get("components", {}) or {}).get("mcp_server", {}) or {}
+setup = setup.get("client_setup", {}) or {}
+configured = [c for c in (setup.get("configured_clients") or []) if c]
+if configured:
+    print("Exasol starterkit is ready and connected to your AI clients. "
+          "Ask them about your data.")
+EXAKIT_READY_LINE
+)" || _erl_text=""
+    fi
+    printf '%s' "${_erl_text:-$_erl_fallback}"
+}
+
 # exakit_print_ready_line — the install's ONE closing line.
 #
 # There were two: an "ok Setup complete" before the connection panel, and this
@@ -5149,146 +7516,629 @@ EXAKIT_ML_OUT
 exakit_print_ready_line() {
     [ -z "${EXAKIT_SOFT_FAILED:-}" ] || return 0
     printf '\n'
-    ok "Your starter kit is ready to use."
+    ok "$(exakit_ready_line_text)"
+    # Where each recorded persona starts, which only `exakit persona show` named
+    # before (NEW-04). Nothing for a kit without a persona or one with no first step.
+    if command -v _exakit_persona_service >/dev/null 2>&1; then
+        for _prl_id in $(manifest_get persona.id 2>/dev/null | tr ',' ' '); do
+            _prl_step="$(_exakit_persona_service show "$_prl_id" 2>/dev/null | sed -n 's/^  Start here  *//p' | head -1)"
+            [ -n "$_prl_step" ] || continue
+            info "Start here ($(_exakit_persona_service title "$_prl_id" 2>/dev/null || printf '%s' "$_prl_id")): $_prl_step"
+        done
+    fi
+    return 0
+}
+
+# THE ADD-ONS EVERY KIT GETS. Installed at the end of the install when they are
+# missing - no question first: their rows are drawn at once, ticked, and turn
+# into the live progress table while both install side by side (apply.py runs
+# parallel-safe add-ons in one turn). Twin: $script:ExakitAutoAddons.
+EXAKIT_AUTO_ADDONS="dash-server json-tables"
+
+# _exakit_marketplace_catalog_about <ids csv> — id|description from the catalog's
+# own copy of each repository's About: no lookup stands between the install and
+# the table. The real About is refreshed in the background meanwhile.
+_exakit_marketplace_catalog_about() {
+    run_python_any - "$(_exakit_marketplace_root)/marketplace/catalog.json" "$1" <<'PY' 2>/dev/null
+import json, sys
+wanted = sys.argv[2].split(",")
+for row in json.load(open(sys.argv[1], encoding="utf-8")).get("addons", []):
+    if row.get("id") in wanted:
+        about = (row.get("kit_about") or (row.get("github") or {}).get("about") or "").replace("|", "/").replace("\n", " ")
+        print(f"{row['id']}|{about}")
+PY
+}
+
+# --- the add-ons every kit gets, started early --------------------------------
+# Dash Server and JSON Tables install on their own at the close of an install,
+# forty seconds or more that the reader watched - after minutes spent at the
+# data table with the machine idle. exakit_addons_early_begin starts that same
+# install in the background as soon as the parts it needs are there (uv, the
+# database), silently: everything it says goes to the log. By the time the
+# add-ons table is reached they are usually in, and it opens on "Auto
+# installed"; still running, the table is drawn at once and their rows follow
+# that run (_exakit_addons_early_follow); failed, they are simply not
+# installed and the offer installs them the way it always has.
+#
+# Only where the offer would install them without asking (a terminal, the
+# fancy table, no scripted answer), and off with EXAKIT_ADDONS_EARLY=0. macOS
+# and Linux: the Windows installer has no early run, and its table installs
+# the two in it at once (Request-ExakitMarketplaceOffer).
+_exakit_addons_early_dir() {
+    printf '%s/.addons-early' "${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
+}
+# The longest the add-ons step waits on the early run, in seconds from that
+# run's start. Past it the step goes on and says the run is still going; it
+# never waits for ever on a download that stalled or a start that never returns.
+_EXAKIT_ADDONS_EARLY_MAX=600
+# _exakit_addons_early_reap - marks no live early run owns go: a run a closed
+# terminal or a crash left behind, or one whose pid the OS has since reused.
+_exakit_addons_early_reap() {
+    _aex_dir="$(_exakit_addons_early_dir)"
+    [ -d "$_aex_dir" ] || return 0
+    exakit_addons_early_running && return 0
+    rm -rf "$_aex_dir" 2>/dev/null || true
+    return 0
+}
+exakit_addons_early_begin() {
+    # Stale marks go at installer start, whatever else this run does: left in
+    # place they made the add-ons step wait on a process that was not the kit's.
+    _exakit_addons_early_reap
+    # ONE early install at a time. A run an interrupted installer left going
+    # (Ctrl-C does not stop it) is adopted - this run's table follows it - and
+    # never started a second time beside it in the same tool directory.
+    if exakit_addons_early_running; then
+        _exakit_log_file "INFO  Add-ons still installing from an earlier run, followed: $(cat "$(_exakit_addons_early_dir)/ids" 2>/dev/null)"
+        return 0
+    fi
+    [ "${EXAKIT_ADDONS_EARLY:-1}" = 1 ] || return 0
+    [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] || return 0
+    [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ] || return 0
+    exakit_soft_failed runtime && return 0
+    _exakit_marketplace_load_modules
+    _aeb_ids=""
+    for _aeb_id in $EXAKIT_AUTO_ADDONS; do
+        _exakit_addon_offerable "$_aeb_id" || continue
+        exakit_marketplace_addon_installed "$_aeb_id" && continue
+        _exakit_addon_system_present "$_aeb_id" && continue
+        _aeb_ids="${_aeb_ids:+$_aeb_ids,}$_aeb_id"
+    done
+    [ -n "$_aeb_ids" ] || return 0
+    _aeb_dir="$(_exakit_addons_early_dir)"
+    rm -rf "$_aeb_dir" 2>/dev/null || true
+    mkdir -p "$_aeb_dir" 2>/dev/null || return 0
+    # Which ones it started: the table follows these, and only these.
+    printf '%s\n' "$_aeb_ids" > "$_aeb_dir/ids" 2>/dev/null || true
+    # When it started (the waits' ceiling counts from here), and a token that is
+    # this run's alone: its exit status is written only into marks that still
+    # carry it, never into a later run's.
+    date +%s > "$_aeb_dir/since" 2>/dev/null || true
+    _aeb_run="$$.$(date +%s 2>/dev/null || echo 0).${RANDOM:-0}"
+    printf '%s\n' "$_aeb_run" > "$_aeb_dir/run" 2>/dev/null || true
+    # ITS OWN LOG, beside the install log. A file loaded meanwhile takes its
+    # failure reason from the install log's lines since the load began
+    # (exakit_upload_failure_reason): this run's uv errors and WARN notes
+    # landed in that slice and could be named as the load's reason.
+    _aeb_log=""
+    if [ -n "${EXAKIT_LOG_FILE:-}" ]; then
+        _aeb_log="$(dirname "$EXAKIT_LOG_FILE")/addons-early-$(date +%Y%m%d-%H%M%S).log"
+        { : > "$_aeb_log" && chmod 600 "$_aeb_log"; } 2>/dev/null || _aeb_log=""
+    fi
+    [ -z "$_aeb_log" ] || printf '%s\n' "$_aeb_log" > "$_aeb_dir/log" 2>/dev/null || true
+    _exakit_log_file "INFO  Add-ons started early, in the background: $_aeb_ids${_aeb_log:+ (log: $_aeb_log)}"
+    (
+        # Nothing of this reaches the screen, and it asks nothing.
+        exec </dev/null >>"${_aeb_log:-/dev/null}" 2>&1
+        EXAKIT_LOG_FILE="$_aeb_log"
+        export EXAKIT_LOG_FILE
+        UI_FANCY=0
+        EXAKIT_NO_FANCY=1
+        EXAKIT_ADDONS_EARLY=0
+        EXAKIT_MARKETPLACE_ADDONS="$_aeb_ids"
+        # What its installs have to say (a warning: installed but not started)
+        # is kept for the table that follows it; only the log saw it before.
+        EXAKIT_ADDONS_EARLY_NOTES="$_aeb_dir/notes"
+        # Its phases too (installing, validating, starting), which the table
+        # following it replays: its rows only ever said "installing" and the
+        # bar stood at 64% from the 40th second on.
+        EXAKIT_ADDONS_EARLY_EVENTS="$_aeb_dir/events"
+        export UI_FANCY EXAKIT_NO_FANCY EXAKIT_ADDONS_EARLY EXAKIT_MARKETPLACE_ADDONS EXAKIT_ADDONS_EARLY_NOTES EXAKIT_ADDONS_EARLY_EVENTS
+        _aeb_rc=0
+        exakit_marketplace_menu || _aeb_rc=$?
+        [ "$(cat "$_aeb_dir/run" 2>/dev/null)" = "$_aeb_run" ] && printf '%s\n' "$_aeb_rc" > "$_aeb_dir/rc"
+    ) &
+    _aeb_pid=$!
+    # Line 1 the pid, line 2 its start time, as the install lock records them
+    # (exakit_lock_holder_alive): a pid alone is reused by the OS.
+    printf '%s\n%s\n' "$_aeb_pid" "$(exakit_process_start_time "$_aeb_pid")" > "$_aeb_dir/pid" 2>/dev/null || true
+    return 0
+}
+# exakit_addons_early_running - is the early install still at it? Its pid alive
+# AND started when its marks say: a reused pid (marks a closed terminal left,
+# the pid now another process of the user) kept the add-ons step waiting for ever.
+exakit_addons_early_running() {
+    _aer_dir="$(_exakit_addons_early_dir)"
+    [ -f "$_aer_dir/pid" ] && [ ! -f "$_aer_dir/rc" ] || return 1
+    _aer_pid="$(sed -n 1p "$_aer_dir/pid" 2>/dev/null || true)"
+    case "$_aer_pid" in ''|*[!0-9]*) return 1 ;; esac
+    exakit_lock_holder_alive "$_aer_dir/pid"
+}
+# _exakit_addons_early_overdue <t0> - has the early run had its time? Counted
+# from its start (marks "since"), else from <t0>, the caller's own start.
+_exakit_addons_early_overdue() {
+    _aeo_since="$(cat "$(_exakit_addons_early_dir)/since" 2>/dev/null || true)"
+    case "$_aeo_since" in ''|*[!0-9]*) _aeo_since="${1:-0}" ;; esac
+    [ $(( $(date +%s 2>/dev/null || echo 0) - _aeo_since )) -ge "$_EXAKIT_ADDONS_EARLY_MAX" ]
+}
+# _exakit_addons_early_holds <id> - is a live early run installing <id>?
+_exakit_addons_early_holds() {
+    exakit_addons_early_running || return 1
+    case ",$(cat "$(_exakit_addons_early_dir)/ids" 2>/dev/null)," in *",$1,"*) return 0 ;; esac
+    return 1
+}
+# _exakit_addons_early_log - the early run's own log (exakit_addons_early_begin);
+# the install log for marks that name none.
+_exakit_addons_early_log() {
+    _ael_log="$(cat "$(_exakit_addons_early_dir)/log" 2>/dev/null || true)"
+    printf '%s' "${_ael_log:-${EXAKIT_LOG_FILE:-the install log}}"
+}
+# exakit_addons_early_report - an early run still going once the add-ons step is
+# over or the install was cut short (Ctrl-C does not stop it): said in one line,
+# with its log. A re-run of the installer follows it rather than start another.
+exakit_addons_early_report() {
+    exakit_addons_early_running || return 0
+    _aep_ids="$(sed 's/,/, /g' "$(_exakit_addons_early_dir)/ids" 2>/dev/null)"
+    warn "Still installing in the background: ${_aep_ids:-the add-ons}. It finishes on its own; its log: $(_exakit_addons_early_log). A re-run of the installer waits for it."
+    return 0
+}
+# _exakit_addons_early_warnings <id> - the early run's warnings about <id>
+# ("warn|<id>: <detail>" in its notes), one "<detail>" a line. Its failures
+# ("<id> did not finish") are not among them: that add-on is installed again.
+_exakit_addons_early_warnings() {
+    while IFS='|' read -r _aew_kind _aew_msg; do
+        [ "$_aew_kind" = warn ] || continue
+        case "$_aew_msg" in "$1: "*) printf '%s\n' "${_aew_msg#"$1: "}" ;; esac
+    done < "$(_exakit_addons_early_dir)/notes" 2>/dev/null
+    return 0
+}
+# _exakit_addons_early_collect - the early run is over before the offer: what
+# it has to say about the ones it got in (EXAKIT_ADDONS_EARLY_WARNINGS, said
+# after the table by _exakit_addons_early_say) - read before its marks go.
+EXAKIT_ADDONS_EARLY_WARNINGS=""
+# ...and which ones it got in (EXAKIT_ADDONS_EARLY_DONE, space-separated): the
+# table says "Auto installed" for those, "Installed <version>" for the rest.
+EXAKIT_ADDONS_EARLY_DONE=""
+_exakit_addons_early_collect() {
+    _aec_dir="$(_exakit_addons_early_dir)"
+    [ -f "$_aec_dir/ids" ] || return 0
+    for _aec_id in $(tr ',' ' ' < "$_aec_dir/ids" 2>/dev/null); do
+        exakit_marketplace_addon_installed "$_aec_id" || continue
+        EXAKIT_ADDONS_EARLY_DONE="${EXAKIT_ADDONS_EARLY_DONE:+$EXAKIT_ADDONS_EARLY_DONE }$_aec_id"
+        while IFS= read -r _aec_line; do
+            [ -n "$_aec_line" ] || continue
+            EXAKIT_ADDONS_EARLY_WARNINGS="$EXAKIT_ADDONS_EARLY_WARNINGS$_aec_id: $_aec_line
+"
+        done <<EXAKIT_AEC_EOF
+$(_exakit_addons_early_warnings "$_aec_id")
+EXAKIT_AEC_EOF
+    done
+    return 0
+}
+_exakit_addons_early_say() {
+    while IFS= read -r _aes_line; do
+        [ -n "$_aes_line" ] && warn "$_aes_line"
+    done <<EXAKIT_AES_EOF
+$EXAKIT_ADDONS_EARLY_WARNINGS
+EXAKIT_AES_EOF
+    EXAKIT_ADDONS_EARLY_WARNINGS=""
+    return 0
+}
+# _exakit_addons_early_follow <ids> - stand in for apply.py while the early run
+# is still going: the table gets "installing" for each id that run started (its
+# "ids" mark) now, so it is drawn at once with its bars moving, then "done" for
+# each once the run is over - when the run ended well AND the add-on answers as
+# installed (the same probe the offer asks). Everything else goes to apply.py
+# after it: an id that run never started (a persona's add-on), and one it did
+# not get in. An add-on not applicable here (json-tables on an older glibc) is
+# in neither list, so no row of it waits on anything. apply.py installs whatever is
+# still missing and reports the rest as already there; it is also what
+# registers an install's MCP endpoint, which the early run, an apply.py of its
+# own, already did for the ones it got in. Its output is the event stream
+# _exakit_marketplace_apply_python reads. The empty line every turn of the
+# wait is for that reader (it skips it): once the reader is gone (Ctrl-C ended
+# the table) the write fails, and this ends there, before starting anything
+# for a table nobody is watching.
+_exakit_addons_early_follow() {
+    _aef_t0="$(date +%s 2>/dev/null || echo 0)"
+    _aef_dir="$(_exakit_addons_early_dir)"
+    _aef_early=",$(cat "$_aef_dir/ids" 2>/dev/null || true),"
+    for _aef_id in $(printf '%s' "$1" | tr ',' ' '); do
+        case "$_aef_early" in *",$_aef_id,"*) printf '@@EXAKIT|%s|installing||\n' "$_aef_id" ;; esac
+    done
+    _aef_late=0
+    _aef_seen=0
+    while exakit_addons_early_running; do
+        if _exakit_addons_early_overdue "$_aef_t0"; then _aef_late=1; break; fi
+        # The run's phases, as it reaches them, for the ids it started: the
+        # rows move on to validating and starting with their bars. Whole lines
+        # only (wc counts the newlines a finished write ends with).
+        if [ -s "$_aef_dir/events" ]; then
+            _aef_n="$(wc -l < "$_aef_dir/events" 2>/dev/null | tr -d ' ')"
+            case "$_aef_n" in ''|*[!0-9]*) _aef_n=0 ;; esac
+            if [ "$_aef_n" -gt "$_aef_seen" ]; then
+                sed -n "$(( _aef_seen + 1 )),${_aef_n}p" "$_aef_dir/events" 2>/dev/null |
+                while IFS='|' read -r _aef_et _aef_ei _aef_ep _aef_ed; do
+                    case "$_aef_ep" in installing|validating|starting) ;; *) continue ;; esac
+                    case "$_aef_early" in *",$_aef_ei,"*) printf '@@EXAKIT|%s|%s|%s|\n' "$_aef_ei" "$_aef_ep" "$_aef_ed" ;; esac
+                done
+                _aef_seen="$_aef_n"
+            fi
+        fi
+        printf '\n' 2>/dev/null || return 130
+        sleep 0.3
+    done
+    if [ "$_aef_late" = 1 ]; then
+        # Past the ceiling and still going: its rows end, saying so, and the
+        # step goes on. Never installed a second time beside it; its marks stay,
+        # so the closing line can say it is still at it.
+        _exakit_log_file "WARN  The early add-on install is still going after ${_EXAKIT_ADDONS_EARLY_MAX}s; not waiting longer"
+        _aef_rest=""
+        for _aef_id in $(printf '%s' "$1" | tr ',' ' '); do
+            case "$_aef_early" in
+                *",$_aef_id,"*) printf '@@EXAKIT|%s|failed|still installing in the background after %s minutes; it finishes on its own (log: %s)\n' \
+                                    "$_aef_id" "$(( _EXAKIT_ADDONS_EARLY_MAX / 60 ))" "$(_exakit_addons_early_log)" ;;
+                *) _aef_rest="${_aef_rest:+$_aef_rest,}$_aef_id" ;;
+            esac
+        done
+        [ -z "$_aef_rest" ] || _exakit_marketplace_run_python mutate "$(_exakit_marketplace_root)/marketplace/apply.py" "$_aef_rest" --stream
+        return 1
+    fi
+    _aef_rc="$(cat "$_aef_dir/rc" 2>/dev/null || true)"
+    # The answers remembered before that run ended are stale now.
+    _exakit_hook_memo_forget
+    _aef_secs=$(( $(date +%s 2>/dev/null || echo 0) - _aef_t0 ))
+    _aef_rest=""
+    for _aef_id in $(printf '%s' "$1" | tr ',' ' '); do
+        case "$_aef_early" in
+            *",$_aef_id,"*)
+                if [ "$_aef_rc" = 0 ] && exakit_marketplace_addon_installed "$_aef_id"; then
+                    printf '@@EXAKIT|%s|done|installed|%s\n' "$_aef_id" "$_aef_secs"
+                    # In, but with something to say (not started, MCP endpoint
+                    # not registered): said under the table, as for an add-on
+                    # installed in it.
+                    _exakit_addons_early_warnings "$_aef_id" | while IFS= read -r _aef_w; do
+                        printf '@@EXAKIT|%s|warning|%s\n' "$_aef_id" "$_aef_w"
+                    done
+                    continue
+                fi
+                ;;
+        esac
+        _aef_rest="${_aef_rest:+$_aef_rest,}$_aef_id"
+    done
+    rm -rf "$_aef_dir" 2>/dev/null || true
+    [ -n "$_aef_rest" ] || return 0
+    _exakit_marketplace_run_python mutate "$(_exakit_marketplace_root)/marketplace/apply.py" "$_aef_rest" --stream
+}
+
+# exakit_addons_early_wait - until it is done (or gone), then its marks go.
+# Bounded: 1 when the run is still going past its ceiling (its marks stay).
+exakit_addons_early_wait() {
+    _aew_t0="$(date +%s 2>/dev/null || echo 0)"
+    while exakit_addons_early_running; do
+        _exakit_addons_early_overdue "$_aew_t0" && return 1
+        sleep 0.2
+    done
+    _exakit_addons_early_collect
+    rm -rf "$(_exakit_addons_early_dir)" 2>/dev/null || true
     return 0
 }
 
 exakit_marketplace_offer() {
+    # The installers run this in a subshell, where the loader keeps no memo:
+    # this one is the subshell's own, and goes when it does.
+    if [ -z "$_EXAKIT_HOOK_MEMO" ] && [ "${BASH_SUBSHELL:-0}" != 0 ] && _exakit_hook_memo_begin; then
+        trap 'exakit_sweep_tmp' EXIT
+    fi
+    # The interpreter's version is asked ONCE for the whole step. The verdict
+    # was cached in a variable that every $(...) of the step lost, so the
+    # floor was probed again in each of them - thirty interpreter starts
+    # between the heading and the table. Exported, every subshell and child of
+    # the offer (itself a subshell) reads the one answer.
+    _exakit_has_system_python3 >/dev/null 2>&1 || true
+    export _EXAKIT_SYSTEM_PY_OK
     _exakit_marketplace_load_modules
-    exakit_marketplace_has_pending || return 0
-    # Fill the About cache now, while the gate question below is still being
-    # read: this is the one screen where the cache is reliably cold (a machine
-    # minutes old), and the table it feeds does not exist yet.
-    _exakit_marketplace_warm_about
 
-    # A scripted answer wins over any prompt (same contract as the menu).
+    # A scripted answer wins (same contract as the menu): EXAKIT_MARKETPLACE_ADDONS=none installs nothing.
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
         exakit_marketplace_menu
         return $?
     fi
+    # Only a database that never installed holds them back.
+    exakit_soft_failed runtime && return 0
 
-    # "Done and working" must be true before it is said: a run that recorded
-    # soft failures points at the marketplace without the celebration.
-    if [ -n "${EXAKIT_SOFT_FAILED:-}" ] || [ -z "$(_exakit_prompt_tty)" ]; then
-        info "Optional add-ons (dashboards & more): exakit marketplace"
-        return 0
+    # The two started early (exakit_addons_early_begin) and still installing:
+    # the table does NOT wait for them. It is drawn at once, their rows follow
+    # that run ("installing", the bar moving) and turn "Auto installed" when it
+    # is over (_exakit_addons_early_follow). Waiting here under a bare spinner
+    # held the screen for up to a minute and read as a hang. Only the table
+    # follows: without it (no terminal, no fancy table) the offer waits as
+    # before, or its own install would run beside that one. A run already over
+    # only has its marks cleared; the offer never returns with one still going
+    # (exakit_addons_early_wait below).
+    EXAKIT_ADDONS_EARLY_FOLLOW=0
+    if exakit_addons_early_running && [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
+        EXAKIT_ADDONS_EARLY_FOLLOW=1
+    else
+        exakit_addons_early_wait || true
     fi
+    export EXAKIT_ADDONS_EARLY_FOLLOW
 
-    # One gate question first — the same cursor menu every other kit choice
-    # uses, no typing: Yes is pre-ticked, No is the exclusive opt-out. Only a
-    # Yes opens the marketplace selection itself (where the available add-ons
-    # come pre-selected, so Enter installs them and Skip still backs out).
-    #
-    # "Your starter kit is ready to use." used to be printed here. It is now
-    # exakit_print_ready_line, called by the setup scripts before this offer:
-    # behind these gates it reached only an interactive, fully-successful run
-    # that still had an add-on left to install, which is a minority of runs.
-    # The install is over; what follows is a different question. A rule with air
-    # around it is the seam, so the offer does not read as one more install step.
-    ui_rule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    heading "Supercharge Exasol with add-ons from marketplace"
-    EXAKIT_CHECKBOX_EXCLUSIVE=2
-    ui_checkbox_menu "Explore marketplace ?" "1" \
-        "Yes" \
-        "No"
-    case ",$EXAKIT_CHECKBOX_SELECTION," in
-        *",1,"*)
-            exakit_marketplace_menu || true
-            # "Browse again: exakit marketplace · how to use one: exakit
-            # help <add-on>" stood here. The table above has just said what was
-            # installed and what each one gives you; the reader has not asked
-            # to browse again, and the closing support line already names
-            # `exakit help`.
-            ;;
-        *)
-            info "Maybe later — browse any time with: exakit marketplace"
-            ;;
-    esac
+    _mo_ids=""
+    for _mo_id in $EXAKIT_AUTO_ADDONS $(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr ',' ' '); do
+        case ",$_mo_ids," in *",$_mo_id,"*) continue ;; esac
+        # Not followed and still being installed by the early run past the
+        # wait's ceiling: never a second install beside it (the closing line
+        # says it is still going).
+        if [ "$EXAKIT_ADDONS_EARLY_FOLLOW" != 1 ] && _exakit_addons_early_holds "$_mo_id"; then continue; fi
+        _exakit_addon_offerable "$_mo_id" || continue
+        exakit_marketplace_addon_installed "$_mo_id" && continue
+        _exakit_addon_system_present "$_mo_id" && continue
+        _mo_ids="${_mo_ids:+$_mo_ids,}$_mo_id"
+    done
+    # The checks the tables do not need, behind them: the About cache the second table reads.
+    ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
+    # Nothing to install and nobody to ask: nothing on screen.
+    [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || {
+        exakit_addons_early_wait || true
+        _exakit_addons_early_say
+        return 0
+    }
+    # Two empty lines first: the offer is a new part of the run, not one more
+    # line of the install step above it. ⇄ twin: Request-ExakitMarketplaceOffer.
+    printf '\n\n'
+    heading "Supercharging Exasol with Add-ons"
+    if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
+        # ONE table: every add-on on offer, the missing ones of the two installing
+        # in it at once, then the rest waits for a pick (Enter alone is Skip).
+        # Every row's description from the catalog's own copy: no lookup before the table.
+        _mo_about="$(_exakit_marketplace_catalog_about "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')")"
+        # A spinner until the table is up: the rows are read first (a second or
+        # two), and said so - a bare spinner under the heading read as a hang.
+        # ⇄ twin: Request-ExakitMarketplaceOffer.
+        ui_spin_begin "Reading the add-ons"
+        EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
+            EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" EXAKIT_MARKETPLACE_SPINNING=1 \
+            EXAKIT_MARKETPLACE_INSTALL_TABLE=1 exakit_marketplace_menu || true
+        ui_spin_end_all
+    elif [ -n "$_mo_ids" ]; then
+        # Nobody to ask: the two, drawn ticked and installed, and nothing else.
+        _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"
+        EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="$_mo_ids" EXAKIT_MARKETPLACE_PRESELECT="$_mo_ids" \
+            UI_TABLE_AUTO=1 exakit_marketplace_menu || true
+    fi
+    exakit_addons_early_wait || true
+    # The early run was over before the table: what it had to say, under it.
+    _exakit_addons_early_say
+    return 0
+}
+
+# Ask add-on questions before the progress table when child rows did not
+# already collect their answers.
+_exakit_marketplace_questions() {
+    _mq_ids=""
+    for _mq_id in $(printf '%s' "$1" | tr ',' ' '); do
+        if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && \
+           [ -n "$(_exakit_addon_table_child_rows "$_mq_id")" ]; then
+            continue
+        fi
+        command -v "$(_exakit_addon_fn "$_mq_id" questions)" >/dev/null 2>&1 && _mq_ids="$_mq_ids $_mq_id"
+    done
+    [ -n "$_mq_ids" ] || return 0
+    _mq_lines="${UI_TABLE_LINES:-0}"
+    case "$_mq_lines" in ''|*[!0-9]*) _mq_lines=0 ;; esac
+    if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ "$_mq_lines" -gt 0 ]; then
+        printf '\r\033[%sA\033[J' "$_mq_lines"
+        UI_TABLE_LINES=0
+    fi
+    for _mq_id in $_mq_ids; do
+        "$(_exakit_addon_fn "$_mq_id" questions)" || true
+    done
     return 0
 }
 
 # _exakit_marketplace_apply <ids_csv> — install each picked add-on in turn. One
 # failure does not strand the rest; the exit status says whether all made it.
-_exakit_marketplace_apply() {
-    _mp_status=0
-    # The SAME table the selection was just made in becomes the progress display:
-    # the rows do not move, so nobody has to map one screen onto another. It
-    # animates only where there is a terminal to animate on, and a scripted
-    # answer (EXAKIT_MARKETPLACE_ADDONS) never built a table at all — every
-    # add-on then narrates in plain lines exactly as it did before.
+_exakit_marketplace_apply_python() {
+    # Textual or the fallback table already collected child choices; an
+    # add-on's own <id>_questions hook asks the rest before anything installs.
+    # Behind the table (EXAKIT_ADDON_TABLE_BEHIND) nothing may ask: the table does.
+    [ "${EXAKIT_ADDON_TABLE_BEHIND:-0}" = 1 ] || _exakit_marketplace_questions "$1"
+    _mpa_root="$(_exakit_marketplace_root)"
+    _mpa_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-apply.XXXXXX")" || return 1
+    mkfifo "$_mpa_dir/events" || { rm -rf "$_mpa_dir"; return 1; }
+    # Swept on exit too: a Ctrl-C at the table left it (and its FIFO) behind.
+    exakit_track_tmp "$_mpa_dir"
+    # The activity line comes back for an install (it went after the install's own two).
+    [ -z "${EXAKIT_ADDON_TABLE_STATE:-}" ] || [ -e "$EXAKIT_ADDON_TABLE_STATE.activity" ] || : > "$EXAKIT_ADDON_TABLE_STATE.activity"
+    _mpa_table_shown=0
     EXAKIT_ADDON_TABLE_LIVE=0
-    if [ -n "$EXAKIT_ADDON_TABLE_STATE" ]; then
+    if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ "${EXAKIT_ADDON_TABLE_BEHIND:-0}" = 1 ]; then
+        # Behind the menu (_exakit_addon_table_behind_begin): the rows are kept
+        # up to date in the state file, and the menu in front draws them.
+        EXAKIT_ADDON_TABLE_LIVE=1
+        _mpa_table_shown=1
+    elif [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
         ui_table_begin "$EXAKIT_ADDON_TABLE_STATE" && EXAKIT_ADDON_TABLE_LIVE=1
+        _mpa_table_shown="$EXAKIT_ADDON_TABLE_LIVE"
     fi
-    # With the table narrating, the per-add-on lines underneath it are the same
-    # facts twice — and printing one scrolls the frame the animator is redrawing.
-    # EXAKIT_QUIET_DETAIL routes them to the logfile instead, which is what it is
-    # for; install_one saves and restores it, so nesting is already handled.
-    _mp_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
-    _exakit_addon_table_live && EXAKIT_QUIET_DETAIL=1
-    for _mp_id in $(printf '%s' "$1" | tr ',' ' '); do
-        # Which row this add-on owns, if a table is on screen. Empty means there
-        # is none and the single-line bar takes over, unchanged.
-        EXAKIT_ADDON_TABLE_ROW=""
-        if _exakit_addon_table_live; then
-            EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mp_id")"
-            [ "$EXAKIT_ADDON_TABLE_ROW" = "0" ] && EXAKIT_ADDON_TABLE_ROW=""
-        fi
-        info "Installing add-on: $_mp_id"
-        _mp_t0="$(date +%s 2>/dev/null || echo 0)"
-        if _exakit_marketplace_install_one "$_mp_id"; then
-            # <id>_summary is an OPTIONAL hook: the one fact worth carrying out
-            # of an install whose reference panel is now log-only. Resolved
-            # generically, so a new add-on gets it by defining the function and
-            # nothing here has to learn its name.
-            _mp_note=""
-            _mp_summary_fn="$(_exakit_addon_fn "$_mp_id" summary)"
-            if command -v "$_mp_summary_fn" >/dev/null 2>&1; then
-                _mp_note="$("$_mp_summary_fn" 2>/dev/null || true)"
-            fi
-            _mp_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - _mp_t0 ))
-            [ "$_mp_elapsed" -ge 0 ] 2>/dev/null || _mp_elapsed=0
-            # ok() is the record either way: it writes the FULL summary to the
-            # logfile whether or not the screen is showing it, which is what
-            # keeps a summary too long for the column from being lost.
-            ok "$_mp_id installed${_mp_note:+ — $_mp_note}"
-            [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && \
-                ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" \
-                    done "" "" "" "" \
-                    "$(_exakit_addon_table_cell "$_mp_note" "$_mp_elapsed")"
-        else
-            [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && \
-                ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" \
-                    failed "" "" "" "" "did not finish — see the log"
-            # NOTHING HERE. Two reasons, and they compound.
-            #
-            # The module that failed has already printed its own reason, specific
-            # to what went wrong. A generic "retry with: exakit marketplace"
-            # underneath gave one failure two competing answers and the generic
-            # one was wrong anyway -- marketplace declines to act on an add-on
-            # that is already present and answers "Nothing to install".
-            #
-            # And the row above already says "did not finish - see the log", so
-            # even a corrected sentence is the third telling of one fact. Printed
-            # under a frame the animator has only just stopped repainting, it is
-            # where the table visibly came apart on a real install.
-            _exakit_log_file "WARN  $_mp_id did not finish installing"
-            _mp_status=1
-        fi
-        EXAKIT_ADDON_TABLE_ROW=""
+    # Python owns the lifecycle. This adapter only paints the existing table
+    # from live phase records and drains the final messages after it stops.
+    ( ui_table_detach
+      export EXAKIT_ADDON_TABLE_IDS
+      EXAKIT_MARKETPLACE_ACTIVITY_FILE="${EXAKIT_ADDON_TABLE_STATE:+$EXAKIT_ADDON_TABLE_STATE.activity}"
+      export EXAKIT_MARKETPLACE_ACTIVITY_FILE
+      EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)"
+      export EXAKIT_MARKETPLACE_VERSIONS_DOC
+      # No terminal for the installs to read (their questions were asked before the
+      # table): a child that resets the terminal's echo would otherwise let every
+      # key pressed meanwhile print a line into the frame, which then redraws one
+      # line lower each time.
+      # The two started early and still at it (exakit_addons_early_begin): their
+      # rows follow that run instead of starting a second one.
+      if [ "${EXAKIT_ADDONS_EARLY_FOLLOW:-0}" = 1 ] && [ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ]; then
+          _exakit_addons_early_follow "$1" </dev/null >"$_mpa_dir/events" 2>"$_mpa_dir/stderr"
+      else
+          _exakit_marketplace_run_python mutate "$_mpa_root/marketplace/apply.py" "$1" --stream \
+              </dev/null >"$_mpa_dir/events" 2>"$_mpa_dir/stderr"
+      fi
+      printf '%s\n' "$?" >"$_mpa_dir/exit"
+    ) &
+    _mpa_pid=$!
+    _mpa_notes=""
+    _mpa_failure_event=0
+    _mpa_bar=""
+    _mpa_bar_live=0
+    _mpa_current=""
+    # The events FIFO opened on its own descriptor, again when the open is
+    # interrupted: a plain `done <fifo` blocks in open() until Python opens the
+    # other end, and a signal arriving meanwhile (a child ending, the spinner)
+    # fails it on macOS with "Interrupted system call" - every event lost and
+    # the add-on's own failure never said. Tried while the worker lives.
+    _mpa_open=0
+    while ! { exec 8<"$_mpa_dir/events"; } 2>/dev/null; do
+        _mpa_open=$(( _mpa_open + 1 ))
+        [ "$_mpa_open" -lt 200 ] && kill -0 "$_mpa_pid" 2>/dev/null || break
     done
-    # The table stops redrawing BEFORE anything is said over it, and only then is
-    # what was collected on the way said.
+    while IFS='|' read -r _mpa_tag _mpa_id _mpa_phase _mpa_detail _mpa_seconds <&8; do
+        if [ "$_mpa_tag" != '@@EXAKIT' ]; then
+            case "$_mpa_tag" in
+                *'• '*)
+                    _mpa_activity="${_mpa_tag#*'• '}"
+                    if [ "$_mpa_bar_live" = 1 ]; then
+                        ui_progress_phase "$_mpa_bar" "$_mpa_current · $_mpa_activity"
+                    elif ! _exakit_addon_table_live; then
+                        info "$_mpa_activity"
+                    fi
+                    ;;
+                *) [ -z "$_mpa_tag" ] || _exakit_log_file "INFO  $_mpa_tag" ;;
+            esac
+            continue
+        fi
+        # Inside the early install: its phases, for the table that follows it.
+        if [ -n "${EXAKIT_ADDONS_EARLY_EVENTS:-}" ]; then
+            printf '%s|%s|%s|%s\n' "$_mpa_tag" "$_mpa_id" "$_mpa_phase" "$_mpa_detail" >> "$EXAKIT_ADDONS_EARLY_EVENTS" 2>/dev/null || true
+        fi
+        EXAKIT_ADDON_TABLE_ROW=""
+        _exakit_addon_table_live && EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mpa_id")"
+        case "$_mpa_id" in
+            *:*)
+                # One of the add-on's child rows (<id>:<key>), settled: its own
+                # row says how, the way the add-on's row says how the add-on did.
+                if [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && [ "$EXAKIT_ADDON_TABLE_ROW" != 0 ]; then
+                    EXAKIT_ADDON_TABLE_CHILD_ROWS="${_mpa_id#*:}:$EXAKIT_ADDON_TABLE_ROW" \
+                        exakit_addon_table_child "${_mpa_id#*:}" "$_mpa_phase" "$_mpa_detail" || true
+                elif ! _exakit_addon_table_live; then
+                    info "${_mpa_id#*:}: $_mpa_detail"
+                fi
+                continue
+                ;;
+        esac
+        case "$_mpa_phase" in
+            installing)
+                _mpa_current="$_mpa_id"
+                _exakit_log_file "INFO  Installing add-on: $_mpa_id"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 installing
+                if ! _exakit_addon_table_live; then
+                    info "Installing add-on: $_mpa_id"
+                    _mpa_bar="$(mktemp "${TMPDIR:-/tmp}/exakit-addon-bar.XXXXXX")" || _mpa_bar=""
+                    if [ -n "$_mpa_bar" ]; then
+                        ui_progress_state "$_mpa_bar" 0 65 40 "$_mpa_id · installing"
+                        ui_progress_begin "$_mpa_bar" "$(date +%s 2>/dev/null || echo 0)" && _mpa_bar_live=1
+                    fi
+                fi
+                ;;
+            validating)
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
+                [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
+                if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
+                ;;
+            starting)
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
+                [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
+                if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
+                ;;
+            done)
+                if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
+                [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installed' || printf '%s' "$_mpa_detail")" "$_mpa_seconds")"
+                _mpa_notes="$_mpa_notes
+ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}"
+                ;;
+            warning)
+                _mpa_notes="$_mpa_notes
+warn|$_mpa_id: $_mpa_detail"
+                ;;
+            failed)
+                _mpa_failure_event=1
+                if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
+                [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" failed '' '' '' '' 'did not finish — see below'
+                # Said under the table: why, the command that retries it, and
+                # where the whole story is. ⇄ twin: the 'failed' arm in
+                # Invoke-ExakitMarketplaceApplyPython.
+                _mpa_notes="$_mpa_notes
+warn|$_mpa_id did not finish: ${_mpa_detail%.}. Retry: exakit marketplace $_mpa_id${EXAKIT_LOG_FILE:+. Log: $EXAKIT_LOG_FILE}"
+                ;;
+        esac
+    done
+    exec 8<&-
+    if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; fi
+    [ -z "$_mpa_bar" ] || rm -f "$_mpa_bar"
+    wait "$_mpa_pid" 2>/dev/null || true
+    _mpa_rc="$(cat "$_mpa_dir/exit" 2>/dev/null || echo 1)"
+    # Inside the early install (exakit_addons_early_begin): its notes are kept
+    # for the table that follows it.
+    if [ -n "${EXAKIT_ADDONS_EARLY_NOTES:-}" ]; then
+        printf '%s\n' "$_mpa_notes" >> "$EXAKIT_ADDONS_EARLY_NOTES" 2>/dev/null || true
+    fi
     if _exakit_addon_table_live; then
-        ui_table_end "$EXAKIT_ADDON_TABLE_STATE"
+        [ "${EXAKIT_ADDON_TABLE_BEHIND:-0}" = 1 ] || ui_table_end "$EXAKIT_ADDON_TABLE_STATE"
         EXAKIT_ADDON_TABLE_LIVE=0
     fi
-    EXAKIT_QUIET_DETAIL="$_mp_prev_quiet"
-    _exakit_addon_notes_say
+    # EXAKIT_ADDON_TABLE_KEEP: the same table asks next (the install's add-ons),
+    # so nothing is printed under it and it stays; the notes wait for the caller.
+    if [ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ]; then
+        EXAKIT_ADDON_TABLE_NOTES="$_mpa_notes"
+        if [ "$_mpa_rc" -ne 0 ] && [ -s "$_mpa_dir/stderr" ]; then
+            _exakit_log_file "WARN  $(tail -n 1 "$_mpa_dir/stderr")"
+        fi
+        rm -rf "$_mpa_dir"
+        return "$_mpa_rc"
+    fi
+    while IFS='|' read -r _mpa_kind _mpa_message; do
+        [ -n "$_mpa_kind" ] || continue
+        # The table's rows already say each one's result ("✓ SQL jobs in ..."): with
+        # the table on screen the line goes to the log; a warning still shows.
+        if [ "$_mpa_kind" = ok ]; then
+            if [ "$_mpa_table_shown" = 1 ]; then _exakit_log_file "OK    $_mpa_message"; else ok "$_mpa_message"; fi
+        else
+            warn "$_mpa_message"
+        fi
+    done <<EXAKIT_MPA_NOTES
+$_mpa_notes
+EXAKIT_MPA_NOTES
+    if [ "$_mpa_rc" -ne 0 ] && [ -s "$_mpa_dir/stderr" ]; then
+        _mpa_error="$(tail -n 1 "$_mpa_dir/stderr")"
+        _exakit_log_file "WARN  $_mpa_error"
+        [ "$_mpa_failure_event" = 1 ] || warn "Marketplace could not start: $_mpa_error"
+    fi
+    rm -rf "$_mpa_dir"
     _exakit_addon_table_cleanup
-    return "$_mp_status"
+    return "$_mpa_rc"
+}
+
+_exakit_marketplace_apply() {
+    _exakit_marketplace_apply_python "$1"
 }
 
 exakit_update_targets() {
@@ -5372,6 +8222,14 @@ exakit_print_versions_source_line() {
             return 0
             ;;
     esac
+    # A check that could not reach the manifest says so, and never passes the
+    # versions this kit already had off as the answer. ⇄ twin: the same arm
+    # in Write-ExakitVersionsSourceLine.
+    if [ -n "${_EXAKIT_VERSIONS_CHECK_ERROR:-}" ]; then
+        warn "$(exakit_versions_check_failed_text)"
+        _exakit_print_override_line
+        return 0
+    fi
     case "$(exakit_versions_source)" in
         fetched) _vsl_text="published manifest, fetched just now" ;;
         cache)   _vsl_text="cached manifest copy" ;;
@@ -5444,9 +8302,10 @@ _exakit_print_override_line() {
 # ⇄ twin: Show-ExakitUpdateNotice in setup/lib/exakit-common.ps1.
 EXAKIT_NOTICE_STATE="${EXAKIT_NOTICE_STATE:-$EXAKIT_CACHE_DIR/notice-state.json}"
 # The notice is printed after every command, but working out WHAT to say costs
-# real time: nine manifest reads and a live probe per component, about 600ms. The
-# answer barely changes, so it is computed occasionally and printed from a cached
-# plan. EXAKIT_NOTICE_PLAN_TTL is how long a plan is trusted; it is also thrown away
+# real time: dozens of manifest reads and a live probe per component -- seconds,
+# not milliseconds, once add-ons are installed. The answer barely changes, so it is
+# computed occasionally, in the background, and printed from a cached plan.
+# EXAKIT_NOTICE_PLAN_TTL is how long a plan is trusted; it is also thrown away
 # the moment the manifest or the versions cache changes, which covers every update
 # applied through the kit.
 #
@@ -5454,7 +8313,7 @@ EXAKIT_NOTICE_STATE="${EXAKIT_NOTICE_STATE:-$EXAKIT_CACHE_DIR/notice-state.json}
 # upgrade` on the MCP server, say -- because that moves only the binary on disk,
 # which is the reading the cache exists to stop repeating. Such a machine is told
 # about an update it has already taken, until the TTL runs out. That is the trade:
-# one stale line for at most fifteen minutes, against 600ms on every command.
+# one stale line for at most fifteen minutes, against seconds on every command.
 EXAKIT_NOTICE_PLAN="${EXAKIT_NOTICE_PLAN:-$EXAKIT_CACHE_DIR/notice-plan}"
 EXAKIT_NOTICE_PLAN_TTL="${EXAKIT_NOTICE_PLAN_TTL:-900}"
 # 0 = show the notice after every command. A pending update that nobody is told
@@ -5588,6 +8447,9 @@ _exakit_notice_word() {
 # nothing about version news may change what a command reports.
 exakit_notice_after_command() {
     [ "${EXAKIT_NO_UPDATE_NOTICE:-0}" = "1" ] && return 0
+    # A run the person stopped with Ctrl+C ends now: no version lookup, no wait,
+    # no notice after it. The next command they run says it instead.
+    [ "${_EXAKIT_INTERRUPTED:-0}" = "1" ] && return 0
     [ "${EXAKIT_VERSION_POLICY:-manifest}" = "manifest" ] || return 0
     # stderr must be a terminal: a notice has no business in a log file, a pipe,
     # or a CI transcript.
@@ -5595,24 +8457,48 @@ exakit_notice_after_command() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     exakit_notice_due || return 0
 
-    if _exakit_notice_plan_fresh; then
-        _notice_light_worst="$(_exakit_notice_plan_field light_worst)"
-        _notice_heavy_worst="$(_exakit_notice_plan_field heavy_worst)"
-        [ -n "$_notice_light_worst" ] || _notice_light_worst="normal"
-        [ -n "$_notice_heavy_worst" ] || _notice_heavy_worst="normal"
-        # Confirm each cached candidate is STILL behind before repeating it. A plan
-        # written while a component was mid-install kept announcing an update the
-        # user had already taken, and disagreed with `exakit version` run
-        # seconds later. Costs one probe per pending component -- and when nothing
-        # is pending, which is the normal case, it costs nothing at all.
-        _notice_light="$(_exakit_notice_still_behind "$(_exakit_notice_plan_field light)")"
-        _notice_heavy="$(_exakit_notice_still_behind "$(_exakit_notice_plan_field heavy)")"
-        _exakit_notice_say
-        return 0
+    # WORKING OUT WHAT TO SAY NEVER HOLDS THE PROMPT. A stale or missing plan
+    # used to be recomputed right here, after the command had finished: a live
+    # probe of every component -- some sixty Python starts, the pyexasol import,
+    # one add-on module per installed add-on, and for Exasol for VS Code the
+    # editor's own CLI (15 s on a cold start). Every command that rewrites the
+    # manifest retires the plan, so after `exakit marketplace` installed two
+    # add-ons the cursor sat on an empty line for seconds and looked hung. Now
+    # the plan is worked out by a background process; this command waits for it
+    # at most EXAKIT_NOTICE_WAIT seconds (default 1), prints it if it is ready,
+    # and otherwise leaves it for the next command to print.
+    if ! _exakit_notice_plan_fresh; then
+        _notice_started="$(date +%s)"
+        _exakit_notice_compute_in_background || return 0
+        # Just written by that run: the plan for the files as they are now, and
+        # no older than this command (EXAKIT_NOTICE_PLAN_TTL=0 included, which
+        # never calls a plan fresh but still prints the one it waited for).
+        [ "$(_exakit_notice_plan_field sig)" = "$(_exakit_notice_signature)" ] || return 0
+        _notice_at="$(_exakit_notice_plan_field computed_at)"
+        case "$_notice_at" in ''|*[!0-9]*) return 0 ;; esac
+        [ "$_notice_at" -ge "$_notice_started" ] || return 0
     fi
+    _notice_light_worst="$(_exakit_notice_plan_field light_worst)"
+    _notice_heavy_worst="$(_exakit_notice_plan_field heavy_worst)"
+    [ -n "$_notice_light_worst" ] || _notice_light_worst="normal"
+    [ -n "$_notice_heavy_worst" ] || _notice_heavy_worst="normal"
+    # Confirm each cached candidate is STILL behind before repeating it. A plan
+    # written while a component was mid-install kept announcing an update the
+    # user had already taken, and disagreed with `exakit version` run seconds
+    # later. Only the cheap readings are taken again (see
+    # _exakit_notice_still_behind) -- when nothing is pending, which is the
+    # normal case, it costs nothing at all.
+    _notice_light="$(_exakit_notice_still_behind "$(_exakit_notice_plan_field light)")"
+    _notice_heavy="$(_exakit_notice_still_behind "$(_exakit_notice_plan_field heavy)")"
+    _exakit_notice_say
+    return 0
+}
 
+# _exakit_notice_compute — work out the plan the long way and write it. Never
+# prints: it runs in the background (_exakit_notice_compute_in_background).
+_exakit_notice_compute() {
     _exakit_notice_refresh_cache
-    exakit_versions_resolve_doc >/dev/null 2>&1 || return 0
+    exakit_versions_resolve_doc >/dev/null 2>&1 || return 1
 
     # Severity is tracked per group, not once for the whole notice: a routine
     # exapump bump must not be announced as critical just because the runtime
@@ -5628,8 +8514,9 @@ exakit_notice_after_command() {
         _notice_avail="$(exakit_component_available "$_notice_actual" 2>/dev/null || true)"
         [ -n "$_notice_avail" ] || continue
         _notice_cur="$(exakit_component_current "$_notice_actual" 2>/dev/null || true)"
+        exakit_component_is_managed "$_notice_actual" || continue
         [ -n "$_notice_cur" ] && [ "$_notice_cur" != "unknown" ] || continue
-        [ "$_notice_cur" != "$_notice_avail" ] || continue
+        ! exakit_version_same "$_notice_cur" "$_notice_avail" || continue
         # Different is not the same as behind. An install that is PAST the
         # advertised version has nothing pending: the kit never moves a component
         # backwards, so `exakit version` renders that row as "none" and
@@ -5666,7 +8553,59 @@ exakit_notice_after_command() {
         fi
     done
     _exakit_notice_plan_write
-    _exakit_notice_say
+    return 0
+}
+
+# _exakit_notice_compute_in_background — start _exakit_notice_compute in a
+# detached subshell (one at a time: a run still working is waited on, not
+# joined by a second), then wait for it at most EXAKIT_NOTICE_WAIT seconds.
+# Returns 1 while it is still working: the plan is the next command's to print.
+#
+# The subshell keeps its own add-on answer folder: the command's folder is swept
+# by its EXIT trap, which can fire while the subshell is still asking.
+EXAKIT_NOTICE_WAIT="${EXAKIT_NOTICE_WAIT:-1}"
+_exakit_notice_compute_in_background() {
+    [ -n "$EXAKIT_NOTICE_PLAN" ] || return 0
+    mkdir -p "$(dirname "$EXAKIT_NOTICE_PLAN")" 2>/dev/null || return 0
+    _ncb_pidfile="$EXAKIT_NOTICE_PLAN.pid"
+    _ncb_pid="$(sed -n 1p "$_ncb_pidfile" 2>/dev/null)"
+    case "$_ncb_pid" in ''|*[!0-9]*) _ncb_pid="" ;; esac
+    # A pid file older than two minutes names no refresh (one takes seconds),
+    # whatever process holds that number now.
+    [ -z "$_ncb_pid" ] || [ -n "$(find "$_ncb_pidfile" -mmin -2 2>/dev/null)" ] || _ncb_pid=""
+    if [ -z "$_ncb_pid" ] || ! kill -0 "$_ncb_pid" 2>/dev/null; then
+        (
+            # Outlives the command: a terminal session that ends with it (a
+            # script(1) pty, an agent's shell) must not take the plan with it.
+            trap '' HUP
+            _EXAKIT_HOOK_MEMO="$(mktemp -d "${TMPDIR:-/tmp}/exakit-notice.XXXXXX" 2>/dev/null || true)"
+            _exakit_notice_compute
+            [ -z "$_EXAKIT_HOOK_MEMO" ] || rm -rf "$_EXAKIT_HOOK_MEMO"
+            rm -f "$_ncb_pidfile"
+        ) </dev/null >/dev/null 2>&1 &
+        _ncb_pid=$!
+        printf '%s\n' "$_ncb_pid" > "$_ncb_pidfile" 2>/dev/null || true
+    fi
+    case "$EXAKIT_NOTICE_WAIT" in ''|*[!0-9]*) EXAKIT_NOTICE_WAIT=1 ;; esac
+    _ncb_ticks=$((EXAKIT_NOTICE_WAIT * 10))
+    # Never a silent wait: past the first 0.3 s the line says what it is doing
+    # (a spinner only on a terminal; a pipe, NO_COLOR and plain mode get nothing).
+    _ncb_used=0
+    _ncb_spun=0
+    while kill -0 "$_ncb_pid" 2>/dev/null; do
+        if [ "$_ncb_ticks" -le 0 ]; then
+            [ "$_ncb_spun" = 0 ] || ui_spin_end
+            return 1
+        fi
+        if [ "$_ncb_spun" = 0 ] && [ "$_ncb_used" -ge 3 ] && command -v ui_spin_begin >/dev/null 2>&1; then
+            ui_spin_begin "Checking for updates"
+            _ncb_spun=1
+        fi
+        sleep 0.1 2>/dev/null || sleep 1
+        _ncb_ticks=$((_ncb_ticks - 1))
+        _ncb_used=$((_ncb_used + 1))
+    done
+    [ "$_ncb_spun" = 0 ] || ui_spin_end
     return 0
 }
 
@@ -5688,8 +8627,20 @@ _exakit_notice_still_behind() {
         # trim the space after a comma
         _nsb_entry="${_nsb_entry# }"
         _nsb_name="${_nsb_entry%%:*}"
-        _nsb_want="${_nsb_entry#*:}"
         [ -n "$_nsb_name" ] || continue
+        # Only the cheap readings are taken again here, on the prompt's time: a
+        # version the manifest records, or a binary that prints its own. The
+        # pyexasol import and an add-on's module (a Python start each, and for
+        # Exasol for VS Code the editor's CLI) are not -- their entries stand as
+        # the plan wrote them. Every change the kit makes to them (an update, an
+        # install, a removal, a new owner) rewrites the manifest, which retires
+        # the plan anyway.
+        case "$_nsb_name" in
+            exakit|runtime|personal|exapump|uv|mcp|skills|kit2) ;;
+            *) _nsb_out="${_nsb_out}${_nsb_out:+, }$_nsb_name"; continue ;;
+        esac
+        exakit_component_is_managed "$_nsb_name" || continue
+        _nsb_want="${_nsb_entry#*:}"
         if [ -z "$_nsb_want" ] || [ "$_nsb_want" = "$_nsb_name" ]; then
             # A plan written before versions were recorded with the names: keep the
             # entry rather than silently dropping a real pending update.
@@ -5697,7 +8648,7 @@ _exakit_notice_still_behind() {
             continue
         fi
         _nsb_now="$(exakit_component_current "$_nsb_name" 2>/dev/null || true)"
-        if [ -z "$_nsb_now" ] || [ "$_nsb_now" = "unknown" ] || [ "$_nsb_now" = "$_nsb_want" ]; then
+        if [ -z "$_nsb_now" ] || [ "$_nsb_now" = "unknown" ] || exakit_version_same "$_nsb_now" "$_nsb_want"; then
             continue
         fi
         # "Caught up" is not only "landed on exactly the advertised version" — an
@@ -5719,8 +8670,10 @@ _exakit_notice_say() {
 
     printf '\n' >&2
     if [ -n "$_notice_light" ]; then
-        printf '%s%s update is available for %s — apply in seconds:  exakit update%s\n' \
-            "${UI_DIM:-}" "$(_exakit_notice_word "$_notice_light_worst")" "$_notice_light" "${UI_RESET:-}" >&2
+        # One plain sentence, the command in green; which components are pending
+        # is what `exakit version` and `exakit update --check` show.
+        printf '%sUpdates are available to your starterkit. Run %sexakit update%s%s to upgrade anytime.%s\n' \
+            "${UI_DIM:-}" "${UI_OK:-}" "${UI_RESET:-}" "${UI_DIM:-}" "${UI_RESET:-}" >&2
     fi
     if [ -n "$_notice_heavy" ]; then
         # Never "run update now" for the runtime: it stops the database, so the
@@ -5800,6 +8753,104 @@ exakit_update_kit2() {
 # Someone who asks explicitly gets fresh data: the TTL exists for the readers
 # that run behind other commands, not for this one.
 # ⇄ twin: Invoke-CmdVersion in setup/exakit.ps1.
+# _exakit_version_row <component> <against> - one row of the version table,
+# worked out on its own so the rows can run side by side: nine fields on one
+# record, each ended by US (0x1f) and the record by RS (0x1e) -
+# component, installed, status cell, note, maintenance note, available, raw
+# status, severity, and what it adds to the pending count.
+_exakit_version_row() {
+    _component="$1"
+    _uc_against="${2:-}"
+    _pending=0
+    _row_component="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
+    _row_installed="$(exakit_version_plain "$(exakit_version_installed_cell "$_row_component")")"
+    _row_available="$(exakit_version_plain "$(exakit_component_available "$_row_component" 2>/dev/null || true)")"
+    [ -n "$_row_available" ] || _row_available="unknown"
+    _row_note=""
+    _row_severity="$(exakit_component_severity "$_row_component" 2>/dev/null || true)"
+    _status="current"
+    if ! exakit_component_supported "$_row_component"; then
+        # Nothing to offer and nothing wrong: there is simply no build for
+        # this machine, and an update command that cannot succeed must not be
+        # printed.
+        _row_installed="not available"
+        _status="-"
+        _row_severity=""
+        _row_note="no $_row_component build exists for this platform"
+    elif [ "$_row_installed" = "not installed" ] && _exakit_addon_registered "$_row_component"; then
+        # An add-on nobody has installed is not behind on anything: it is an
+        # offer. The marketplace is the only path that installs one, so that
+        # is the whole status — naming a version here would read as a pending
+        # update to something that is not on the machine.
+        _status="exakit marketplace"
+        _row_severity=""
+    elif [ "$_row_installed" != "not installed" ] && ! exakit_component_is_managed "$_row_component"; then
+        _status="external"
+        _row_severity=""
+        _row_note="Reused; updates and removal stay with the owner."
+    elif [ "$_row_available" = "unknown" ] || [ "$_row_installed" = "unknown" ]; then
+        _status="unknown - check: exakit status"
+    elif [ "$_row_installed" = "not installed" ] && exakit_component_is_heavy "$_row_component"; then
+        # A runtime that is not installed is not a runtime this machine wants:
+        # offering to deploy a second database onto an existing one would be
+        # actively wrong. (A missing light component, by contrast, is exactly
+        # the repair case below.)
+        _status="not installed - re-run the installer"
+    elif [ "$_row_installed" != "not installed" ] && \
+         exakit_version_newer "$_row_installed" "$_row_available"; then
+        # Installed is ahead of the published set. The kit never moves a
+        # component backwards, so there is nothing to offer: lowering a
+        # version in versions.json is not a rollback lever, and a user who
+        # upgraded a component themselves keeps what they chose. Counts toward
+        # neither the "apply them in one go" hint nor the heavy deferral,
+        # because no command belongs in this row at all.
+        #
+        # The row says only "none". Not "yours is newer than tested", which
+        # apologised for the install and made the tested set sound abandoned;
+        # not the tagged number either, which invites the reader to go looking
+        # for a way back to it. There is nothing to do, so the row says so and
+        # stops. The severity goes with it — a severity rates the advertised
+        # version, and there is nothing to recommend to someone already past it.
+        _status="none"
+        _row_severity=""
+    elif [ "$_row_installed" = "$_row_available" ] && _exakit_addon_needs_update "$_row_component"; then
+        # Installed at the advertised version, and the add-on says it still
+        # needs an update (a launcher an earlier kit wrote): `exakit update`
+        # applies it, so it is pending like any other update (not "repair",
+        # which says the component is missing).
+        _status="refresh available"
+        _pending=$((_pending + 1))
+    elif [ "$_row_installed" != "$_row_available" ]; then
+        _row_min_kit="$(exakit_component_min_kit "$_row_component" 2>/dev/null || true)"
+        if [ -n "$_row_min_kit" ] && ! exakit_min_kit_satisfied "$_row_min_kit"; then
+            # Waiting, but not on this reader: `exakit update` cannot apply
+            # it until the kit itself moves, so it must not be counted into
+            # the closing line that promises it can.
+            _status="update exakit first (needs kit >= $_row_min_kit)"
+            _pending=$((_pending - 1))
+        elif [ "$_row_installed" = "not installed" ]; then
+            # Not an upgrade: the component the manifest says belongs here is
+            # missing, and `exakit update` puts it back.
+            _status="$_row_available available (repair)"
+        else
+            # No "(heavy)" or "(major)" suffix: what applying a component
+            # involves is `exakit update`'s to explain, at the point where it
+            # asks. Saying it here warned about a cost on a screen that cannot
+            # charge it, twice for the runtime, and left the Status column
+            # reading like a set of caveats rather than a set of versions.
+            _status="$_row_available available"
+        fi
+        _pending=$((_pending + 1))
+    fi
+    if [ "$_status" = "current" ] && [ -n "$_uc_against" ]; then
+        _status="current (manifest $_uc_against)"
+    fi
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037\036' \
+        "$_row_component" "$_row_installed" "$(_exakit_status_cell "$_status" "$_row_severity")" "$_row_note" \
+        "$(exakit_component_note "$_row_component" 2>/dev/null || true)" "$_row_available" "$_status" \
+        "${_row_severity:-normal}" "$_pending"
+}
+
 exakit_print_version_table() {
     # Everything down to the table itself is GATHERING, and on a cold cache or a
     # slow network it is the longest part of `exakit version` — the screen sat
@@ -5842,87 +8893,50 @@ exakit_print_version_table() {
     # knows a runtime change needs the database stopped and asks at the moment it
     # matters; this screen only has to say that something is waiting.
     _pending=0
+    # Under the default policy "current" means current against the manifest, not upstream: a pin the manifest has
+    # fallen behind on read as current (#46). The row says which manifest; the latest policy looks upstream and
+    # keeps the plain word.
+    _uc_against=""
+    if [ "${EXAKIT_VERSION_POLICY:-manifest}" != "latest" ]; then
+        _uc_against="$(exakit_versions_value updated 2>/dev/null | cut -c1-10)"
+    fi
+    # EVERY COMPONENT AT ONCE. A row is a dozen lookups (installed? advertised?
+    # supported here? its notes?), and one after the other they were most of
+    # this screen's six seconds. Each row is its own background job writing its
+    # own record; they are read back in the table's order.
+    _uc_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-vrows.XXXXXX" 2>/dev/null)" || _uc_dir=""
+    _uc_n=0
+    _uc_pids=""
     for _component in $(exakit_version_table_targets); do
-        _row_component="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
-        _row_installed="$(exakit_version_plain "$(exakit_version_installed_cell "$_row_component")")"
-        _row_available="$(exakit_version_plain "$(exakit_component_available "$_row_component" 2>/dev/null || true)")"
-        [ -n "$_row_available" ] || _row_available="unknown"
-        _row_note=""
-        _row_severity="$(exakit_component_severity "$_row_component" 2>/dev/null || true)"
-        _status="current"
-        if ! exakit_component_supported "$_row_component"; then
-            # Nothing to offer and nothing wrong: there is simply no build for
-            # this machine, and an update command that cannot succeed must not be
-            # printed.
-            _row_installed="not available"
-            _status="-"
-            _row_severity=""
-            _row_note="no $_row_component build exists for this platform"
-        elif [ "$_row_installed" = "not installed" ] && _exakit_addon_registered "$_row_component"; then
-            # An add-on nobody has installed is not behind on anything: it is an
-            # offer. The marketplace is the only path that installs one, so that
-            # is the whole status — naming a version here would read as a pending
-            # update to something that is not on the machine.
-            _status="exakit marketplace"
-            _row_severity=""
-        elif [ "$_row_available" = "unknown" ] || [ "$_row_installed" = "unknown" ]; then
-            _status="inspect"
-        elif [ "$_row_installed" = "not installed" ] && exakit_component_is_heavy "$_row_component"; then
-            # A runtime that is not installed is not a runtime this machine wants:
-            # offering to deploy a second database onto an existing one would be
-            # actively wrong. (A missing light component, by contrast, is exactly
-            # the repair case below.)
-            _status="inspect"
-        elif [ "$_row_installed" != "not installed" ] && \
-             exakit_version_newer "$_row_installed" "$_row_available"; then
-            # Installed is ahead of the published set. The kit never moves a
-            # component backwards, so there is nothing to offer: lowering a
-            # version in versions.json is not a rollback lever, and a user who
-            # upgraded a component themselves keeps what they chose. Counts toward
-            # neither the "apply them in one go" hint nor the heavy deferral,
-            # because no command belongs in this row at all.
-            #
-            # The row says only "none". Not "yours is newer than tested", which
-            # apologised for the install and made the tested set sound abandoned;
-            # not the tagged number either, which invites the reader to go looking
-            # for a way back to it. There is nothing to do, so the row says so and
-            # stops. The severity goes with it — a severity rates the advertised
-            # version, and there is nothing to recommend to someone already past it.
-            _status="none"
-            _row_severity=""
-        elif [ "$_row_installed" != "$_row_available" ]; then
-            _row_min_kit="$(exakit_component_min_kit "$_row_component" 2>/dev/null || true)"
-            if [ -n "$_row_min_kit" ] && ! exakit_min_kit_satisfied "$_row_min_kit"; then
-                # Waiting, but not on this reader: `exakit update` cannot apply
-                # it until the kit itself moves, so it must not be counted into
-                # the closing line that promises it can.
-                _status="update exakit first (needs kit >= $_row_min_kit)"
-                _pending=$((_pending - 1))
-            elif [ "$_row_installed" = "not installed" ]; then
-                # Not an upgrade: the component the manifest says belongs here is
-                # missing, and `exakit update` puts it back.
-                _status="$_row_available available (repair)"
-            else
-                # No "(heavy)" or "(major)" suffix: what applying a component
-                # involves is `exakit update`'s to explain, at the point where it
-                # asks. Saying it here warned about a cost on a screen that cannot
-                # charge it, twice for the runtime, and left the Status column
-                # reading like a set of caveats rather than a set of versions.
-                _status="$_row_available available"
-            fi
-            _pending=$((_pending + 1))
+        _uc_n=$(( _uc_n + 1 ))
+        if [ -n "$_uc_dir" ]; then
+            ( _exakit_version_row "$_component" "$_uc_against" > "$_uc_dir/$_uc_n" 2>/dev/null ) &
+            _uc_pids="$_uc_pids $!"
+        else
+            _exakit_version_row "$_component" "$_uc_against" > /dev/null
         fi
+    done
+    for _uc_pid in $_uc_pids; do wait "$_uc_pid" 2>/dev/null || true; done
+    _uc_i=0
+    while [ "$_uc_i" -lt "$_uc_n" ] && [ -n "$_uc_dir" ]; do
+        _uc_i=$(( _uc_i + 1 ))
+        [ -s "$_uc_dir/$_uc_i" ] || continue
+        IFS="$(printf '\037')" read -r -d "$(printf '\036')" _row_component _row_installed _uc_r_cell _row_note _uc_r_maint \
+            _row_available _status _row_severity _uc_r_pending < "$_uc_dir/$_uc_i" || true
+        case "$_uc_r_pending" in ''|*[!0-9-]*) _uc_r_pending=0 ;; esac
+        _pending=$(( _pending + _uc_r_pending ))
         [ "${#_row_component}" -gt "$_uc_cw" ] && _uc_cw="${#_row_component}"
         [ "${#_row_installed}" -gt "$_uc_vw" ] && _uc_vw="${#_row_installed}"
         _uc_comp+=("$_row_component")
         _uc_ver+=("$_row_installed")
-        _uc_status+=("$(_exakit_status_cell "$_status" "$_row_severity")")
+        _uc_status+=("$_uc_r_cell")
         _uc_note+=("$_row_note")
-        _uc_maint+=("$(exakit_component_note "$_row_component" 2>/dev/null || true)")
+        _uc_maint+=("$_uc_r_maint")
         _uc_avail+=("$_row_available")
         _uc_raw+=("$_status")
-        _uc_sev+=("${_row_severity:-normal}")
+        _uc_sev+=("$_row_severity")
     done
+    [ -z "$_uc_dir" ] || rm -rf "$_uc_dir"
 
     ui_spin_end
     if [ "$_uvt_json" -eq 1 ]; then
@@ -5930,7 +8944,7 @@ exakit_print_version_table() {
         _uvt_tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-version.XXXXXX")" || die "Could not create a temporary file for --json."
         _uvt_i=0
         while [ "$_uvt_i" -lt "${#_uc_comp[@]}" ]; do
-            printf '%s\n' "${_uc_comp[$_uvt_i]}$_uvt_tab${_uc_ver[$_uvt_i]}$_uvt_tab${_uc_avail[$_uvt_i]}$_uvt_tab${_uc_raw[$_uvt_i]}$_uvt_tab${_uc_sev[$_uvt_i]}$_uvt_tab${_uc_maint[$_uvt_i]}$_uvt_tab${_uc_note[$_uvt_i]}" >> "$_uvt_tmp"
+            printf '%s\n' "${_uc_comp[$_uvt_i]}$_uvt_tab${_uc_ver[$_uvt_i]}$_uvt_tab${_uc_avail[$_uvt_i]}$_uvt_tab${_uc_raw[$_uvt_i]}$_uvt_tab${_uc_sev[$_uvt_i]}$_uvt_tab${_uc_maint[$_uvt_i]}$_uvt_tab${_uc_note[$_uvt_i]}$_uvt_tab$(exakit_component_ownership "${_uc_comp[$_uvt_i]}")" >> "$_uvt_tmp"
             _uvt_i=$((_uvt_i + 1))
         done
         run_python - "$_uvt_tmp" "$_pending" "$(exakit_component_current exakit 2>/dev/null || printf unknown)" \
@@ -5950,12 +8964,17 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         line = line.rstrip("\n")
         if not line:
             continue
-        comp, ver, avail, status, sev, maint, note = (line.split("\t") + [""] * 7)[:7]
+        comp, ver, avail, status, sev, maint, note, owner = (line.split("\t") + [""] * 8)[:8]
         # The raw cell doubles as the HUMAN Action column, so it carried
         # whatever a human should do next - "exakit marketplace",
         # "2.2.0 available (repair)" - which is a command or a sentence, not a
         # status. The JSON key gets a fixed vocabulary a parser can switch on,
         # and the action moves to a per-row remedy that is runnable as-is.
+        checked_against = None
+        if status.startswith("current (manifest ") and status.endswith(")"):
+            # Current against the manifest of that date, not looked up upstream (#46).
+            checked_against = "manifest " + status[len("current (manifest "):-1]
+            status = "current"
         if status == "current":
             row_status, remedy = "current", None
         elif status == "none":
@@ -5963,7 +8982,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
             row_status, remedy = "ahead", None
         elif status == "-":
             row_status, remedy = "unsupported", None
-        elif status == "inspect":
+        elif status.startswith("unknown") or status.startswith("not installed"):
             row_status, remedy = "unknown", None
         elif status == "exakit marketplace":
             row_status, remedy = "available", "exakit marketplace %s" % comp
@@ -5978,10 +8997,13 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         rows.append({
             "component": comp,
             "addon": comp in addon_ids,
+            "ownership": owner if ver not in ("not installed", "not available", "") else None,
+            "installed_by_kit": owner == "kit" and ver not in ("not installed", "not available", ""),
             "installed": None if ver in ("not installed", "not available", "") else ver,
             "installed_label": ver,
             "advertised": None if avail in ("unknown", "") else avail,
             "status": row_status,
+            "checked_against": checked_against,
             "remedy": remedy,
             "severity": sev or "normal",
             "note": maint or None,
@@ -6012,11 +9034,13 @@ EXAKIT_VJ_PY
     # with _ui_visible_len, so the coloured severity suffix does not throw the
     # border off the way a byte count would.
     ui_panel_begin "Components"
-    ui_panel_line "$(printf '%-*s %-*s %s' "$_uc_cw" "Component" "$_uc_vw" "Version" "Status")"
+    ui_panel_line "$(printf '%-*s %-*s %-7s %s' "$_uc_cw" "Component" "$_uc_vw" "Version" "Owner" "Status")"
     _uc_i=0
     while [ "$_uc_i" -lt "${#_uc_comp[@]}" ]; do
-        ui_panel_line "$(printf '%-*s %-*s %s' \
-            "$_uc_cw" "${_uc_comp[$_uc_i]}" "$_uc_vw" "${_uc_ver[$_uc_i]}" "${_uc_status[$_uc_i]}")"
+        _uc_owner="$(exakit_component_ownership "${_uc_comp[$_uc_i]}")"
+        case "${_uc_ver[$_uc_i]}" in "not installed"|"not available") _uc_owner="-" ;; esac
+        ui_panel_line "$(printf '%-*s %-*s %-7s %s' \
+            "$_uc_cw" "${_uc_comp[$_uc_i]}" "$_uc_vw" "${_uc_ver[$_uc_i]}" "$_uc_owner" "${_uc_status[$_uc_i]}")"
         _exakit_version_note_lines "${_uc_note[$_uc_i]}"
         _exakit_version_note_lines "${_uc_maint[$_uc_i]}"
         _uc_i=$((_uc_i + 1))
@@ -6178,16 +9202,22 @@ exakit_update_self() {
     # Named before the swap, cleared after it. See _exakit_update_marker.
     _update_marker="$EXAKIT_HOME/.update-in-progress"
     info "Updating starter kit ${_current:-unknown} -> $_latest"
-    # main first — that is what install.sh fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates, and so a v0.1.0 field
-    # kit (which only ever knew tags) keeps working.
+    # THE ANNOUNCED RELEASE FIRST (SEC-02). This said "Updating ... -> $_latest"
+    # and then installed whatever main held that minute, never the release that
+    # was announced and reviewed. The tag of that release is tried first; only
+    # where none was cut does the update come from a branch - the one this kit
+    # was installed from (kit.source), else main - and then it says so.
+    _kit_branch=""
+    _kit_src="$(manifest_get kit.source 2>/dev/null || true)"
+    case "$_kit_src" in "$_repo"@*) _kit_branch="${_kit_src#*@}" ;; esac
+    case "$_kit_branch" in ''|main|v[0-9]*|[0-9]*|*[!A-Za-z0-9._/-]*) _kit_branch="" ;; esac
     _kit_ref=""
-    for _kit_candidate in "main" "v${_latest}" "${_latest}"; do
-        case "$_kit_candidate" in
-            main) _kit_url="https://github.com/${_repo}/archive/refs/heads/main.tar.gz" ;;
-            *)    _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz" ;;
-        esac
+    for _kit_candidate in "v${_latest}" "${_latest}" ${_kit_branch:+"$_kit_branch"} "main"; do
+        if [ "$_kit_candidate" = "v${_latest}" ] || [ "$_kit_candidate" = "${_latest}" ]; then
+            _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz"
+        else
+            _kit_url="https://github.com/${_repo}/archive/refs/heads/${_kit_candidate}.tar.gz"
+        fi
         if curl -fL --proto '=https' --retry 3 --connect-timeout 15 -sS -o "$_tmp" "$_kit_url"; then
             _kit_ref="$_kit_candidate"
             break
@@ -6196,7 +9226,7 @@ exakit_update_self() {
     if [ -z "$_kit_ref" ]; then
         rm -f "$_tmp"
         rm -rf "$_stage"
-        die "Could not download the starter kit from $_repo (tried main and the $_latest tags)."
+        die "Could not download the starter kit from $_repo (tried the $_latest release tags${_kit_branch:+, $_kit_branch} and main)."
     fi
     tar -xzf "$_tmp" -C "$_stage" --strip-components 1 || {
         rm -rf "$_stage"
@@ -6213,6 +9243,17 @@ exakit_update_self() {
             die "Downloaded starter kit is incomplete (missing $_required); existing kit copy was left untouched."
         }
     done
+    # What was downloaded is the version that was announced: a release archive
+    # that says otherwise is refused, and a branch is named for what it is.
+    _kit_got="$(exakit_kit_version_at "$_stage" 2>/dev/null || true)"
+    if [ "$_kit_ref" = "v${_latest}" ] || [ "$_kit_ref" = "${_latest}" ]; then
+        if [ "$_kit_got" != "$_latest" ]; then
+            rm -rf "$_stage"
+            die "The $_kit_ref release archive says it is version ${_kit_got:-unknown}, not $_latest; existing kit copy was left untouched."
+        fi
+    elif [ "$_kit_got" != "$_latest" ]; then
+        info "No $_latest release tag; updating from the $_kit_ref branch, which is version ${_kit_got:-unknown}."
+    fi
     # What actually landed is what gets recorded. GitHub's raw endpoint can serve a
     # newer versions.json than the branch tarball for a few minutes after a merge,
     # and claiming a version that is not on disk would make every later comparison
@@ -6317,7 +9358,7 @@ exakit_update_self() {
 # install: AGENTS.md tells an agent to run the install in the background and
 # poll `exakit status` until it says running, and for 98 % of the run the only
 # answer was "command not found". The kit copy the command reads is already in
-# place (install.sh extracts into it before the setup script starts); step 6
+# place (install.sh extracts into it before the setup script starts); step 7
 # still records the tick and refreshes anything that changed.
 exakit_install_helper_early() {
     _ihe_src="$1/exakit"
@@ -6378,6 +9419,14 @@ exakit_update_skills() {
     fi
     _us_current="$(exakit_component_current skills 2>/dev/null || true)"
     if [ "$_us_latest" = "$_us_current" ]; then
+        # Current, but not in every skill folder (an older kit's update placed
+        # them): place the set this kit copy carries, no download.
+        if exakit_skills_unplaced; then
+            exakit_install_skills >/dev/null 2>&1 \
+                && ok "AI skills placed in every skill folder ($_us_current)." \
+                || warn "The skills could not be placed — run: exakit skills-install"
+            return 0
+        fi
         ok "skills are already current ($_us_current)"
         return 0
     fi
@@ -6419,6 +9468,17 @@ exakit_update_skills() {
     # with them. Recorded as such, so the table keeps offering the rest if the
     # branch archive has not caught up with the published manifest yet.
     _us_staged="$(exakit_kit_version_at "$_us_stage" components.skills.version 2>/dev/null || true)"
+    # NEVER AN OLDER SET OVER A NEWER ONE. A branch archive served from a cache
+    # that had not caught up named 1.12.6 while 1.24.57 was installed, and the
+    # update recorded 1.12.6, put it in place and retired 25 skills. The set
+    # this machine has stays, and so does its record. Returns 3 so the update
+    # loop reports the row as kept, not updated.
+    if [ -n "$_us_staged" ] && [ -n "$_us_current" ] && [ "$_us_current" != "not installed" ] && \
+       [ "$_us_current" != "unknown" ] && exakit_version_newer "$_us_current" "$_us_staged"; then
+        rm -rf "$_us_stage"
+        info "Keeping AI skills $_us_current. The download was an older set ($_us_staged), and the next update fetches the right one."
+        return 3
+    fi
     if [ -z "$_us_staged" ]; then
         _us_staged="$_us_latest"
     elif [ "$_us_staged" != "$_us_latest" ] && exakit_version_newer "$_us_latest" "$_us_staged"; then
@@ -6777,19 +9837,48 @@ exakit_update() {
     fi
     _target="${1:-all}"
     if [ "$#" -gt 0 ]; then shift; fi
+    case "$_target" in
+        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
+    esac
+    _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
+    # Several component ids, as `exakit marketplace` takes them (#47): `exakit
+    # update exapump dbt-exasol` updates both. Only ids join this way - an
+    # option still goes behind personal alone - so a second id is never read
+    # as an option and refused with a message about options.
     # Bad input is exit 2 and records nothing, like every other refusal: an
     # option behind the wrong target is not a failed update, so not a die.
     if [ "$#" -gt 0 ]; then
         case "$_target" in
             personal|runtime|database|db) ;;
-            *) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
+            all) reject "'exakit update' with no id updates everything; name components instead of 'all' to update only those." ;;
+            *)
+                for _upd_more in "$@"; do
+                    case "$_upd_more" in
+                        -*) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
+                        all) reject "'all' cannot be named beside other components: 'exakit update' alone updates everything." ;;
+                    esac
+                    _upd_more_targets="$(exakit_update_targets "$_upd_more")" \
+                        || reject "Unknown update target '$_upd_more' (see: exakit version)"
+                    case " $(printf '%s ' $_targets)" in
+                        *" $_upd_more_targets "*) ;;
+                        *) _targets="$_targets
+$_upd_more_targets" ;;
+                    esac
+                done
+                _target="$_target $*"
+                set --
+                ;;
         esac
     fi
-    case "$_target" in
-        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
-    esac
-    _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
+    # ONE UPDATE AT A TIME. Two runs at once (a person and an agent in the same
+    # minute) both rewrote the kit copy, the manifest and the same add-on in the
+    # database, with nothing to say the other was there. The second one waits,
+    # and says so.
+    exakit_update_lock_acquire "$_upd_json" || return $?
     exakit_init_logging
+    # Showing updates is one of the two moments the add-ons' GitHub names,
+    # links and Abouts are looked up (the other is the install's offer).
+    command -v _exakit_marketplace_warm_about >/dev/null 2>&1 && _exakit_marketplace_warm_about all
     # --json: the same run, with every screen line sent to the logfile and
     # ONE object on stdout at the end. Nothing may prompt under --json, so a
     # database change that was not pre-answered (--yes or
@@ -6841,12 +9930,99 @@ exakit_update() {
     _exakit_update_run "$_target" "$_targets" "$@"
 }
 
+# exakit_update_lock_acquire [json:0|1] — take $EXAKIT_HOME/.update.lock, or
+# wait for the run that holds it. The lock names its holder the way the
+# installer's does (pid, then the process start time), so a run that was killed
+# leaves a lock the next one recognises as dead and takes over. It is removed
+# by the command's EXIT trap (exakit_track_tmp), however the run ends.
+#
+# A run handed over by the previous kit's updater (EXAKIT_UPDATE_HANDOVER=1) is
+# part of the run that holds the lock, so it takes none: waiting there would be
+# waiting for itself. EXAKIT_UPDATE_LOCK_WAIT is how many seconds to wait
+# (default 900); after that the run stops with exit 1 and says why, never
+# silently. ⇄ twin: Enter-ExakitUpdateLock in setup/exakit.ps1.
+EXAKIT_UPDATE_LOCK_FILE=""
+exakit_update_lock_acquire() {
+    [ "${EXAKIT_UPDATE_HANDOVER:-0}" = "1" ] && return 0
+    _ula_json="${1:-0}"
+    _ula_lock="$EXAKIT_HOME/.update.lock"
+    mkdir -p "$EXAKIT_HOME" 2>/dev/null || true
+    _ula_limit="${EXAKIT_UPDATE_LOCK_WAIT:-900}"
+    case "$_ula_limit" in ''|*[!0-9]*) _ula_limit=900 ;; esac
+    _ula_waited=0
+    _ula_said=0
+    _ula_empty=0
+    _ula_spun=0
+    while :; do
+        # noclobber: creating the file is the test, so two runs can never both
+        # see "free" and both go ahead.
+        if ( set -C; printf '%s\n%s\n' "$$" "$(exakit_process_start_time "$$")" > "$_ula_lock" ) 2>/dev/null; then
+            EXAKIT_UPDATE_LOCK_FILE="$_ula_lock"
+            exakit_track_tmp "$_ula_lock"
+            [ "$_ula_spun" = 0 ] || ui_spin_end
+            [ "$_ula_said" = 0 ] || info "The other update finished - continuing" >&2
+            return 0
+        fi
+        _ula_pid="$(sed -n 1p "$_ula_lock" 2>/dev/null)"
+        if [ "$_ula_pid" = "$$" ]; then
+            # This process already holds it (a second update in the same run).
+            EXAKIT_UPDATE_LOCK_FILE="$_ula_lock"
+            return 0
+        elif [ -z "$_ula_pid" ]; then
+            # Being written this very moment, or left empty by a crash: give the
+            # writer a few seconds before calling it abandoned.
+            _ula_empty=$((_ula_empty + 1))
+            if [ "$_ula_empty" -ge 5 ]; then rm -f "$_ula_lock"; _ula_empty=0; continue; fi
+        elif ! exakit_lock_holder_alive "$_ula_lock"; then
+            # A run that died without its EXIT trap (kill -9, a closed laptop
+            # lid that never woke the shell). Removed only if it still names the
+            # same dead pid, so a lock another waiter just took is left alone.
+            [ "$(sed -n 1p "$_ula_lock" 2>/dev/null)" = "$_ula_pid" ] && rm -f "$_ula_lock"
+            continue
+        else
+            _ula_empty=0
+            if [ "$_ula_said" = 0 ]; then
+                info "Another exakit update is running (pid $_ula_pid) - waiting for it to finish" >&2
+                _ula_said=1
+                if command -v ui_spin_begin >/dev/null 2>&1; then
+                    ui_spin_begin "Waiting for the other exakit update (pid $_ula_pid) to finish"
+                    _ula_spun=1
+                fi
+            fi
+        fi
+        if [ "$_ula_waited" -ge "$_ula_limit" ]; then
+            [ "$_ula_spun" = 0 ] || ui_spin_end
+            _ula_why="another exakit update (pid ${_ula_pid:-unknown}) is still running after ${_ula_limit}s"
+            if [ "$_ula_json" = "1" ]; then
+                exakit_json_out '{"ok": false, "status": "failed", "remedy": "exakit update", "remedy_hint": "%s; let it finish, then run exakit update again"}\n' "$_ula_why"
+                return 1
+            fi
+            die "Not updating: $_ula_why. Let it finish, then run exakit update again."
+        fi
+        sleep 1
+        _ula_waited=$((_ula_waited + 1))
+    done
+}
+
 # _exakit_update_note <component> <outcome> <installed> <advertised> [remedy]
 # [error] [remedy hint] — one line in the --json results file; a no-op on the
 # human screen. The error and the hint are sentences, so the field separator
 # and line breaks are taken out of them before they are written.
+#
+# FIVE FIELDS FOR A READER THAT ONLY KNOWS FIVE. A run handed over by the
+# previous kit's updater (EXAKIT_UPDATE_HANDOVER=1) writes into THAT kit's
+# results file, and THAT kit's reader parses the rows. Kits before the
+# error/hint fields unpack exactly five (`for comp, outcome, cur, avail,
+# remedy in rows` - a sixth field is a ValueError and no JSON at all), so a
+# handed-over run writes the two extra fields only when the parent declared
+# it reads them (EXAKIT_UPDATE_ROW_FIELDS=7, set by exakit_update_handover).
+# Any other run reads its own rows. ⇄ twin: Add-ExakitUpdateNote.
 _exakit_update_note() {
     [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] || return 0
+    if [ "${EXAKIT_UPDATE_HANDOVER:-0}" = "1" ] && [ "${EXAKIT_UPDATE_ROW_FIELDS:-5}" != "7" ]; then
+        printf '%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" >> "$EXAKIT_UPDATE_RESULTS"
+        return 0
+    fi
     _eun_error="$(printf '%s' "${6:-}" | tr '|\n\r' '/  ')"
     _eun_hint="$(printf '%s' "${7:-}" | tr '|\n\r' '/  ')"
     printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "$_eun_error" "$_eun_hint" >> "$EXAKIT_UPDATE_RESULTS"
@@ -6923,7 +10099,9 @@ try:
     with open(sys.argv[1], encoding="utf-8") as handle:
         for line in handle:
             parts = line.rstrip("\n").split("|")
-            if len(parts) >= 5 and parts[0]:
+            # A row with no component is the "versions" row: the manifest the
+            # run read and why its check failed (_exakit_update_run).
+            if len(parts) >= 5 and (parts[0] or parts[1] == "versions"):
                 rows.append((parts + [""] * 7)[:7])
 except OSError:
     pass
@@ -6948,6 +10126,20 @@ def entries(kind):
 updated, deferred, failed = entries("updated"), entries("deferred"), entries("failed")
 blocked, skipped, ahead = entries("blocked"), entries("skipped"), entries("ahead")
 current = [row[0] for row in rows if row[1] == "current"]
+# A check that could not reach the manifest is a failed run, never "current":
+# what was compared is only what this kit already knew. The last "versions"
+# row stands - a handed-over run asked again.
+versions_rows = [row for row in rows if row[1] == "versions" and not row[0]]
+manifest_source, check_error, check_hint = None, "", ""
+if versions_rows:
+    manifest_source = versions_rows[-1][2] or None
+    check_error, check_hint = versions_rows[-1][5], versions_rows[-1][6]
+# The network row is always there when the check failed, and first: offline,
+# downloads usually fail too, and the reason the check failed is the one to fix.
+if check_error:
+    failed.insert(0, {"component": None, "from": None, "to": None, "remedy": "exakit update",
+                      "error": "could not check for updates (network): %s" % check_error,
+                      "remedy_hint": check_hint or "Retry: exakit update"})
 if rc != 0 and not failed:
     entry = {"component": None, "from": None, "to": None,
              "remedy": run_remedy or "exakit update",
@@ -6961,7 +10153,11 @@ if failed:
     hint = failed[0].get("remedy_hint")
 elif deferred:
     status, remedy = "deferred", deferred[0].get("remedy") or "exakit update --yes"
-    if remedy == "exakit update":
+    if deferred[0].get("component") == "core-setup":
+        # New kit setup that waits for a STOPPED database is deferred too, and
+        # its remedy says so: no hint.
+        hint = None
+    elif remedy == "exakit update":
         hint = "the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit"
     else:
         hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
@@ -6971,6 +10167,12 @@ elif updated:
     status, remedy = "updated", None
 else:
     status, remedy = "current", None
+# A component behind its advertised version that was KEPT (not the kit's) is
+# not "current": the top-level hint says so, naming them.
+kept = [e for e in skipped if e.get("remedy_hint") and e.get("from") and e.get("to") and e["from"] != e["to"]]
+if kept and not hint:
+    hint = ("kept as they are, behind the advertised version: %s - installed outside the kit, so their owner updates them"
+            % ", ".join("%s %s -> %s" % (e["component"], e["from"], e["to"]) for e in kept))
 print(json.dumps({
     "ok": not failed,
     "status": status,
@@ -6983,6 +10185,8 @@ print(json.dumps({
     "failed": failed,
     "remedy": remedy,
     "remedy_hint": hint,
+    "manifest_source": manifest_source,
+    "check_failed": bool(check_error),
 }, indent=2, ensure_ascii=False))
 sys.exit(0 if not failed else 1)
 EXAKIT_UPDATE_JSON_PY
@@ -6997,6 +10201,30 @@ EXAKIT_UPDATE_JSON_PY
     return 1
 }
 
+# _exakit_update_handover_target <target> <targets> <kit-component> — what the
+# new kit is handed after this process updated the kit itself. "all" stays
+# all: the new kit's list may hold components this one does not know. Named
+# ids hand over the kit and the ids after it - the ones before it are done,
+# and handing them over again listed them under both updated and current. The
+# kit stays in the list so the new run makes its new-setup check; it skips the
+# kit itself. ⇄ twin: Get-ExakitHandoverTarget in setup/exakit.ps1.
+_exakit_update_handover_target() {
+    if [ "$1" = "all" ]; then
+        printf 'all\n'
+        return 0
+    fi
+    _euht_out="exakit"
+    _euht_seen=0
+    for _euht_t in $2; do
+        if [ "$_euht_seen" = 1 ]; then
+            _euht_out="$_euht_out $_euht_t"
+        elif [ "$_euht_t" = "$3" ]; then
+            _euht_seen=1
+        fi
+    done
+    printf '%s\n' "$_euht_out"
+}
+
 # _exakit_update_run <target> <targets> [component options...] — the body of
 # exakit_update: one pass over the targets, applying what is advertised.
 _exakit_update_run() {
@@ -7008,10 +10236,31 @@ _exakit_update_run() {
         exakit_versions_resolve_doc >/dev/null 2>&1 || true
     fi
     exakit_print_versions_source_line
+    # Which manifest this run reads, and why the check failed when it did: one
+    # row with no component, read by _exakit_update_json_report (older readers
+    # skip a row without a component). A failed check ends the run with exit 1
+    # below, whatever else it did. ⇄ twin: the same row in Invoke-ExakitUpdateRun.
+    _upd_check_error=""
+    if [ "${EXAKIT_VERSION_POLICY:-manifest}" = "manifest" ]; then
+        _upd_check_error="${_EXAKIT_VERSIONS_CHECK_ERROR:-}"
+        _upd_check_hint=""
+        [ -z "$_upd_check_error" ] || _upd_check_hint="$(exakit_versions_known_text)"
+        _exakit_update_note "" versions "$(exakit_versions_source)" \
+            "$(exakit_versions_value updated 2>/dev/null || true)" "" "$_upd_check_error" "$_upd_check_hint"
+    fi
     _deferred=0
     _acted=0
     _upd_kit_swapped=0
+    _upd_done=""
+    _upd_refreshed=""
+    _upd_failed=0
     for _component in $_targets; do
+        # A run handed over by the previous kit's updater: that run already
+        # updated the kit itself, and reporting it again here would list the
+        # kit twice in one --json answer.
+        if [ "$_component" = "exakit" ] && [ "${EXAKIT_UPDATE_HANDOVER:-0}" = "1" ]; then
+            continue
+        fi
         # _upd_ prefix: verify_sha256 (reached through the component updaters)
         # assigns _actual, and bash has no function-local variables here.
         _upd_actual="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
@@ -7027,6 +10276,18 @@ _exakit_update_run() {
         # that carries it: the kit doing the update is always the old one.
         if [ "$_upd_kit_swapped" = "1" ]; then
             _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update"
+            continue
+        fi
+        # A component the kit did not install (ownership receipt) is never
+        # written by the kit: behind the advertised version it is updated
+        # through the tool that owns it, or kept with the command to run (see
+        # exakit_update_foreign).
+        if [ -n "$_cur" ] && [ "$_cur" != "not installed" ] && ! exakit_component_is_managed "$_upd_actual"; then
+            exakit_update_foreign "$_upd_actual" "$_cur" "$_avail"
+            if [ "$_euf_outcome" = updated ]; then
+                _acted=$((_acted + 1))
+                _upd_done="${_upd_done}${_upd_done:+, }$_upd_actual"
+            fi
             continue
         fi
         # No build for this machine: a routine update stays quiet about it (there is
@@ -7064,7 +10325,7 @@ _exakit_update_run() {
         # neither it defers exactly as it always did. See
         # exakit_offer_runtime_update.
         if [ "$_target" = "all" ] && exakit_component_is_heavy "$_upd_actual"; then
-            if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" != "unknown" ] && [ "$_cur" != "$_avail" ]; then
+            if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" != "unknown" ] && ! exakit_version_same "$_cur" "$_avail"; then
                 # Under --json the offer runs in its own subshell, like every
                 # updater below, so a die() inside it (under --yes, the start
                 # after the launcher swap meeting a WSL kernel without
@@ -7082,6 +10343,7 @@ _exakit_update_run() {
                 fi
                 if [ "$_upd_offer_rc" = "0" ]; then
                     _acted=$((_acted + 1))
+                    _upd_done="${_upd_done}${_upd_done:+, }$_upd_actual"
                     _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
                 elif [ "$_upd_offer_rc" = "10" ]; then
                     _deferred=$((_deferred + 1))
@@ -7107,8 +10369,20 @@ _exakit_update_run() {
         # improved, re-registers the boot entry, re-reads a changed DSN), so
         # `exakit update dash-server` must reach the module even when the version
         # already matches. `update all` still skips it — a routine update stays a
-        # work plan, not a sweep of every component's repair path.
-        if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" = "$_avail" ]; then
+        # work plan, not a sweep of every component's repair path — unless the
+        # add-on itself says it needs one (_exakit_addon_needs_update).
+        _upd_needs=0
+        if exakit_version_same "$_cur" "$_avail" && \
+           _exakit_addon_needs_update "$_upd_actual"; then
+            _upd_needs=1
+        fi
+        # The skill set at the advertised version, but missing from a skill
+        # folder this kit reads (see exakit_skills_unplaced): placed again.
+        if [ "$_upd_actual" = skills ] && exakit_version_same "$_cur" "$_avail" && \
+           exakit_skills_unplaced; then
+            _upd_needs=1
+        fi
+        if exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; then
             if [ "$_target" = "all" ] || ! _exakit_addon_registered "$_component"; then
                 _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
                 continue
@@ -7131,9 +10405,13 @@ _exakit_update_run() {
         # a die stops the run as it always did.
         if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
             _exakit_update_note_begin
-            if ( exakit_update_component "$_component" "$@" ); then
+            # 3 from the skills updater: an older downloaded set was not applied
+            # and the installed one kept (exakit_update_skills) - not a failure,
+            # and not an update either.
+            if ( exakit_update_component "$_component" "$@" ); then _upd_rc=0; else _upd_rc=$?; fi
+            if [ "$_upd_rc" -eq 0 ] || { [ "$_component" = skills ] && [ "$_upd_rc" -eq 3 ]; }; then
                 _exakit_update_note_end
-                if [ -n "$_cur" ] && [ "$_cur" = "$_avail" ]; then
+                if [ "$_upd_rc" -eq 3 ] || { exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; }; then
                     _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
                 else
                     _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
@@ -7150,28 +10428,133 @@ _exakit_update_run() {
                 _upd_failed=$((${_upd_failed:-0} + 1))
             fi
         else
-            exakit_update_component "$_component" "$@"
+            # The updater's answer counts on the screen too. An add-on's update
+            # that failed without a die (its module answered non-zero) used to be
+            # passed over: the run went on, printed nothing after it and exited 0.
+            if exakit_update_component "$_component" "$@"; then _upd_rc=0; else _upd_rc=$?; fi
+            if [ "$_component" = skills ] && [ "$_upd_rc" -eq 3 ]; then
+                # The installed skills were kept over an older download: the
+                # updater said so, and the closing line does not call it updated.
+                :
+            elif [ "$_upd_rc" -eq 0 ]; then
+                # A named add-on run again at its version (its repair) is said
+                # as that, not as an update.
+                if exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; then
+                    _upd_refreshed="${_upd_refreshed}${_upd_refreshed:+, }$_upd_actual"
+                else
+                    _upd_done="${_upd_done}${_upd_done:+, }$_upd_actual"
+                fi
+            else
+                warn "$_upd_actual did not update. Details: exakit logs"
+                _upd_failed=$((${_upd_failed:-0} + 1))
+            fi
         fi
         _acted=$((_acted + 1))
-        # Did that just replace the kit? kit.version on disk is the proof: the
-        # self-update records it only after the new copy is in place, and it
-        # does so in the subshell under --json too, where no variable it sets
-        # could reach this loop. Said once, and only when something is left.
-        if [ "$_upd_actual" = "exakit" ] && [ -n "$_cur" ] && \
-           [ "$(exakit_component_current exakit 2>/dev/null || true)" != "$_cur" ]; then
+        # CHECK 1: did this run just replace the kit? kit.version on disk is the
+        # proof: the self-update records it only after the new copy is in place,
+        # and it does so in the subshell under --json too, where no variable it
+        # sets could reach this loop. Then the NEW updater finishes the run - the
+        # remaining components, and the comparison of its own task list below.
+        # This process is still executing the old library, which knows neither.
+        # Never from a run that was itself handed over, so the two can never
+        # loop.
+        _upd_kit_now=""
+        [ "$_upd_actual" = "exakit" ] && _upd_kit_now="$(exakit_component_current exakit 2>/dev/null || true)"
+        if [ "$_upd_actual" = "exakit" ] && [ "${EXAKIT_UPDATE_HANDOVER:-0}" != "1" ] && \
+           [ -n "$_cur" ] && [ -n "$_upd_kit_now" ] && [ "$_upd_kit_now" != "$_cur" ]; then
+            # Whether a new exakit is there is asked BEFORE the handover, never
+            # read off its exit code: whatever the new run returns, 127
+            # included, is its own answer, and the rows it wrote stand.
+            if command -v exakit_update_handover_ready >/dev/null 2>&1; then
+                if exakit_update_handover_ready; then
+                    exakit_update_handover "$(_exakit_update_handover_target "$_target" "$_targets" "$_component")"
+                    return $?
+                fi
+                warn "The updated exakit command was not found - the rest of this update waits for the next 'exakit update'"
+            fi
+            # No handover: nothing after the kit runs on the old code (see the
+            # _upd_kit_swapped skip at the top of this loop, and CHECK 2
+            # below). Said once, and only when something is left.
             _upd_kit_swapped=1
             if [ "$(printf '%s\n' $_targets | tail -n 1)" != "$_component" ]; then
                 info "The starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit."
             fi
         fi
     done
-    if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ]; then
+    # The MCP server's definition as this kit copy writes it (a whole-kit
+    # update only, and never on the old code after a swap that was not handed
+    # over): a release that changed it, its tool settings say, reaches a server
+    # an earlier kit set up, which the mcp row above skips as current.
+    if [ "${_upd_kit_swapped:-0}" != "1" ] && command -v mcp_sidecar_refresh >/dev/null 2>&1; then
+        case " $_target " in
+            *" all "*|*" exakit "*)
+                mcp_sidecar_refresh || warn "The MCP server could not take this kit's settings - run: exakit mcp-setup" ;;
+        esac
+    fi
+    # The boot entries as this kit copy writes them, on the same terms: an
+    # entry an earlier kit wrote with another command is rewritten in place.
+    if [ "${_upd_kit_swapped:-0}" != "1" ]; then
+        case " $_target " in
+            *" all "*|*" exakit "*) exakit_autostart_refresh >&2 ;;
+        esac
+    fi
+    # The Claude Code allowlist as this kit copy writes it, once, for a kit
+    # whose skills an earlier kit placed without the rule record (0.2.5): its
+    # update reads the skills as current and skips the skills install, the
+    # only other caller, so the wide `mcp-doctor:*` rule would stay for good.
+    # The apply keeps the user's own rules and writes the record, so this runs
+    # once. Twin of the Set-ExakitReadonlyAllowlist call in Invoke-ExakitUpdateRun.
+    if [ "${_upd_kit_swapped:-0}" != "1" ] && [ -f "${EXAKIT_MANIFEST:-}" ]; then
+        case " $_target " in
+            *" all "*|*" exakit "*)
+                case "$(manifest_get components.skills.installed 2>/dev/null || true)" in
+                    ''|'[]') : ;;
+                    *) manifest_get components.skills.claude_rules >/dev/null 2>&1 || \
+                        exakit_report_readonly_allowlist >&2 ;;
+                esac ;;
+        esac
+    fi
+    # CHECK 2: does this kit ask for setup this machine has not completed?
+    # Only the installer holds that setup, so a pending task reruns it once.
+    # Not after a kit swap that was not handed over: this process holds the
+    # OLD task list and would rerun the OLD installer. The next
+    # `exakit update`, which the new kit runs, makes this check itself.
+    EXAKIT_CORE_UPDATE_ACTED=0
+    if [ "${_upd_kit_swapped:-0}" != "1" ] && command -v exakit_core_update_check >/dev/null 2>&1; then
+        exakit_core_update_check "$_target" || _upd_failed=$((${_upd_failed:-0} + 1))
+    fi
+    # CHECK 3: the SQL preprocessor framework's verify pass, on every whole-kit
+    # update (see exakit_core_preprocessor_verify); the rerun above ran it.
+    if [ "${_upd_kit_swapped:-0}" != "1" ] && [ "$EXAKIT_CORE_UPDATE_ACTED" = "0" ] &&
+            command -v exakit_core_preprocessor_verify >/dev/null 2>&1; then
+        exakit_core_preprocessor_verify "$_target" || _upd_failed=$((${_upd_failed:-0} + 1))
+    fi
+    # "Everything is already current" only for a check that reached the
+    # manifest: after a failed one this run compared against the versions the
+    # kit already had, and the warning above says so.
+    if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ] && [ "$EXAKIT_CORE_UPDATE_ACTED" = "0" ] &&
+            [ -z "$_upd_check_error" ]; then
         ok "Everything is already current."
     fi
     if [ "$_deferred" -gt 0 ]; then
         info "See everything, including the deferred runtime change: exakit version"
     fi
+    # EVERY RUN ENDS WITH A LINE THAT SAYS HOW IT ENDED. A run that updated
+    # something used to stop after the last updater's own output - the
+    # "Installing Exasol Semantic Views into the database" line - and hand the
+    # prompt back with no word that it was over or how it went. The --json
+    # object is that line for an agent.
+    if [ "${EXAKIT_UPDATE_JSON:-0}" != "1" ]; then
+        if [ "${_upd_failed:-0}" -gt 0 ]; then
+            warn "Update finished with problems${_upd_done:+ (updated: $_upd_done)}. Retry with: exakit update"
+        elif [ -n "$_upd_done" ]; then
+            ok "Update finished - updated: $_upd_done${_upd_refreshed:+; refreshed at the same version: $_upd_refreshed}"
+        elif [ -n "$_upd_refreshed" ]; then
+            ok "Update finished - refreshed at the same version: $_upd_refreshed"
+        fi
+    fi
     [ "${_upd_failed:-0}" -eq 0 ] || return 1
+    [ -z "$_upd_check_error" ] || return 1
     return 0
 }
 
@@ -7511,6 +10894,16 @@ step_version_drift() {
         "$_svd_id" "$_svd_have" "$_svd_want"
 }
 
+# exakit_step_heading <title> — a step's header, the installer's look: accent
+# arrow and bold title, set off by a blank line. begin_step draws its steps with
+# it, and `exakit persona add` its three. ⇄ twin: Write-ExakitStepHeading.
+exakit_step_heading() {
+    printf '\n  %s%s%s %s%s%s\n' \
+        "${UI_ACCENT:-}" "${UI_ARROW:->}" "${UI_RESET:-}" \
+        "${UI_BOLD:-}" "$1" "${UI_RESET:-}"
+    _exakit_log_file "STEP  $1"
+}
+
 begin_step() {
     EXAKIT_CURRENT_STEP="$1"
     EXAKIT_ACTIVE_LABEL="$2"     # spinner label for run_logged inside this step
@@ -7543,6 +10936,15 @@ begin_step() {
             # and a manifest read, so a second one costs nothing.
             step_artifact_state "$1" >/dev/null 2>&1
             _bs_rerun=1
+        elif [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+            # An item of a grouped step: one line at the item column, under the
+            # group's heading -- unless the item is already open (the bar), in
+            # which case its own tick is that line.
+            if [ -z "${EXAKIT_ITEM_LOG:-}" ]; then
+                exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$2" "" "already done, skipping"
+            fi
+            _exakit_log_file "OK    $2 — already done, skipping"
+            return 1
         else
             # Step-level line (a whole step's status, not a nested outcome).
             printf '\n  %s%s%s %s%s%s %s— already done, skipping%s\n' \
@@ -7552,11 +10954,12 @@ begin_step() {
             return 1
         fi
     fi
-    # Styled step header: accent arrow + bold title, set off by a blank line.
-    printf '\n  %s%s%s %s%s%s\n' \
-        "${UI_ACCENT:-}" "${UI_ARROW:->}" "${UI_RESET:-}" \
-        "${UI_BOLD:-}" "$2" "${UI_RESET:-}"
-    _exakit_log_file "STEP  $2"
+    # In a grouped step the group printed the heading; the item draws itself.
+    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+        _exakit_log_file "STEP  $2"
+    else
+        exakit_step_heading "$2"
+    fi
     if [ "$_bs_rerun" -eq 1 ]; then
         info "Recorded as done, but ${EXAKIT_STEP_RERUN_REASON:-what it installed is missing — running it again}"
     fi
@@ -7567,12 +10970,15 @@ exakit_on_failure() {
     _status=$?
     # Runs on EXIT (any status). Stop any live spinner and un-hide the cursor
     # first, so a failure mid-animation never leaves a stuck/invisible cursor.
+    # A hard failure inside an item of Setup Utilities (the kit command's
+    # refresh dies loudly) ends that item with its cross first, then the card.
+    if [ $_status -ne 0 ] && [ -n "${EXAKIT_ITEM_LOG:-}" ] && command -v exakit_item_end >/dev/null 2>&1; then
+        exakit_item_end 1 2>/dev/null || true
+    fi
     ui_spin_end 2>/dev/null || true
     ui_restore_cursor
-    # Same reason as the sweep below: a background prefetch is this run's
-    # process, and a run that is ending does not get to leave one downloading.
-    if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop 2>/dev/null || true; fi
     exakit_sweep_sensitive_tmp     # never leave credential temp files behind
+    exakit_sweep_tmp
     [ $_status -eq 0 ] && return 0
     # Same "card" shape as die(): prominent ✗ header, dim gutter details.
     printf '\n  %s%s %s%s%s\n' "${UI_ERR:-}" "${UI_CROSS:-[x]}" "${UI_BOLD:-}" \
@@ -7582,6 +10988,8 @@ exakit_on_failure() {
         printf '    %s%s Log: %s%s\n' "${UI_DIM:-}" "${UI_VB:-|}" "$EXAKIT_LOG_FILE" "${UI_RESET:-}" >&2
     fi
     printf '    %s%s Re-running the installer is safe: completed steps are skipped.%s\n' "${UI_DIM:-}" "${UI_VB:-|}" "${UI_RESET:-}" >&2
+    # The add-ons started early carry on past an interrupted install: said.
+    exakit_addons_early_report || true
     if [ "${EXAKIT_AUTO_ROLLBACK:-0}" = "1" ]; then
         run_rollback
     elif confirm "Undo the failed step's changes?" n; then
@@ -7617,7 +11025,17 @@ exakit_acquire_lock() {
 
 # exakit_process_start_time <pid> — the start time ps reports, trimmed; empty
 # when ps cannot say. `lstart` is the one column macOS and Linux ps share.
+# NOT ON LINUX: there ps derives lstart from the boot time as the wall clock
+# sees it now, so a clock step (WSL2 resyncing after the laptop wakes, chrony,
+# date -s) moves it, and a live run read as gone and was started a second
+# time. /proc/<pid>/stat's starttime (field 22, ticks since boot) never moves;
+# the fields are counted after the ")" that ends the command name, which may
+# itself hold spaces. macOS keeps lstart: it records the absolute start time.
 exakit_process_start_time() {
+    if [ -r "/proc/$1/stat" ]; then
+        sed -n '1s/^.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+        return 0
+    fi
     ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//' | head -n 1
 }
 
@@ -7631,7 +11049,12 @@ exakit_lock_holder_alive() {
     [ -n "$_lha_pid" ] || return 1
     kill -0 "$_lha_pid" 2>/dev/null || return 1
     [ -n "$_lha_start" ] || return 0
-    [ "$(exakit_process_start_time "$_lha_pid")" = "$_lha_start" ]
+    [ "$(exakit_process_start_time "$_lha_pid")" = "$_lha_start" ] && return 0
+    # A lock an earlier kit wrote on Linux holds ps's lstart, not the tick count.
+    case "$_lha_start" in
+        *[!0-9]*) [ "$(ps -o lstart= -p "$_lha_pid" 2>/dev/null | sed 's/^ *//;s/ *$//' | head -n 1)" = "$_lha_start" ] ;;
+        *) return 1 ;;
+    esac
 }
 
 exakit_release_lock() {
@@ -7649,9 +11072,7 @@ exakit_enable_failure_handling() {
 # Call at the very end of a successful run.
 exakit_finish() {
     trap - EXIT
-    # A prefetch that never got collected (the MCP step was skipped, or the run
-    # is ending early) must not outlive the installer. No-op when there is none.
-    if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop || true; fi
+    exakit_sweep_tmp
     rollback_discard
     exakit_release_lock
     EXAKIT_CURRENT_STEP=""
@@ -7777,6 +11198,21 @@ verify_sha256_from_file() {
 # ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
+# exakit_closing_hint — the install's last line. "Run exakit help" is only true
+# in a terminal that has the bin folder on its PATH; the one that ran the
+# installer did not when the install had to add it, so it is given the full
+# path too.
+exakit_closing_hint() {
+    case ":${EXAKIT_PATH_AT_START:-$PATH}:" in
+        *":$EXAKIT_BIN_DIR:"*) heading "Run \"exakit help\" for support" ;;
+        *)
+            _ech_bin="$EXAKIT_BIN_DIR"
+            case "$_ech_bin" in "$HOME"/*) _ech_bin="~/${_ech_bin#"$HOME"/}" ;; esac
+            heading "Run \"exakit help\" for support - in a new terminal; in this one: $_ech_bin/exakit help"
+            ;;
+    esac
+}
+
 # ensure_path_hint <dir> — make dir usable on PATH without sudo: fix the
 # current process immediately, then persist the export in the user's own
 # shell profile (their file, their permissions — never /etc, never root).
@@ -7841,7 +11277,28 @@ ensure_path_hint() {
         # sourced it (covered by the export above).
         return 0
     fi
-    if { printf '\n%s\nexport PATH="%s:$PATH"\n' "$_eph_marker" "$1" >> "$_eph_profile"; } 2>/dev/null; then
+    # Ubuntu's and Debian's ~/.bashrc stop early for a non-interactive shell
+    # (`case $- in *i*) ;; *) return;; esac`, or `[ -z "$PS1" ] && return`), and
+    # a non-interactive `ssh box exakit status` is exactly that shell: a line
+    # appended at the end never ran there (audit LNX-14). In such a file the two
+    # lines go at the top instead, above the early return; written with cat so
+    # the file keeps its owner, mode and any symlink.
+    _eph_top=0
+    if [ "$(basename "$_eph_profile")" = ".bashrc" ] && [ -f "$_eph_profile" ] && \
+        grep -Eq '^[[:space:]]*case[[:space:]]+\$-[[:space:]]+in|^[[:space:]]*\[[[:space:]]+-z[[:space:]]+"?\$PS1"?[[:space:]]*\][[:space:]]*&&[[:space:]]*return' "$_eph_profile"; then
+        _eph_top=1
+    fi
+    if [ "$_eph_top" = 1 ]; then
+        _eph_tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-profile.XXXXXX" 2>/dev/null)" && \
+            { printf '%s\nexport PATH="%s:$PATH"\n\n' "$_eph_marker" "$1"; cat "$_eph_profile"; } > "$_eph_tmp" 2>/dev/null && \
+            cat "$_eph_tmp" > "$_eph_profile" 2>/dev/null
+        _eph_rc=$?
+        rm -f "$_eph_tmp" 2>/dev/null
+    else
+        { printf '\n%s\nexport PATH="%s:$PATH"\n' "$_eph_marker" "$1" >> "$_eph_profile"; } 2>/dev/null
+        _eph_rc=$?
+    fi
+    if [ "$_eph_rc" -eq 0 ]; then
         ok "Added $1 to your PATH in $_eph_profile - new terminals pick it up. To undo, delete the two lines marked \"Added by the Exasol Personal Local Starter Kit\"; EXAKIT_NO_PROFILE_EDIT=1 skips this edit."
     else
         warn "$1 is not on your PATH and $_eph_profile is not writable. Add this to your shell profile:"
@@ -7904,7 +11361,15 @@ exakit_repo_root() {
 # hardcoded list here would quietly take that away, so tests/skills.sh asserts
 # no skill name is ever hardcoded in this file.
 
-EXAKIT_SKILL_ROOTS="${EXAKIT_SKILL_ROOTS:-$HOME/.claude/skills $HOME/.agents/skills}"
+# Claude Code reads ~/.claude/skills. Codex, Cursor, GitHub Copilot, Gemini CLI
+# and OpenCode read ~/.agents/skills (Cursor and OpenCode read both). Continue
+# reads only ~/.continue/skills: placed there when Continue is on this machine,
+# so the kit does not create a Continue folder for someone who has none. Claude
+# Desktop and claude.ai read no folder: a skill reaches them as an uploaded ZIP.
+if [ -z "${EXAKIT_SKILL_ROOTS:-}" ]; then
+    EXAKIT_SKILL_ROOTS="$HOME/.claude/skills $HOME/.agents/skills"
+    [ -d "$HOME/.continue" ] && EXAKIT_SKILL_ROOTS="$EXAKIT_SKILL_ROOTS $HOME/.continue/skills"
+fi
 
 # exakit_skills_dir — the kit's skills/ source directory.
 exakit_skills_dir() {
@@ -7918,12 +11383,21 @@ exakit_skills_dir() {
 # keys the SKILL.md standard defines (name, description), so a real YAML parser
 # would be a dependency bought for nothing.
 exakit_skill_field() {
-    awk -v want="$2" '
+    # A YAML-quoted value (the skills copied from the components quote theirs)
+    # is read without its quotes. The single quote comes in as q: this program
+    # is itself single-quoted. Twin: Get-ExakitSkillField.
+    awk -v want="$2" -v q="'" '
         NR == 1 { if ($0 != "---") exit; next }
         $0 == "---" { exit }
         {
             key = want ": "
-            if (index($0, key) == 1) { print substr($0, length(key) + 1); exit }
+            if (index($0, key) == 1) {
+                v = substr($0, length(key) + 1)
+                first = substr(v, 1, 1); last = substr(v, length(v), 1)
+                if (length(v) >= 2 && first == last && (first == "\"" || first == q))
+                    v = substr(v, 2, length(v) - 2)
+                print v; exit
+            }
         }
     ' "$1" 2>/dev/null
 }
@@ -7941,6 +11415,33 @@ exakit_skill_field() {
 # skill.
 exakit_skill_addon() {
     exakit_skill_field "$1" addon
+}
+
+# exakit_skill_persona <skill-md> — the persona a skill belongs to, or empty.
+# Declared like an add-on ("persona: <id>"): the skill is placed on a
+# kit that has that persona, and on one that gains it with `exakit persona add`.
+exakit_skill_persona() {
+    exakit_skill_field "$1" persona
+}
+
+# _exakit_skill_persona_open <skill-md> — true when the skill needs no persona,
+# or this kit has the one it names (persona.id is a comma-separated list).
+_exakit_skill_persona_open() {
+    _spo_want="$(exakit_skill_persona "$1")"
+    [ -n "$_spo_want" ] || return 0
+    case ",$(manifest_get persona.id 2>/dev/null || true)," in
+        *",$_spo_want,"*) return 0 ;;
+    esac
+    return 1
+}
+
+# _exakit_skill_gating_persona <skill-name> — the persona that gates this skill
+# and is NOT on the kit; empty when the skill is not gated, or the gate is open.
+_exakit_skill_gating_persona() {
+    _sgp_dir="$(exakit_skills_dir 2>/dev/null)" || return 0
+    [ -f "$_sgp_dir/$1/SKILL.md" ] || return 0
+    _exakit_skill_persona_open "$_sgp_dir/$1/SKILL.md" && return 0
+    exakit_skill_persona "$_sgp_dir/$1/SKILL.md"
 }
 
 # _exakit_skill_gating_addon <skill-name> — the add-on that gates this skill
@@ -7970,25 +11471,164 @@ exakit_skills_for_addon() {
 # installed: a skill for something the reader does not have is a set of triggers
 # an agent can match on for a tool that is not there.
 _exakit_skill_wanted() {
+    _exakit_skill_persona_open "$1" || return 1
     _skw_owner="$(exakit_skill_addon "$1")"
     [ -n "$_skw_owner" ] || return 0
     exakit_marketplace_addon_installed "$_skw_owner" 2>/dev/null
 }
 
-# _exakit_skill_place <src-dir> <name> — copy one skill into every discovery
-# root, replacing whatever is there.
-_exakit_skill_place() {
-    for _skp_root in $EXAKIT_SKILL_ROOTS; do
-        rm -rf "$_skp_root/$2"
-        mkdir -p "$_skp_root/$2"
-        cp -R "$1". "$_skp_root/$2/"
+# exakit_install_persona_skills — place the skills of the personas this kit now
+# has. The installer places skills before it asks which persona the machine is
+# for, so a persona's skill is placed once more after the answer, and again when
+# `exakit persona add` brings one. Quiet: one log line per skill placed.
+exakit_install_persona_skills() {
+    _ips_dir="$(exakit_skills_dir 2>/dev/null)" || return 0
+    unset _EXAKIT_SKR_MEMO
+    _ips_n=0
+    for _ips_path in "$_ips_dir"/*/; do
+        [ -f "$_ips_path/SKILL.md" ] || continue
+        [ -n "$(exakit_skill_persona "$_ips_path/SKILL.md")" ] || continue
+        _exakit_skill_wanted "$_ips_path/SKILL.md" || continue
+        _ips_name="$(basename "$_ips_path")"
+        _exakit_skill_place "$_ips_path" "$_ips_name" || continue
+        _exakit_log_file "OK    Installed skill: $_ips_name (with its persona)"
+        _ips_n=$((_ips_n + 1))
+    done
+    [ "$_ips_n" -gt 0 ] || return 0
+    _exakit_skills_record_installed
+    return 0
+}
+
+# Every skill folder the kit places carries this file, holding the skill-set
+# version it came from. It is the kit's proof of ownership: the discovery roots
+# are shared with skills the user keeps under names of their own choosing, and
+# a folder without it is never replaced, retired or removed. ⇄ twin: the same
+# name in exakit-common.ps1 and marketplace/integration.py.
+EXAKIT_SKILL_MARK=".exakit-owned"
+
+# _exakit_skills_recorded — the names an OLDER kit's components.skills.installed
+# records, one space-separated line; "marked" once a full skills install of this
+# kit has marked every folder it owns (components.skills.marked), after which an
+# unmarked folder is never the kit's. Read once per entry point (each one unsets
+# the memo).
+_exakit_skills_recorded() {
+    if [ -z "${_EXAKIT_SKR_MEMO+set}" ]; then
+        if [ "$(manifest_get components.skills.marked 2>/dev/null || true)" = "true" ]; then
+            _EXAKIT_SKR_MEMO="marked"
+        else
+            _EXAKIT_SKR_MEMO=" $(manifest_get components.skills.installed 2>/dev/null | tr -d '[]" ' | tr ',' ' ') "
+        fi
+    fi
+    printf '%s\n' "$_EXAKIT_SKR_MEMO"
+}
+
+# _exakit_skill_earlier_copy <root> <name> — 0 when <root>/<name> is an add-on
+# skill an earlier kit placed, without the mark: its add-on is installed and the
+# kit's, and the folder holds only SKILL.md, byte for byte (carriage returns
+# aside) one an earlier kit shipped for this skill
+# (marketplace/earlier-skill-copies.txt). Kit 0.2.5 placed these unmarked and,
+# on Windows, recorded none of them, so an update kept the kit's own dash-server
+# skill as the user's. Any other unmarked folder stays the user's.
+# ⇄ twins: Test-ExakitSkillEarlierCopy (exakit-common.ps1), _earlier_copy
+# (marketplace/integration.py).
+_exakit_skill_earlier_copy() {
+    _sec_src="$(exakit_skills_dir 2>/dev/null)/$2/SKILL.md"
+    [ -f "$_sec_src" ] || return 1
+    _sec_owner="$(exakit_skill_addon "$_sec_src" 2>/dev/null || true)"
+    [ -n "$_sec_owner" ] || return 1
+    [ "$(ls -A "$1/$2" 2>/dev/null)" = "SKILL.md" ] || return 1
+    _sec_list="$(_exakit_marketplace_root 2>/dev/null)/marketplace/earlier-skill-copies.txt"
+    [ -f "$_sec_list" ] || return 1
+    if command -v shasum >/dev/null 2>&1; then
+        _sec_sum="$(tr -d '\r' < "$1/$2/SKILL.md" | shasum -a 256 | awk '{print $1}')"
+    else
+        _sec_sum="$(tr -d '\r' < "$1/$2/SKILL.md" | sha256sum | awk '{print $1}')"
+    fi
+    grep -qx "$2 $_sec_sum" "$_sec_list" || return 1
+    exakit_marketplace_addon_installed "$_sec_owner" 2>/dev/null || return 1
+    exakit_component_is_managed "$_sec_owner" 2>/dev/null
+}
+
+# _exakit_skill_is_kits <root> <name> — 0 when <root>/<name> is the kit's to
+# replace or remove: it carries the mark, or it is a copy an earlier kit placed
+# before there was a mark (0.2.5 and older). Such a copy is adopted only when it
+# is byte for byte the kit's skill of that name, or when the kit's record names
+# it AND it is not an add-on's skill whose add-on is missing. Kit 0.2.5 replaced
+# every folder of a skill it placed on each install (all but those add-on
+# skills), so a recorded folder of such a name is the kit's copy. Its record
+# also listed any folder of a kit name it found, so a user's own folder under
+# the name of an add-on skill the kit held back is not adopted. Only until the
+# first full skills install of this kit has run: from then on every folder the
+# kit owns carries the mark, and the record lists names, not folders.
+_exakit_skill_is_kits() {
+    [ -e "$1/$2/$EXAKIT_SKILL_MARK" ] && return 0
+    # Decided before an add-on's own uninstall dropped its receipt (see
+    # _exakit_skills_decide_kits): its earlier copies no longer pass the
+    # check below once it is gone.
+    case "
+${_EXAKIT_SKILL_KITS:-}
+" in *"
+$1/$2
+"*) return 0 ;; esac
+    _exakit_skill_earlier_copy "$1" "$2" && return 0
+    [ "$(_exakit_skills_recorded)" = marked ] && return 1
+    _sik_src="$(exakit_skills_dir 2>/dev/null)/$2"
+    [ -f "$_sik_src/SKILL.md" ] || return 1
+    diff -rq "$_sik_src" "$1/$2" >/dev/null 2>&1 && return 0
+    case "$(_exakit_skills_recorded)" in
+        *" $2 "*) [ -z "$(_exakit_skill_gating_addon "$2")" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+# _exakit_skills_decide_kits <addon-id>... — decide NOW which folders of these
+# add-ons' skills are the kit's, and keep the answer in _EXAKIT_SKILL_KITS for
+# the removal after the add-ons' own uninstall. That uninstall drops the
+# receipt, and an unmarked copy an earlier kit placed (0.2.5) is the kit's only
+# while its add-on is installed: decided afterwards, the folder the --dry-run
+# listed was kept. ⇄ twin: Save-ExakitAddonSkillKits (exakit-common.ps1).
+_exakit_skills_decide_kits() {
+    unset _EXAKIT_SKR_MEMO
+    _EXAKIT_SKILL_KITS=""
+    for _sdk_id in "$@"; do
+        for _sdk_name in $(exakit_skills_for_addon "$_sdk_id" 2>/dev/null); do
+            for _sdk_root in $EXAKIT_SKILL_ROOTS; do
+                [ -e "$_sdk_root/$_sdk_name" ] || continue
+                _exakit_skill_is_kits "$_sdk_root" "$_sdk_name" || continue
+                _EXAKIT_SKILL_KITS="$_EXAKIT_SKILL_KITS
+$_sdk_root/$_sdk_name"
+            done
+        done
     done
 }
 
-# _exakit_skill_unplace <name> — take one skill back out of every root.
+# _exakit_skill_place <src-dir> <name> — copy one skill into every discovery
+# root where the folder is absent or the kit's, and mark it. A folder of that
+# name the kit did not place is the user's: kept, and said in one line. Fails
+# when the skill was placed in no root.
+_exakit_skill_place() {
+    _skp_version="$(exakit_skills_local_version 2>/dev/null || exakit_versions_value components.skills.version 2>/dev/null || printf 'unknown')"
+    _skp_any=1
+    for _skp_root in $EXAKIT_SKILL_ROOTS; do
+        if [ -e "$_skp_root/$2" ] && ! _exakit_skill_is_kits "$_skp_root" "$2"; then
+            warn "Kept your own skill folder $(ui_tilde "$_skp_root/$2") (the kit did not place it, so it did not replace it)."
+            continue
+        fi
+        rm -rf "$_skp_root/$2"
+        mkdir -p "$_skp_root/$2"
+        cp -R "$1". "$_skp_root/$2/"
+        printf '%s\n' "$_skp_version" > "$_skp_root/$2/$EXAKIT_SKILL_MARK"
+        _skp_any=0
+    done
+    return "$_skp_any"
+}
+
+# _exakit_skill_unplace <name> — take one skill back out of every root where
+# the folder is the kit's.
 _exakit_skill_unplace() {
     for _sku_root in $EXAKIT_SKILL_ROOTS; do
         [ -e "$_sku_root/$1" ] || continue
+        _exakit_skill_is_kits "$_sku_root" "$1" || continue
         rm -rf "$_sku_root/$1"
     done
 }
@@ -8007,7 +11647,14 @@ _exakit_skills_record_installed() {
     for _sri_path in "$_sri_dir"/*/; do
         [ -f "$_sri_path/SKILL.md" ] || continue
         _sri_name="$(basename "$_sri_path")"
-        [ "$(exakit_skill_state "$_sri_name")" = "available" ] && continue
+        # The kit's folders only (its mark, or an older kit's copy it has not
+        # replaced yet): a folder of the same name the user keeps is theirs,
+        # and recording it made the uninstall delete it.
+        _sri_mine=1
+        for _sri_root in $EXAKIT_SKILL_ROOTS; do
+            [ -e "$_sri_root/$_sri_name" ] && _exakit_skill_is_kits "$_sri_root" "$_sri_name" && _sri_mine=0
+        done
+        [ "$_sri_mine" = 0 ] || continue
         _sri_json="${_sri_json:+$_sri_json,}\"$_sri_name\""
     done
     # The version of the files that were COPIED, read from the kit copy they
@@ -8024,10 +11671,11 @@ _exakit_skills_record_installed() {
 # skill needs no wiring: declaring the owner in its SKILL.md is the whole change.
 exakit_install_addon_skills() {
     _ias_dir="$(exakit_skills_dir)" || return 0
+    unset _EXAKIT_SKR_MEMO
     _ias_n=0
     for _ias_name in $(exakit_skills_for_addon "$1"); do
         [ -f "$_ias_dir/$_ias_name/SKILL.md" ] || continue
-        _exakit_skill_place "$_ias_dir/$_ias_name/" "$_ias_name"
+        _exakit_skill_place "$_ias_dir/$_ias_name/" "$_ias_name" || continue
         _exakit_log_file "OK    Installed skill: $_ias_name (with $1)"
         _ias_n=$((_ias_n + 1))
     done
@@ -8040,6 +11688,7 @@ exakit_install_addon_skills() {
 # behind after its add-on is gone still advertises triggers for a tool that is
 # no longer on the machine, which is worse than never having shipped it.
 exakit_remove_addon_skills() {
+    unset _EXAKIT_SKR_MEMO
     _ras_n=0
     for _ras_name in $(exakit_skills_for_addon "$1"); do
         _exakit_skill_unplace "$_ras_name"
@@ -8109,6 +11758,27 @@ exakit_skill_state() {
     fi
 }
 
+# exakit_skills_unplaced — true when a skill the kit placed (the record,
+# components.skills.installed) is missing from one of the discovery roots this
+# kit reads. A kit before 0.3.0 placed none in ~/.continue/skills, and its own
+# update copied the new set with ITS roots and recorded the new version, so the
+# version alone said "current" while `exakit skills` said "partial" for every
+# skill. `exakit update` places the set again then. ⇄ twin:
+# Test-ExakitSkillsUnplaced.
+exakit_skills_unplaced() {
+    _sun_dir="$(exakit_skills_dir 2>/dev/null)" || return 1
+    for _sun_name in $(manifest_get components.skills.installed 2>/dev/null | tr -d '[]" ' | tr ',' ' '); do
+        [ -f "$_sun_dir/$_sun_name/SKILL.md" ] || continue
+        # Only a skill this install places (not one waiting for its add-on or
+        # persona), or the check would ask for it on every update.
+        _exakit_skill_wanted "$_sun_dir/$_sun_name/SKILL.md" || continue
+        for _sun_root in $EXAKIT_SKILL_ROOTS; do
+            [ -f "$_sun_root/$_sun_name/SKILL.md" ] || return 0
+        done
+    done
+    return 1
+}
+
 # exakit_skills_summary_line <installed> <with-addons> <not-placed> <total> —
 # the one sentence every skill count is read against, each number named.
 # Zero buckets are left out rather than printed, so a healthy machine reads
@@ -8120,6 +11790,11 @@ exakit_skills_summary_line() {
         _ssl="$_ssl, 1 arrives with its add-on"
     elif [ "$2" -gt 1 ]; then
         _ssl="$_ssl, $2 arrive with their add-ons"
+    fi
+    if [ "${5:-0}" -eq 1 ]; then
+        _ssl="$_ssl, 1 arrives with its persona"
+    elif [ "${5:-0}" -gt 1 ]; then
+        _ssl="$_ssl, $5 arrive with their personas"
     fi
     [ "$3" -gt 0 ] && _ssl="$_ssl, $3 not placed"
     printf '%s, %s in this kit\n' "$_ssl" "$4"
@@ -8133,8 +11808,9 @@ exakit_skills_summary_line() {
 # care either way. Without a Python the compact document goes out as is,
 # which is the same valid JSON. ⇄ twin: ConvertTo-Json already indents.
 exakit_json_pretty() {
-    if exakit_can_run_python; then
-        if printf '%s' "$1" | run_python -c '
+    # Any Python 3 lays JSON out: a refusal must never download one to do it.
+    if exakit_can_run_python_any; then
+        if printf '%s' "$1" | run_python_any -c '
 import json, sys
 print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))
 ' 2>/dev/null; then
@@ -8172,8 +11848,10 @@ _exakit_skills_json_compact() {
     # tells parsers apart by its absence here.
     _skj_installed=0
     _skj_gated=0
+    _skj_persona=0
     _skj_missing=0
     _skj_total=0
+    _skj_states=""
     printf '{"skills":['
     while IFS='|' read -r _skl_id _skl_sum; do
         [ -n "$_skl_id" ] || continue
@@ -8182,6 +11860,7 @@ _exakit_skills_json_compact() {
         _skj_total=$((_skj_total + 1))
         _skl_state="$(exakit_skill_state "$_skl_id")"
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
+        _skl_persona="$(_exakit_skill_gating_persona "$_skl_id")"
         # An add-on's skill is never "available" to skills-install — that
         # command deliberately skips it, so calling it available
         # prescribed a command that cannot change it. It arrives with its
@@ -8191,10 +11870,19 @@ _exakit_skills_json_compact() {
         # prescribe that command - installing the add-on places it whole.
         if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skj_gated=$((_skj_gated + 1))
+            _skj_states="$_skj_states needs-addon"
             printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
                 "$_skl_id" "$_skl_owner" "$_skl_owner" \
                 "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        elif [ "$_skl_state" != "installed" ] && [ -n "$_skl_persona" ]; then
+            # A persona's skill arrives with its persona, the same way.
+            _skj_persona=$((_skj_persona + 1))
+            _skj_states="$_skj_states needs-persona"
+            printf '{"name":"%s","state":"needs-persona","persona":"%s","remedy":"exakit persona add %s","summary":"%s"}' \
+                "$_skl_id" "$_skl_persona" "$_skl_persona" \
+                "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         else
+            _skj_states="$_skj_states $_skl_state"
             if [ "$_skl_state" = "installed" ]; then
                 _skj_installed=$((_skj_installed + 1))
             else
@@ -8219,8 +11907,14 @@ EXAKIT_SKL_EOF
     elif [ "$_skj_missing" -gt 0 ]; then
         _skj_status="missing"; _skj_next='"exakit skills-install"'
     fi
-    printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
-        "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" \
+    # by_state counts the rows by the very token each row's "state" carries
+    # (audit AGT-16): counts groups them for the verdict, so its names differ
+    # (needs_addon, missing), and a parser matching a row's state against a
+    # count found no key for "available" or "needs-addon".
+    _skj_by="$(printf '%s\n' $_skj_states | sort | uniq -c | \
+        awk 'NF == 2 { printf "%s\"%s\":%d", (n++ ? "," : ""), $2, $1 }')"
+    printf '],"counts":{"installed":%d,"needs_addon":%d,"needs_persona":%d,"missing":%d,"total":%d},"by_state":{%s},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+        "$_skj_installed" "$_skj_gated" "$_skj_persona" "$_skj_missing" "$_skj_total" "$_skj_by" \
         "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
         "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
         "$_skj_status" "$_skj_next"
@@ -8242,6 +11936,7 @@ exakit_skills_list() {
     _skl_pending=0
     _skl_installed=0
     _skl_gated=0
+    _skl_persona_n=0
     printf '\n'
     ui_panel_begin "Exasol skills"
     while IFS='|' read -r _skl_id _skl_sum; do
@@ -8252,9 +11947,13 @@ exakit_skills_list() {
         # it. Say whose it is instead, and leave it out of the pending count
         # the advice below is computed from. Same three buckets as --json.
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
+        _skl_persona="$(_exakit_skill_gating_persona "$_skl_id")"
         if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skl_state="with $_skl_owner"
             _skl_gated=$((_skl_gated + 1))
+        elif [ "$_skl_state" != "installed" ] && [ -n "$_skl_persona" ]; then
+            _skl_state="with $_skl_persona"
+            _skl_persona_n=$((_skl_persona_n + 1))
         elif [ "$_skl_state" = "installed" ]; then
             _skl_installed=$((_skl_installed + 1))
         else
@@ -8276,7 +11975,7 @@ EXAKIT_SKL_EOF
     ui_panel_line ""
     # What the rows add up to, every number labelled: the table alone left a
     # reader counting rows against the installer's sentence.
-    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count")"
+    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count" "$_skl_persona_n")"
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -8328,6 +12027,8 @@ exakit_install_skills() {
 
     _installed=0
     _isk_gated=0
+    _isk_kept=0
+    unset _EXAKIT_SKR_MEMO
     for _skill_dir in "$_skills_src"/*/; do
         [ -f "$_skill_dir/SKILL.md" ] || continue
         # Frontmatter that does not parse is skipped HERE as well as in the
@@ -8347,7 +12048,9 @@ exakit_install_skills() {
         # rest of the set is instead of leaving the reader to notice a gap.
         _exakit_skill_wanted "$_skill_dir/SKILL.md" || { _isk_gated=$((_isk_gated + 1)); continue; }
         _name="$(basename "$_skill_dir")"
-        _exakit_skill_place "$_skill_dir" "$_name"
+        # A folder of this name the user keeps is left alone (one line each);
+        # the skill counts as placed when it reached at least one root.
+        _exakit_skill_place "$_skill_dir" "$_name" || { _isk_kept=$((_isk_kept + 1)); continue; }
         # The names go to the logfile, not the screen: nine ticked lines say
         # nothing the count does not, and `exakit skills` lists them any time.
         _exakit_log_file "OK    Installed skill: $_name"
@@ -8363,7 +12066,7 @@ exakit_install_skills() {
     # gated the sentence is unchanged. ⇄ twin: Install-ExakitSkills.
     if [ "$_isk_gated" -gt 0 ]; then
         if [ "$_isk_gated" -eq 1 ]; then _isk_arrive="1 arrives with its add-on"; else _isk_arrive="$_isk_gated arrive with their add-ons"; fi
-        ok "Installed $_installed of $((_installed + _isk_gated)) AI skills ($_isk_arrive) for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+        ok "Installed $_installed of $((_installed + _isk_gated + _isk_kept)) AI skills ($_isk_arrive) for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
     else
         ok "Installed $_installed AI skill$([ "$_installed" = 1 ] || printf 's') for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
     fi
@@ -8378,9 +12081,16 @@ exakit_install_skills() {
     _isk_retired=0
     for _isk_name in $_isk_prev; do
         [ -n "$_isk_name" ] || continue
-        [ -f "$_skills_src/$_isk_name/SKILL.md" ] && continue
+        # Kept: still in the set and still wanted here. A skill the set still
+        # carries but whose gate is now closed - a persona this kit was never set
+        # up as (a persona-gated skill), an add-on not installed - goes
+        # too: placed by an older kit, it kept steering agents to commands this
+        # kit no longer offers.
+        if [ -f "$_skills_src/$_isk_name/SKILL.md" ] && _exakit_skill_wanted "$_skills_src/$_isk_name/SKILL.md"; then
+            continue
+        fi
         _exakit_skill_unplace "$_isk_name"
-        _exakit_log_file "OK    Retired skill: $_isk_name (no longer in the kit's skill set)"
+        _exakit_log_file "OK    Retired skill: $_isk_name (no longer in the kit's skill set, or not for this kit)"
         _isk_retired=$((_isk_retired + 1))
     done
     [ "$_isk_retired" -gt 0 ] && \
@@ -8392,6 +12102,9 @@ exakit_install_skills() {
     # skills the user installed themselves, which the kit must never touch),
     # and whether the installed copies have gone stale behind a kit update.
     _exakit_skills_record_installed
+    # Every folder the kit owns now carries its mark (an older kit's copies were
+    # adopted above or retired): from here on only the mark makes one the kit's.
+    if [ -f "$EXAKIT_MANIFEST" ]; then manifest_set components.skills.marked true; fi
 
     exakit_report_readonly_allowlist
     info "Restart or reload your AI client to pick them up."
@@ -8412,7 +12125,7 @@ exakit_report_readonly_allowlist() {
         # report that nothing happened. The branch below, where commands really
         # are allowlisted, still says so.
         ADDED\ 0) _exakit_log_file "INFO  Read-only command allowlist already present in ~/.claude/settings.json." ;;
-        ADDED\ *) ok "Read-only exakit commands allowlisted in ~/.claude/settings.json (status, info, version, mcp-doctor, logs, catalog, preflight, guide, mcp-status, skills; uninstall stays gated)." ;;
+        ADDED\ *) ok "Read-only exakit commands allowlisted in ~/.claude/settings.json (status, info, version, mcp-doctor --json, logs, catalog, preflight, guide, mcp-status, skills; uninstall and a repairing mcp-doctor stay gated)." ;;
         SKIP*)    warn "~/.claude/settings.json could not be merged safely ($_skills_applied) — the allowlist in skills/reducing-agent-prompts.md shows what to add by hand." ;;
     esac
     return 0
@@ -8424,29 +12137,58 @@ exakit_report_readonly_allowlist() {
 # nobody hand-applies eliminates zero prompts, so skills-install merges that
 # same allowlist into ~/.claude/settings.json itself.
 #
-# The merge is strictly ADDITIVE and idempotent: existing settings are kept
-# byte for byte, entries already present are not duplicated, nothing is ever
-# removed, and a malformed or unreadable settings file is left alone (warn,
-# not clobber). The list deliberately covers only read-only commands — exapump
-# and SQL execution keep prompting, exactly as the doc explains — plus a deny
-# for uninstall so an agent can never remove the kit unprompted.
+# The merge is ADDITIVE and idempotent: the user's settings and rules stay,
+# entries already present are not duplicated, and a malformed or unreadable
+# settings file is left alone (warn, not clobber). The list covers only commands
+# that change nothing — exapump and SQL execution keep prompting, exactly as the
+# doc explains, and so does a plain `exakit mcp-doctor`, which repairs; only its
+# report, `mcp-doctor --json`, is allowed — plus a deny for uninstall so an agent
+# can never remove the kit unprompted. The MCP tools are pre-approved only for
+# the entry the kit recorded for Claude Code (`mcp__exasol`, or
+# `mcp__exasol-starter-kit` beside a user's own `exasol`), never for a server
+# that is the user's. The rules the kit ADDED are recorded in the manifest
+# (components.skills.claude_rules): a rule the kit no longer wants is retired
+# only when the kit added it, and uninstall removes only those. The file keeps
+# its mode (0600 when the kit creates it).
 exakit_apply_readonly_allowlist() {
     exakit_can_run_python || return 0
-    _ral_file="$HOME/.claude/settings.json"
     mkdir -p "$HOME/.claude" 2>/dev/null || return 0
-    run_python - "$_ral_file" <<'EXAKIT_RAL_PY'
-import json, os, sys
+    _exakit_readonly_allowlist apply
+}
 
-path = sys.argv[1]
+# exakit_remove_readonly_allowlist - the mirror of exakit_apply_readonly_allowlist:
+# remove the entries the kit recorded as its own, nothing else. Uninstall left
+# them behind - 42 allow rules and 3 deny rules for a command that no longer
+# existed - and then removed rules the user had written before the kit, by
+# string match. Rules for commands earlier kits had are swept too. Best-effort;
+# a malformed file is left alone.
+exakit_remove_readonly_allowlist() {
+    exakit_can_run_python || return 0
+    [ -f "$HOME/.claude/settings.json" ] || { printf 'REMOVED 0\n'; return 0; }
+    _exakit_readonly_allowlist remove
+}
+
+# _exakit_readonly_allowlist <apply|remove> - the one program behind both, so the
+# list the kit adds and the list it takes out can never disagree. Prints
+# "ADDED <n>" / "REMOVED <n>" / "SKIP <why>" and records the kit's own rules.
+# Twin of Set-ExakitReadonlyAllowlist / Remove-ExakitReadonlyAllowlist.
+_exakit_readonly_allowlist() {
+    _ral_file="$HOME/.claude/settings.json"
+    _ral_rec="$(mktemp "${TMPDIR:-/tmp}/exakit-claude-rules.XXXXXX" 2>/dev/null)" || return 0
+    run_python - "$_ral_file" "$1" "${EXAKIT_MANIFEST:-}" "$_ral_rec" <<'EXAKIT_RAL_PY'
+import json, os, re, sys
+
+path, mode, manifest_path, record_out = sys.argv[1:5]
 
 # The kit's read-only command surface. Leaving any of these out is what kept the
 # friction real: an agent following AGENTS.md is told to discover commands with
 # `exakit catalog` and to check its footing with `version` / `mcp-status`,
 # and every one of those asked for approval while changing nothing. `exapump sql`
 # and every mutating command stay absent on purpose — that gate is the trust
-# model.
+# model. `mcp-doctor` is not here: without --json it repairs what it finds
+# (client configs, the read-only login, the MCP server beside the database).
 READONLY = [
-    "status", "info", "version", "mcp-doctor", "logs", "catalog", "preflight",
+    "status", "info", "version", "logs", "catalog", "preflight",
     "guide", "mcp-status", "help",
 ]
 
@@ -8468,20 +12210,60 @@ for prefix in PREFIXES:
     # so the listing is allowed and the install still asks.
     ALLOW.append("Bash(%s skills)" % prefix)
     ALLOW.append("Bash(%s skills --json)" % prefix)
-ALLOW.append("mcp__exasol")
+    # The same for the TLS pin: showing it reads, `tls-pin --accept` re-pins
+    # (trusts whatever answers on the port) and must keep asking.
+    ALLOW.append("Bash(%s tls-pin)" % prefix)
+    ALLOW.append("Bash(%s tls-pin --json)" % prefix)
+    # And for the MCP doctor: the report only; the plain command repairs.
+    ALLOW.append("Bash(%s mcp-doctor --json)" % prefix)
 
 # The deny needs every spelling too, for the opposite reason: a rule that only
 # names the bare form is trivially sidestepped by the absolute path the docs
 # recommend.
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
 
-import re
+# What kits before the record wrote (0.2.5): the list above with
+# `mcp-doctor:*` in place of the exact report form, and `mcp__exasol` always.
+OLDER = set(ALLOW + DENY + ["mcp__exasol"] + ["Bash(%s mcp-doctor:*)" % prefix for prefix in PREFIXES])
+
 LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
+
+try:
+    with open(manifest_path) as handle:
+        manifest = json.load(handle)
+    manifest = manifest if isinstance(manifest, dict) else {}
+except (OSError, ValueError):
+    manifest = {}
+components = manifest.get("components") if isinstance(manifest.get("components"), dict) else {}
+skills = components.get("skills") if isinstance(components.get("skills"), dict) else {}
+mcp = components.get("mcp_server") if isinstance(components.get("mcp_server"), dict) else {}
+state = mcp.get("managed_state") if isinstance(mcp.get("managed_state"), dict) else {}
+
+# The entry name the kit recorded for its own server in Claude Code, if any.
+entry = None
+for artifact in state.get("artifacts") or []:
+    if not isinstance(artifact, dict) or artifact.get("client") != "claude_code" or artifact.get("removed_at"):
+        continue
+    meta = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    if str(meta.get("server", meta.get("entry_name", "exasol"))) == "exasol":
+        entry = str(meta.get("entry_name", "exasol"))
+if entry and re.match(r"^[A-Za-z0-9_-]+$", entry):
+    ALLOW.append("mcp__" + entry)
+
+recorded = skills.get("claude_rules")
+if isinstance(recorded, list):
+    record = {rule for rule in recorded if isinstance(rule, str)}
+elif skills.get("installed"):
+    # An older kit merged its list here and recorded nothing: its rules are the
+    # ones of its list that are in the file.
+    record = set(OLDER)
+else:
+    record = set()
 
 doc = {}
 if os.path.exists(path):
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             doc = json.load(handle)
     except (ValueError, OSError):
         print("SKIP unreadable")
@@ -8490,96 +12272,63 @@ if os.path.exists(path):
         print("SKIP not-an-object")
         sys.exit(0)
 
-permissions = doc.setdefault("permissions", {})
+permissions = doc.get("permissions", {}) if mode == "remove" else doc.setdefault("permissions", {})
 if not isinstance(permissions, dict):
-    print("SKIP permissions-not-an-object")
+    print("REMOVED 0" if mode == "remove" else "SKIP permissions-not-an-object")
     sys.exit(0)
-added = 0
-for key, wanted in (("allow", ALLOW), ("deny", DENY)):
-    existing = permissions.setdefault(key, [])
-    if not isinstance(existing, list):
-        continue
-    # Rules for commands that no longer exist were left behind by earlier kits;
-    # drop them on the way through and count that as a change. Twin of the
-    # Test-ExakitLegacyAllowlistRule filter in Set-ExakitReadonlyAllowlist.
-    stale = [entry for entry in existing if isinstance(entry, str) and LEGACY.match(entry)]
-    for entry in stale:
-        existing.remove(entry)
-        added += 1
-    for entry in wanted:
-        if entry not in existing:
-            existing.append(entry)
-            added += 1
-if added:
-    tmp = path + ".exakit-tmp"
-    with open(tmp, "w") as handle:
-        json.dump(doc, handle, indent=2)
-        handle.write("\n")
-    os.replace(tmp, path)
-print("ADDED %d" % added)
-EXAKIT_RAL_PY
-}
 
-# exakit_remove_readonly_allowlist - the exact mirror of exakit_apply_readonly_allowlist:
-# remove precisely the entries the kit added, nothing else. Uninstall left them
-# behind - 42 allow rules and 3 deny rules for a command that no longer existed.
-# Entries the user added themselves are not the kit's to touch, so only the
-# kit's own spellings go. Best-effort; a malformed file is left alone.
-exakit_remove_readonly_allowlist() {
-    exakit_can_run_python || return 0
-    _rral_file="$HOME/.claude/settings.json"
-    [ -f "$_rral_file" ] || { printf 'REMOVED 0\n'; return 0; }
-    run_python - "$_rral_file" <<'EXAKIT_RRAL_PY'
-import json, os, sys
-path = sys.argv[1]
-READONLY = [
-    "status", "info", "version", "mcp-doctor", "logs", "catalog", "preflight",
-    "guide", "mcp-status", "help",
-]
-PREFIXES = ["exakit", "~/.local/bin/exakit", "$HOME/.local/bin/exakit"]
-ALLOW = []
-for prefix in PREFIXES:
-    for command in READONLY:
-        ALLOW.append("Bash(%s %s:*)" % (prefix, command))
-    ALLOW.append("Bash(%s skills)" % prefix)
-    ALLOW.append("Bash(%s skills --json)" % prefix)
-ALLOW.append("mcp__exasol")
-DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
-# Rules earlier kits wrote for commands this kit no longer has (`update-check`
-# merged into `version`, `mcp-validate` into `mcp-doctor`), in every spelling
-# they were written in. The current lists above never name them, so uninstall
-# printed "permission rules removed" and left all three mcp-validate rules
-# behind. Same pattern as Test-ExakitLegacyAllowlistRule in exakit-common.ps1.
-import re
-LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
-def is_ours(entry, ours):
-    return entry in ours or (isinstance(entry, str) and LEGACY.match(entry) is not None)
-try:
-    with open(path) as handle:
-        doc = json.load(handle)
-except (ValueError, OSError):
-    print("SKIP unreadable")
-    sys.exit(0)
-permissions = doc.get("permissions") if isinstance(doc, dict) else None
-if not isinstance(permissions, dict):
-    print("REMOVED 0")
-    sys.exit(0)
-removed = 0
-for key, ours in (("allow", ALLOW), ("deny", DENY)):
-    existing = permissions.get(key)
+changed = 0
+kept_record = set()
+for key, wanted in (("allow", ALLOW), ("deny", DENY)):
+    existing = permissions.get(key) if mode == "remove" else permissions.setdefault(key, [])
     if not isinstance(existing, list):
         continue
-    kept = [entry for entry in existing if not is_ours(entry, ours)]
-    removed += len(existing) - len(kept)
-    permissions[key] = kept
-if removed:
+    present = {entry for entry in existing if isinstance(entry, str)}
+    # Rules for commands that no longer exist were left behind by earlier kits,
+    # and rules the kit added that it no longer wants (or all of them, on
+    # removal): out, and counted as a change. A rule the user wrote is never
+    # in the record, so it stays. Twin of Set-ExakitReadonlyAllowlist.
+    def drop(entry):
+        if not isinstance(entry, str):
+            return False
+        if LEGACY.match(entry):
+            return True
+        return entry in record and (mode == "remove" or entry not in wanted)
+    survivors = [entry for entry in existing if not drop(entry)]
+    changed += len(existing) - len(survivors)
+    kept_record |= {entry for entry in survivors if isinstance(entry, str) and entry in record}
+    if mode != "remove":
+        for entry in wanted:
+            if entry not in survivors:
+                survivors.append(entry)
+                kept_record.add(entry)
+                changed += 1
+    permissions[key] = survivors
+
+if changed:
+    # The file keeps its own mode (it can hold tokens in `env`); a new one is
+    # owner-only. A temp file at the umask and os.replace left it 0644.
+    try:
+        file_mode = os.stat(path).st_mode & 0o7777
+    except OSError:
+        file_mode = 0o600
     tmp = path + ".exakit-tmp"
-    with open(tmp, "w") as handle:
-        json.dump(doc, handle, indent=2)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
+    os.chmod(tmp, file_mode)
     os.replace(tmp, path)
-print("REMOVED %d" % removed)
-EXAKIT_RRAL_PY
+with open(record_out, "w") as handle:
+    json.dump(sorted(kept_record), handle)
+print("%s %d" % ("REMOVED" if mode == "remove" else "ADDED", changed))
+EXAKIT_RAL_PY
+    _ral_rc=$?
+    if [ -s "$_ral_rec" ] && [ -f "${EXAKIT_MANIFEST:-}" ]; then
+        manifest_set components.skills.claude_rules "$(cat "$_ral_rec")" >/dev/null 2>&1 || true
+    fi
+    rm -f "$_ral_rec"
+    return "$_ral_rc"
 }
 
 # exakit_maybe_offer_skills_install — after setup, place the skills where CLI
@@ -8643,6 +12392,172 @@ _exakit_parse_runtime_port() {
     printf '%s\n' "${_dsn##*:}"
 }
 
+# ---------------------------------------------------------------------------
+# The database's TLS certificate pin (audit SEC-14)
+# ---------------------------------------------------------------------------
+# The database serves a self-signed certificate, so every kit client used to
+# connect with validation off and no pin: whatever answered TLS on the port
+# first - a port squatter - was handed the SYS password. The kit now records
+# the certificate's fingerprint ONCE, trust on first use, at the moment it has
+# itself just deployed or started its own database (runtime.tls_fingerprint,
+# runtime.tls_fingerprint_at), and every client it builds pins it: the exapump
+# profiles (certificate_fingerprint), pyexasol (dsn host/<fp>:port) and the MCP
+# server's EXA_DSN. Nothing recorded = exactly the old behaviour. A recorded pin
+# is never silently replaced: only a deployment the kit itself just made, or
+# `exakit tls-pin --accept` after the user confirms, writes over one.
+#
+# The live value comes from setup/lib/tls_pin.py, the one implementation both
+# shells call. Twin: the "TLS certificate pin" section of exakit-common.ps1.
+EXAKIT_TLS_PIN_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/tls_pin.py"
+
+# exakit_tls_recorded_fingerprint — the recorded pin (lowercase hex SHA-256 of
+# the DER certificate), or nothing and exit 1. A value that is not 64 hex
+# digits is not a pin: the clients would refuse every connection with it.
+exakit_tls_recorded_fingerprint() {
+    _trf="$(manifest_get runtime.tls_fingerprint 2>/dev/null || true)"
+    case "$_trf" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#_trf}" -eq 64 ] || return 1
+    printf '%s\n' "$_trf"
+}
+
+# exakit_tls_live_fingerprint <host> <port> [timeout] — what the port serves
+# now; exit 1 (reason in the log) when nothing answers TLS there.
+exakit_tls_live_fingerprint() {
+    [ -f "$EXAKIT_TLS_PIN_PY" ] || return 1
+    exakit_can_run_python_any 2>/dev/null || return 1
+    _tlf_out="$(run_python_any "$EXAKIT_TLS_PIN_PY" fingerprint "$1" "$2" --timeout "${3:-10}" 2>/dev/null)" || {
+        _exakit_log_file "INFO  TLS pin: nothing answered TLS on $1:$2"
+        return 1
+    }
+    printf '%s\n' "$_tlf_out"
+}
+
+# exakit_tls_disk_fingerprint — the fingerprint of the certificate the kit's
+# own deployment keeps on disk (<runtime.deployment_dir>/local/runtime/exa/
+# certificates/fullchain.pem, the directory the database container mounts as
+# /exa), or nothing and exit 1 when it cannot be read.
+exakit_tls_disk_fingerprint() {
+    _tdf_dir="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
+    [ -n "$_tdf_dir" ] || return 1
+    _tdf_pem="$_tdf_dir/local/runtime/exa/certificates/fullchain.pem"
+    [ -f "$_tdf_pem" ] && [ -f "$EXAKIT_TLS_PIN_PY" ] || return 1
+    exakit_can_run_python_any 2>/dev/null || return 1
+    _tdf_out="$(run_python_any "$EXAKIT_TLS_PIN_PY" file-fingerprint "$_tdf_pem" 2>/dev/null)" || return 1
+    case "$_tdf_out" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#_tdf_out}" -eq 64 ] || return 1
+    printf '%s\n' "$_tdf_out"
+}
+
+# exakit_tls_wrong_database <pinned> <live> — exit 0 when the port serves a
+# certificate that is not the pinned one WHILE the deployment's certificate on
+# disk still is: the database answering is not the user's (a container that
+# came up before its /exa mount, on an empty directory, and made a fresh
+# database). Re-pinning would trust that empty database; a restart brings the
+# real one back. Exit 1 otherwise, and whenever the disk cannot be read, so a
+# real redeploy (its certificate on disk changed too) reads as before.
+exakit_tls_wrong_database() {
+    [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] || return 1
+    _twd_disk="$(exakit_tls_disk_fingerprint 2>/dev/null)" || return 1
+    [ "$_twd_disk" = "$1" ]
+}
+
+# exakit_tls_pinned_dsn [dsn] — the DSN every kit-built pyexasol connection and
+# the MCP server use: host/<fp>:port when a pin is recorded, the DSN unchanged
+# otherwise. Defaults to runtime.dsn. (The same composition as tls_pin.py's
+# pinned_dsn; one line, so it is not worth a Python process per connection.)
+exakit_tls_pinned_dsn() {
+    _tpd_dsn="${1:-$(manifest_get runtime.dsn 2>/dev/null || true)}"
+    _tpd_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    if [ -n "$_tpd_fp" ] && [ -n "$_tpd_dsn" ]; then
+        _tpd_host="${_tpd_dsn%:*}"
+        printf '%s/%s:%s\n' "${_tpd_host%%/*}" "$_tpd_fp" "${_tpd_dsn##*:}"
+    else
+        printf '%s\n' "$_tpd_dsn"
+    fi
+}
+
+# exakit_tls_state [timeout] — "<recorded>|<live>" for status and tls-pin. The
+# live half is empty when nothing answers TLS on the port; both are empty
+# with no runtime recorded. Read-only.
+exakit_tls_state() {
+    _tst_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _tst_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    _tst_live=""
+    if [ -n "$_tst_dsn" ]; then
+        _tst_live="$(exakit_tls_live_fingerprint "${_tst_dsn%:*}" "${_tst_dsn##*:}" "${1:-5}" 2>/dev/null || true)"
+    fi
+    printf '%s|%s\n' "$_tst_fp" "$_tst_live"
+}
+
+# exakit_tls_record [--replace] — trust on first use. Reads what the database
+# port serves and records it, ONLY when nothing is recorded yet - or, with
+# --replace, when the kit has itself just deployed a new database (a new
+# deployment is a new certificate). Never fatal, never silent: an unchanged pin
+# is a no-op, a new one is said and logged, and EXAKIT_TLS_PIN_CHANGED=1 tells
+# the caller the clients holding the old value must be rewritten.
+exakit_tls_record() {
+    EXAKIT_TLS_PIN_CHANGED=0
+    _tr_old="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    if [ -n "$_tr_old" ] && [ "${1:-}" != "--replace" ]; then
+        return 0
+    fi
+    _tr_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    [ -n "$_tr_dsn" ] || return 1
+    _tr_live="$(exakit_tls_live_fingerprint "${_tr_dsn%:*}" "${_tr_dsn##*:}" 10)" || {
+        _exakit_log_file "INFO  TLS pin: not recorded - nothing answered TLS on $_tr_dsn"
+        return 1
+    }
+    [ -n "$_tr_live" ] || return 1
+    [ "$_tr_live" = "$_tr_old" ] && return 0
+    manifest_set runtime.tls_fingerprint "$_tr_live"
+    manifest_set runtime.tls_fingerprint_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    EXAKIT_TLS_PIN_CHANGED=1
+    if [ -n "$_tr_old" ]; then
+        _exakit_log_file "INFO  TLS pin: replaced for the new deployment ($_tr_old -> $_tr_live)"
+        info "Pinned the new database's TLS certificate (SHA-256 ${_tr_live:0:16}...)"
+    else
+        _exakit_log_file "INFO  TLS pin: recorded $_tr_live (trust on first use)"
+    fi
+    return 0
+}
+
+# exakit_tls_rewrite_clients [--profile-only] — after a pin was (re)recorded,
+# the clients that hold it are rewritten so they all agree: the kit's exapump
+# profile, and the AI clients' MCP entries through the same refresh `exakit
+# update` uses (the stdio server's EXA_DSN carries the pin; the launcher's
+# sidecar entries hold no DSN). Each half only when it exists; failures say how
+# to finish by hand. --profile-only is for a database the kit has just
+# deployed: its read-only MCP user does not exist yet, so the entries are
+# rewritten by the repair that recreates it (exakit mcp-doctor), not here.
+exakit_tls_rewrite_clients() {
+    _trc_scope="${1:-}"
+    _trc_pw="$(manifest_get runtime.password_file 2>/dev/null || true)"
+    if [ -n "$(manifest_get components.exapump.profile 2>/dev/null || true)" ] && \
+       [ -n "$_trc_pw" ] && [ -f "$_trc_pw" ] && command -v exapump_create_profile >/dev/null 2>&1; then
+        # A subshell: the writer dies on a broken record, and that must not end
+        # the command that merely recorded a pin.
+        ( exapump_create_profile ) || warn "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump"
+    fi
+    [ "$_trc_scope" = "--profile-only" ] && return 0
+    return 0
+}
+
+# exakit_tls_ensure_pinned [--profile-only] — the lazy half of trust on first
+# use, for an install made before the pin existed: the first kit command that
+# already needs the database up (exakit start, mcp-setup, update) records it,
+# and rewrites the clients that hold the old unpinned settings (mcp-setup
+# passes --profile-only: it writes the AI clients itself, right after). Only
+# while the launcher reports ITS deployment running and it answers - the same
+# test that decides whose database is on the port everywhere else. A recorded
+# pin is left alone.
+exakit_tls_ensure_pinned() {
+    exakit_tls_recorded_fingerprint >/dev/null 2>&1 && return 0
+    exakit_runtime_is_running 2>/dev/null || return 0
+    exakit_tls_record || return 0
+    [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients "${1:-}"
+    return 0
+}
+
 _exakit_first_schema() {
     _schemas="$1"
     _old_ifs="$IFS"
@@ -8671,16 +12586,21 @@ _exakit_write_exapump_config() {
     EXAKIT_ADMIN_PASSWORD="$_admin_password"
     EXAKIT_READONLY_PASSWORD="$_readonly_password"
     export EXAKIT_ADMIN_PASSWORD EXAKIT_READONLY_PASSWORD
-    run_python - "$_config_path" "$_host" "$_port" "$_admin_user" "$_readonly_user" "$_schema" <<'PY'
+    # The kit's own database, so its recorded TLS pin (SEC-14): these profiles
+    # carry the SYS password, the one secret a port squatter is after. Empty
+    # without a pin, and then the profiles are exactly what they always were.
+    _wec_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    run_python - "$_config_path" "$_host" "$_port" "$_admin_user" "$_readonly_user" "$_schema" "$_wec_fp" <<'PY'
 import os, sys
 
-config_path, host, port, admin_user, readonly_user, schema = sys.argv[1:]
+config_path, host, port, admin_user, readonly_user, schema, fingerprint = sys.argv[1:]
 admin_password = os.environ["EXAKIT_ADMIN_PASSWORD"]
 readonly_password = os.environ["EXAKIT_READONLY_PASSWORD"]
 
 def toml_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+pin = [f"certificate_fingerprint = {toml_string(fingerprint)}\n"] if fingerprint else []
 doc = [
     "[admin]\n",
     f"host = {toml_string(host)}\n",
@@ -8689,6 +12609,7 @@ doc = [
     f"password = {toml_string(admin_password)}\n",
     "tls = true\n",
     "validate_certificate = false\n",
+    *pin,
     "\n",
     "[mcp_readonly]\n",
     f"host = {toml_string(host)}\n",
@@ -8698,6 +12619,7 @@ doc = [
     f"schema = {toml_string(schema)}\n",
     "tls = true\n",
     "validate_certificate = false\n",
+    *pin,
 ]
 with open(config_path, "w", encoding="utf-8") as handle:
     handle.writelines(doc)
@@ -8714,7 +12636,7 @@ _exakit_run_exapump_sql() {
     _config_path="$1"
     _profile="$2"
     _sql="$3"
-    _bin="$(exakit_exapump_bin)" || die "exapump is required for MCP read-only setup but was not found."
+    _bin="$(exakit_exapump_bin)" || die "$EXAKIT_MCP_NO_EXAPUMP"
     # Feed the SQL over stdin, not as an argv: some of these statements are
     # CREATE/ALTER USER … IDENTIFIED BY <password>, and an argv is visible to any
     # local user via `ps` for the life of the call. stdin keeps it off the
@@ -8737,6 +12659,8 @@ _exakit_exapump_sql_has_token() {
 # extra system privilege, no non-SELECT object privilege, and a live write is
 # rejected. This is what lets the user read every schema while still being
 # provably unable to write. <default-schema> is only the write-probe target.
+# One role is allowed: SEMANTIC_USER (the Semantic Views add-on grants it for
+# Semantic SQL), and only when it carries exactly that add-on's baseline.
 _exakit_assert_mcp_readonly_posture() {
     _config_path="$1"
     _readonly_user="$2"
@@ -8781,14 +12705,31 @@ _exakit_assert_mcp_readonly_posture() {
     # file and sql/mcp_readonly_user.sql single out as deliberately withheld,
     # because it exposes audit logs, sessions and other users), IMPORT/EXPORT,
     # EXECUTE ANY SCRIPT, or CREATE ANY TABLE in some other schema passed the
-    # whole posture check. The kit never grants a role, so this is drift
-    # detection - which is exactly what mcp-doctor re-runs this for.
+    # whole posture check. The kit grants one role, SEMANTIC_USER, and only
+    # with the Semantic Views add-on; any other is drift - which is exactly
+    # what mcp-doctor re-runs this for.
     #
-    # PUBLIC is excluded because every user holds it by definition.
+    # PUBLIC is excluded because every user holds it by definition. So is
+    # SEMANTIC_USER, the one role the kit grants (the Semantic Views add-on, so
+    # the AI client can run Semantic SQL) - and only as the check below proves
+    # it: held without ADMIN OPTION, carrying exactly Semantic Views' own
+    # caller baseline and nothing else.
     _exakit_exapump_sql_has_token \
         "$_config_path" "admin" \
-        "SELECT CASE WHEN COUNT(*) = 0 THEN 'EXAKIT_ROLE_SCOPE_OK' ELSE 'EXAKIT_ROLE_SCOPE_TOO_WIDE' END AS STATUS FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '$_user_lit' AND GRANTED_ROLE NOT IN ('PUBLIC')" \
+        "SELECT CASE WHEN COUNT(*) = 0 THEN 'EXAKIT_ROLE_SCOPE_OK' ELSE 'EXAKIT_ROLE_SCOPE_TOO_WIDE' END AS STATUS FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '$_user_lit' AND GRANTED_ROLE NOT IN ('PUBLIC', 'SEMANTIC_USER')" \
         "EXAKIT_ROLE_SCOPE_OK" || die "The database login for your AI client holds a database ROLE, which can carry privileges these checks cannot see, so the kit will not hand it over. Rebuild it with: exakit mcp-setup"
+
+    # SEMANTIC_USER, IF HELD, IS EXACTLY SEMANTIC VIEWS' BASELINE. Upstream
+    # grants it: SELECT on SEMANTIC_SOURCE, SEMANTIC_CATALOG and SEMANTIC_AGENT,
+    # EXECUTE on SEMANTIC_ADMIN (scripts run with the caller's rights), and
+    # the rows the compiler writes AS the caller - SELECT/INSERT/UPDATE/DELETE
+    # on SYS_SEMANTIC.COMPILE_CACHE, INSERT on its two logs. No table of yours
+    # is in that set. Anything more on the role - a system privilege, a nested
+    # role, a write anywhere else - and the login is refused, as for any role.
+    _exakit_exapump_sql_has_token \
+        "$_config_path" "admin" \
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '$_user_lit' AND GRANTED_ROLE = 'SEMANTIC_USER') = 0 OR ((SELECT COUNT(*) FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '$_user_lit' AND GRANTED_ROLE = 'SEMANTIC_USER' AND ADMIN_OPTION = FALSE) = 1 AND (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'SEMANTIC_USER') + (SELECT COUNT(*) FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = 'SEMANTIC_USER') + (SELECT COUNT(CASE WHEN PRIVILEGE = 'SELECT' OR (PRIVILEGE = 'EXECUTE' AND (OBJECT_SCHEMA = 'SEMANTIC_ADMIN' OR (OBJECT_TYPE = 'SCHEMA' AND OBJECT_NAME = 'SEMANTIC_ADMIN'))) OR (OBJECT_SCHEMA = 'SYS_SEMANTIC' AND OBJECT_NAME = 'COMPILE_CACHE' AND PRIVILEGE IN ('INSERT', 'UPDATE', 'DELETE')) OR (OBJECT_SCHEMA = 'SYS_SEMANTIC' AND OBJECT_NAME IN ('AGENT_REQUEST_LOG', 'QUERY_LOG') AND PRIVILEGE = 'INSERT') THEN NULL ELSE 1 END) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'SEMANTIC_USER') = 0) THEN 'EXAKIT_SEMANTIC_ROLE_OK' ELSE 'EXAKIT_SEMANTIC_ROLE_TOO_WIDE' END AS STATUS" \
+        "EXAKIT_SEMANTIC_ROLE_OK" || die "The database login for your AI client holds the SEMANTIC_USER role, and that role carries more than Semantic Views' own baseline (or is held WITH ADMIN OPTION), so the kit will not hand it over. Check: SELECT * FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'SEMANTIC_USER' (and EXA_DBA_SYS_PRIVS, EXA_DBA_ROLE_PRIVS)"
 
     # No object privilege may be anything other than SELECT — i.e. the user
     # holds no INSERT/UPDATE/DELETE/ALTER/etc. object grant anywhere.
@@ -8796,6 +12737,22 @@ _exakit_assert_mcp_readonly_posture() {
         "$_config_path" "admin" \
         "SELECT CASE WHEN COUNT(*) = 0 THEN 'EXAKIT_OBJ_PRIV_SCOPE_OK' ELSE 'EXAKIT_OBJ_PRIV_SCOPE_TOO_WIDE' END AS STATUS FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = '$_user_lit' AND PRIVILEGE <> 'SELECT'" \
         "EXAKIT_OBJ_PRIV_SCOPE_OK" || die "The database login for your AI client can write to at least one table, so the kit will not hand it over. Rebuild it with: exakit mcp-setup"
+
+    # AND WHAT EVERY USER HOLDS (SEC-17). A privilege granted to PUBLIC reaches
+    # this login too, and the checks above, which ask about the login by name,
+    # cannot see it. Logged, not shown and not refused: PUBLIC is the database
+    # owner's to set, rebuilding this login would not change it, and the write
+    # probe below still refuses a login that can actually write where it looks.
+    # One PUBLIC grant is the kit's own and not counted: the SQL preprocessor
+    # framework's release.sql (0.9.1) grants EXECUTE ON SCHEMA PREPROC_RT TO
+    # PUBLIC, so every user's statements can run through PREPROC_RT.MASTER and
+    # its modules. Its other PUBLIC grant, SELECT ON SCHEMA PREPROC_RT, is read.
+    if ! _exakit_exapump_sql_has_token \
+        "$_config_path" "admin" \
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT' AND NOT (PRIVILEGE = 'EXECUTE' AND OBJECT_TYPE = 'SCHEMA' AND OBJECT_NAME = 'PREPROC_RT')) = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" \
+        "EXAKIT_PUBLIC_SCOPE_OK"; then
+        _exakit_log_file "WARN  the database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+    fi
 
     # Live proof the user cannot write: creating a table in the default schema
     # (which USE ANY SCHEMA lets it OPEN) MUST be rejected, since neither read
@@ -8840,6 +12797,7 @@ _exakit_reassert_mcp_readonly_posture() {
     _readonly_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
     _readonly_password_file="$(manifest_get components.mcp_server.connection.password_file 2>/dev/null || true)"
     _schemas_json="$(manifest_get components.mcp_server.connection.schemas 2>/dev/null || true)"
+    EXAKIT_MCP_READONLY_PRIVILEGES=""
 
     if [ -z "$_runtime_user" ] || [ -z "$_runtime_password_file" ] || \
        [ -z "$_readonly_user" ] || [ -z "$_readonly_password_file" ] || [ -z "$_schemas_json" ]; then
@@ -8870,13 +12828,29 @@ PY
     info "Re-checking MCP read-only grant posture against the database"
     if ( _exakit_assert_mcp_readonly_posture "$_temp_config" "$_readonly_user" "$_schemas_csv" ) \
         >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
+        # The list itself, as the MCP user sees it: doctor prints it and
+        # `--json` carries it as mcp_privileges. Twin of Confirm-McpReadonlyPosture.
+        EXAKIT_MCP_READONLY_PRIVILEGES="$(_exakit_mcp_readonly_privileges "$_temp_config" 2>> "${EXAKIT_LOG_FILE:-/dev/null}")" || EXAKIT_MCP_READONLY_PRIVILEGES=""
         rm -f "$_temp_config"
-        ok "MCP read-only grant posture is still correct"
+        if [ -n "$EXAKIT_MCP_READONLY_PRIVILEGES" ]; then
+            ok "MCP read-only grant posture is still correct - $_readonly_user holds exactly: $(printf '%s\n' "$EXAKIT_MCP_READONLY_PRIVILEGES" | paste -sd, - | sed 's/,/, /g')"
+        else
+            ok "MCP read-only grant posture is still correct"
+        fi
         return 0
     fi
     rm -f "$_temp_config"
     warn "MCP read-only grant posture has drifted from the expected read-only set (see log). Run 'exakit mcp-doctor' or review grants manually."
     return 1
+}
+
+# _exakit_mcp_readonly_privileges <config> - the system privileges the MCP user
+# holds, one per line, read as that user from SYS.EXA_USER_SYS_PRIVS (the probe
+# the skills teach). Twin of Get-McpReadonlyPrivileges in mcp.ps1.
+_exakit_mcp_readonly_privileges() {
+    _exakit_run_exapump_sql "$1" "mcp_readonly" "SELECT PRIVILEGE FROM SYS.EXA_USER_SYS_PRIVS ORDER BY 1" \
+        | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -E '^[A-Z][A-Z ]+$' | grep -vx 'PRIVILEGE'
 }
 
 _exakit_validate_identifier() {
@@ -8953,13 +12927,16 @@ PY
 # the login are phases of a single outcome -- the read-only access exists and
 # works -- and the tick at the end already said all three happened. They become
 # spinner phases; the tick goes through ok_step so it survives the quieting.
+# Said when the read-only user cannot be made for want of exapump: the cause, not "MCP failed".
+EXAKIT_MCP_NO_EXAPUMP="MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it). Fix: exakit update exapump, then: exakit mcp-setup"
+
 exakit_configure_mcp_readonly_access() {
     _cmra_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     _cmra_t0="$(date +%s 2>/dev/null || echo 0)"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
     require_python3
     # Ensure exapump is on PATH (both current session and permanently)
-    _exapump_bin="$(exakit_exapump_bin)" || die "exapump is required for MCP read-only setup but was not found."
+    _exapump_bin="$(exakit_exapump_bin)" || die "$EXAKIT_MCP_NO_EXAPUMP"
     _exapump_dir="$(dirname "$_exapump_bin")"
     case ":$PATH:" in
         *":$_exapump_dir:"*) ;;
@@ -9142,6 +13119,39 @@ raise SystemExit(1)
 PY
 }
 
+# _exakit_mcp_result_untouched <result_file> - one line per client config file a
+# removal left untouched because the kit could not parse it (a // comment, a
+# UTF-8 BOM, one bad TOML line), naming the file and the entry to delete by
+# hand. The whole-kit uninstall hides the operation's own summary, so it prints
+# these itself. Twin of Get-McpResultUntouched in mcp.ps1.
+_exakit_mcp_result_untouched() {
+    [ -s "${1:-}" ] || return 0
+    exakit_can_run_python 2>/dev/null || return 0
+    run_python - "$1" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        doc = json.load(handle)
+except Exception:
+    raise SystemExit(0)
+for finding in (doc.get("findings") or []) if isinstance(doc, dict) else []:
+    if isinstance(finding, dict) and finding.get("code") == "client_config_left_untouched":
+        scope = finding.get("scope") if isinstance(finding.get("scope"), dict) else {}
+        print(f"Left {scope.get('path')} untouched (the kit could not parse it): delete its MCP entry "
+              f"'{scope.get('entry')}' by hand.")
+PY
+}
+
+# _exakit_warn_lines <text> - one warn per non-empty line of <text>.
+# An `if`, not `[ ] && warn`: the loop's status is its last command's, and under
+# `set -e` an empty last line stopped the caller (a whole uninstall).
+_exakit_warn_lines() {
+    printf '%s\n' "${1:-}" | while IFS= read -r _ewl_line; do
+        if [ -n "$_ewl_line" ]; then warn "$_ewl_line"; fi
+    done
+    return 0
+}
+
 _exakit_mcp_reported() {
     [ -s "${1:-}" ] || return 1
     exakit_can_run_python 2>/dev/null || return 1
@@ -9202,6 +13212,12 @@ exakit_run_mcp_setup_cli() {
     else
         exakit_configure_mcp_readonly_access || return 1
     fi
+    # The server behind the entries: the launcher's MCP sidecar as the read-only
+    # user, healed where it does not serve. Its lines go to the log - the table
+    # is animating - and a sidecar that still does not serve is said once the
+    # table is done (exakit_mcp_setup reads components.mcp_server.validated).
+    command -v mcp_sidecar_apply >/dev/null 2>&1 && \
+        { mcp_sidecar_apply >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || true; }
     _old_ifs="$IFS"
     IFS=','
     set -- $_clients_csv
@@ -9219,63 +13235,7 @@ exakit_run_mcp_setup_cli() {
         # screen before anyone could read it. die() stops the animation for the
         # same reason.
         command -v ui_animation_stop >/dev/null 2>&1 && ui_animation_stop
-        warn "Could not write the MCP entry for this AI client. What failed: exakit logs setup. Retry with: exakit mcp-setup"
-        return 1
-    fi
-    return 0
-}
-
-# exakit_run_mcp_addon_cli <clients_csv> <output_file> — register the MCP
-# endpoints of installed add-ons with clients that are already connected.
-#
-# Deliberately NOT exakit_run_mcp_setup_cli: that path prepares the read-only
-# database user first, so an add-on install would have started depending on a
-# running database to finish. An add-on endpoint is a loopback URL with no
-# credential in it, so this touches neither.
-exakit_run_mcp_addon_cli() {
-    _clients_csv="$1"
-    _output_file="$2"
-    require_python3
-    _repo_root="$(exakit_repo_root)" || {
-        warn "Could not find the MCP package source to register the add-on endpoint."
-        return 1
-    }
-    _old_ifs="$IFS"
-    IFS=','
-    set -- $_clients_csv
-    IFS="$_old_ifs"
-    if ! (
-        cd "$_repo_root" &&
-        PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}"             run_python -m mcp register-addon-servers                 --runtime-root "$EXAKIT_HOME"                 --clients "$@"
-    ) > "$_output_file" 2>> "${EXAKIT_LOG_FILE:-/dev/null}"; then
-        _exakit_log_mcp_result_failure "$_output_file"
-        return 1
-    fi
-    return 0
-}
-
-# exakit_run_mcp_server_removal_cli <server> <clients_csv> <output_file> — drop
-# ONE managed server entry from the client configs, leaving every other entry in
-# the same file alone. The plain uninstall operation removes every managed entry
-# for a client, which would take the exasol server with it.
-exakit_run_mcp_server_removal_cli() {
-    _server_name="$1"
-    _clients_csv="$2"
-    _output_file="$3"
-    require_python3
-    _repo_root="$(exakit_repo_root)" || {
-        warn "Could not find the MCP package source to remove the add-on endpoint."
-        return 1
-    }
-    _old_ifs="$IFS"
-    IFS=','
-    set -- $_clients_csv
-    IFS="$_old_ifs"
-    if ! (
-        cd "$_repo_root" &&
-        PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}"             run_python -m mcp run-runtime-operation uninstall                 --runtime-root "$EXAKIT_HOME"                 --servers "$_server_name"                 --clients "$@"
-    ) > "$_output_file" 2>> "${EXAKIT_LOG_FILE:-/dev/null}"; then
-        _exakit_log_mcp_result_failure "$_output_file"
+        warn "Could not write the MCP entry for this AI client. See why with: exakit logs setup. Retry with: exakit mcp-setup"
         return 1
     fi
     return 0
@@ -9291,11 +13251,26 @@ exakit_run_mcp_operation_cli() {
         warn "Could not find the MCP package source to manage your AI clients."
         return 1
     }
+    # The read-only user is set up again (ALTER USER, the GRANTs) before a
+    # check that repairs - never under --json, which only reports: the
+    # diagnosis reads the user that is there. Twin of the same rule in
+    # Invoke-McpOperationCli.
     case "$_operation" in
-        validate|repair|doctor)
+        repair)
             exakit_configure_mcp_readonly_access || return 1
             ;;
+        validate|doctor)
+            if [ "${EXAKIT_MCP_RESULT_JSON:-0}" != "1" ]; then
+                exakit_configure_mcp_readonly_access || return 1
+            fi
+            ;;
     esac
+    # Repair puts the server behind the entries right too: the launcher's MCP
+    # sidecar where it can serve (a deployment restarted since setup can now),
+    # else the kit's stdio server. Diagnosis only reads what is recorded.
+    if [ "$_operation" = repair ] && command -v mcp_sidecar_apply >/dev/null 2>&1; then
+        mcp_sidecar_apply >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || true
+    fi
     _old_ifs="$IFS"
     IFS=','
     set -- $_clients_csv
@@ -9384,8 +13359,13 @@ table_shown = len(sys.argv) > 2 and sys.argv[2] == "1"
 if str(status).startswith("success"):
     # The table already named every client and what happened to it, so this
     # line would be the same fact twice, the second time less precisely.
-    if not table_shown:
-        lines.append(f"ok|MCP configured for {clients or 'no clients'}")
+    # A skipped client was not configured: its own warn line below says so, and
+    # naming it here too told the reader both. Every client skipped: no ok line.
+    skipped_ids = {item.get("client") for item in doc.get("details", {}).get("skipped_clients", [])}
+    configured = [item for item in doc.get("selected_clients", []) if item not in skipped_ids]
+    if not table_shown and (configured or not skipped_ids):
+        lines.append("ok|MCP configured for %s" % (", ".join(LABELS.get(item, item) for item in configured)
+                                                   or "no clients"))
 else:
     lines.append(f"warn|MCP setup finished as '{status}' for {clients or 'no clients'}")
 
@@ -9471,18 +13451,16 @@ exakit_print_mcp_ready_panel() {
         _mcp_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
         _mcp_user_kind="readonly"
     fi
-    _mcp_package="$(manifest_get components.mcp_server.package 2>/dev/null || printf '%s' "$EXAKIT_MCP_PACKAGE")"
     _mcp_version="$(manifest_get components.mcp_server.version 2>/dev/null || printf '%s' "$EXAKIT_MCP_VERSION")"
-    _mcp_command="$(manifest_get components.mcp_server.command 2>/dev/null || true)"
+    _mcp_url="$(manifest_get components.mcp_server.url 2>/dev/null || true)"
     _tls="$(manifest_get runtime.tls 2>/dev/null || true)"
-    [ -n "$_mcp_command" ] || _mcp_command="uvx"
 
     # An eight-row panel of reference values became one line. The command, the
     # package version and the managed-state directory are what `exakit
     # mcp-status` is for; what the reader needs here is that the server exists,
     # what it is called, and that it reaches the database read-only. The whole
     # panel still goes to the logfile, so nothing is unrecoverable.
-    _exakit_log_file "DATA  MCP command: $_mcp_command $_mcp_package@$_mcp_version"
+    _exakit_log_file "DATA  MCP server: ${_mcp_url:-not serving yet} (image ${_mcp_version:-unknown})"
     _exakit_log_file "DATA  MCP managed state: $EXAKIT_MCP_DIR"
     _exakit_log_file "DATA  MCP TLS: ${_tls:-unknown}"
     # THE USER THAT WAS RESOLVED, not a default that assumes the good case.
@@ -9494,7 +13472,11 @@ exakit_print_mcp_ready_panel() {
         info "No read-only MCP credential is recorded, so writes from your AI client would NOT be rejected by the database."
         info "Fix it with: exakit mcp-setup"
     else
-        ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), started by your AI client on demand"
+        if [ -n "$_mcp_url" ] && [ "$(manifest_get components.mcp_server.validated 2>/dev/null || true)" = true ]; then
+            ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), served beside the database at $_mcp_url"
+        else
+            warn "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only) is not serving yet. Fix: exakit mcp-doctor"
+        fi
     fi
     # Put the prompt straight onto the clipboard so the first interaction is a
     # paste, not a retype. Best-effort: silent when no clipboard tool exists.
@@ -9762,10 +13744,12 @@ exakit_mcp_clients_from_args() {
 }
 
 exakit_parse_mcp_client_selection() {
-    _raw="$(printf '%s' "$1" | tr ',/' '  ' | tr -s ' ')"
+    # Case does not matter ("Claude", "CLAUDE"), nor spaces or a trailing comma: PowerShell's switch is
+    # case-free, so the same answer must be read the same here. ⇄ twin: ConvertTo-McpClientSelection.
+    _raw="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr ',/' '  ' | tr -s ' ')"
     case "$_raw" in
         "" ) return 1 ;;
-        all|ALL|All ) printf '%s\n' "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue"; return 0 ;;
+        all|" all"|"all "|" all " ) printf '%s\n' "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue"; return 0 ;;
     esac
     _result=""
     for _token in $_raw; do
@@ -9842,11 +13826,15 @@ try:
         doc = json.load(handle)
 except Exception:
     sys.exit(1)
+import os
+in_wsl = bool(os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"))
 for client in doc.get("clients", []):
     if client.get("configured"):
         state = "connected"
     elif client.get("detected"):
         state = "pending"
+    elif in_wsl and client["id"] == "claude_desktop":
+        state = "windows"          # a Windows app: not missing, on the other side (WSL-02)
     else:
         state = "missing"
     print(f'{client["id"]} {state}')
@@ -9864,6 +13852,19 @@ PY
 # fixes it. A machine with no runtime recorded, or whose runtime module is not
 # loaded, is left alone — that is the installer's territory, not a repair.
 # ⇄ twin: Confirm-ExakitRuntimeRunning in setup/lib/exakit-common.ps1.
+# exakit_runtime_answers_quick — is the kit's own database answering right now?
+# The port, then a completed TLS handshake on it: a fraction of a second, no
+# launcher, no heal. NOT the whole truth (the launcher's word outranks the port,
+# see personal_deployment_running) - only enough to draw a menu before the full
+# check, which the caller still owes before it loads anything.
+exakit_runtime_answers_quick() {
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_db_port >/dev/null 2>&1 && command -v personal_tls_answers >/dev/null 2>&1 || return 1
+    [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-/nonexistent}" ] || return 1
+    port_in_use "$(personal_db_port)" || return 1
+    personal_tls_answers
+}
+
 exakit_ensure_runtime_running() {
     _err_deploy="${1:-}"
     case "$(manifest_get runtime.type 2>/dev/null || true)" in
@@ -9871,7 +13872,12 @@ exakit_ensure_runtime_running() {
             command -v personal_deployment_running >/dev/null 2>&1 || return 0
             personal_deployment_running && return 0
             if personal_deployment_exists; then
-                info "Self-heal: the database is deployed but not running — starting it"
+                # Asked for (exakit start, _start_database): a start, not a heal.
+                if [ "${EXAKIT_START_ASKED:-0}" = 1 ]; then
+                    info "Starting the database"
+                else
+                    info "Self-heal: the database is deployed but not running — starting it"
+                fi
                 personal_start
                 # The same repair the install uses: a start the launcher took
                 # without acting on is finished by its own deploy.
@@ -9975,10 +13981,12 @@ exakit_mcp_setup() {
         fi
     fi
 
-    info "MCP setup will edit the selected AI client config files."
+    # Not on screen: the step heading already says what happens. The log keeps it.
+    _exakit_log_file "INFO  MCP setup will edit the selected AI client config files."
 
     EXAKIT_MCP_TABLE_STATE=""
     _mcp_rows=""                    # the table rows the progress phase fills in
+    _mcp_auto=0                     # EXAKIT_MCP_AUTO picked the clients: no table, a spinner
 
     # EXAKIT_MCP_CLIENTS lets an agent-driven or scripted install pick clients
     # without a prompt (e.g. "claude", "claude,cursor", "all", or "1,2").
@@ -10015,6 +14023,21 @@ exakit_mcp_setup() {
                 ;;
         esac
         info "Configuring MCP clients from EXAKIT_MCP_CLIENTS: $_clients_csv"
+    elif [ "${EXAKIT_MCP_AUTO:-0}" = 1 ]; then
+        # THE INSTALL CONNECTS WHAT IS THERE. Every AI client found on this
+        # machine and not connected yet, without a table; nothing found, nothing said.
+        _clients_csv=""
+        if _client_status="$(exakit_mcp_discover_status)"; then
+            while read -r _st_id _st_state; do
+                [ "$_st_state" = pending ] && [ -n "$_st_id" ] && _clients_csv="${_clients_csv:+$_clients_csv,}$_st_id"
+            done <<EXAKIT_MCP_AUTO_EOF
+$_client_status
+EXAKIT_MCP_AUTO_EOF
+        else
+            _clients_csv="$(exakit_mcp_detected_clients 2>/dev/null || true)"
+        fi
+        [ -n "$_clients_csv" ] || return 0
+        _mcp_auto=1
     else
         # Show the FULL list of supported clients so the user sees everything
         # the kit can connect: pending clients (installed, not connected yet)
@@ -10064,6 +14087,7 @@ EOF
                     _menu_ids+=(""); _menu_notes+=("already connected")
                     _connected_count=$((_connected_count + 1))
                     ;;
+                windows)   _menu_ids+=(""); _menu_notes+=("on Windows - connect it from PowerShell") ;;
                 *)         _menu_ids+=(""); _menu_notes+=("not installed") ;;
             esac
         }
@@ -10137,17 +14161,41 @@ EOF
         # A client with no id is one this machine cannot offer — it becomes a
         # disabled row carrying the reason, so the list is the whole answer
         # rather than a list that quietly omits things.
-        _defaults="1"
+        # EXAKIT_MCP_PRESELECT (the personas' clients, from `exakit persona
+        # add`) ticks only the pending clients it names; "all" is every one.
+        _mcp_pre=""
+        case "${EXAKIT_MCP_PRESELECT:-all}" in
+            all|ALL|All) ;;
+            *) _mcp_pre=",$(exakit_parse_mcp_client_selection "$EXAKIT_MCP_PRESELECT" 2>/dev/null || true)," ;;
+        esac
+        _defaults=""
+        _mcp_every=1
         _menu_i=0
         while [ "$_menu_i" -lt "$_mcp_client_n" ]; do
             _mcp_row=$(( _mcp_row_first + _menu_i ))
             if [ -n "${_menu_ids[$_menu_i]}" ]; then
-                _defaults="$_defaults,$_mcp_row"
+                _mcp_want=1
+                if [ -n "$_mcp_pre" ]; then
+                    _mcp_want=0
+                    for _mcp_id in $(printf '%s' "${_menu_ids[$_menu_i]}" | tr ',' ' '); do
+                        case "$_mcp_pre" in *",$_mcp_id,"*) _mcp_want=1 ;; esac
+                    done
+                fi
+                if [ "$_mcp_want" = 1 ]; then
+                    _defaults="${_defaults:+$_defaults,}$_mcp_row"
+                else
+                    _mcp_every=0
+                fi
             else
                 ui_table_disable "$EXAKIT_MCP_TABLE_STATE" "$_mcp_row" "${_menu_notes[$_menu_i]}"
             fi
             _menu_i=$(( _menu_i + 1 ))
         done
+        if [ -z "$_defaults" ]; then
+            _defaults="$_mcp_row_skip"
+        elif [ "$_mcp_every" = 1 ]; then
+            _defaults="1,$_defaults"
+        fi
         EXAKIT_TABLE_GROUP="1:$_mcp_row_first:$_mcp_row_last:all"
         EXAKIT_TABLE_EXCLUSIVE="$_mcp_row_skip"
         EXAKIT_TABLE_DEFAULTS="$_defaults"
@@ -10161,6 +14209,13 @@ EOF
             ui_table_menu "$EXAKIT_MCP_TABLE_STATE"
             case ",$EXAKIT_TABLE_SELECTION," in
                 *",$_mcp_row_skip,"*)
+                    # Taken without asking (UI_TABLE_AUTO): none of the clients
+                    # named is on this machine to connect, which is no question.
+                    if [ "${UI_TABLE_AUTO:-0}" = 1 ]; then
+                        info "None of the AI clients named is waiting to be connected here - connect one any time with: exakit mcp-setup"
+                        _exakit_mcp_table_release
+                        return 0
+                    fi
                     warn "No AI client will be connected to your database."
                     if confirm "Are you sure you want to continue without an AI client?" y; then
                         info "Okay — you can connect one any time with: exakit mcp-setup"
@@ -10218,6 +14273,40 @@ EOF
     # the table there is nothing to add — and a line printed here would land
     # between the menu's frame and the animator's first frame, which is the one
     # place on this screen where nothing may be printed.
+    if [ "${_mcp_auto:-0}" = 1 ]; then
+        # The read-only user is prepared first: it says its one line, then the
+        # spinner turns while every client's file is written (side by side).
+        _mcp_auto=0
+        exakit_configure_mcp_readonly_access || { rm -f "$_result_file"; return 1; }
+        EXAKIT_MCP_READONLY_READY=1
+        ui_spin_begin "Connecting AI clients"
+        if exakit_run_mcp_setup_cli "$_clients_csv" "$_result_file"; then
+            :
+        else
+            _setup_status=$?
+        fi
+        ui_spin_end
+        _mcp_auto_names=""
+        for _mcp_auto_id in $(_exakit_mcp_result_states "$_result_file" 2>/dev/null | sed -n 's/ configured$//p'); do
+            case "$_mcp_auto_id" in
+                claude_desktop) _mcp_auto_name="Claude (desktop app)" ;;
+                claude_code)    _mcp_auto_name="Claude Code" ;;
+                codex)          _mcp_auto_name="Codex" ;;
+                cursor)         _mcp_auto_name="Cursor" ;;
+                vscode_copilot) _mcp_auto_name="GitHub Copilot" ;;
+                gemini_cli)     _mcp_auto_name="Gemini CLI" ;;
+                opencode)       _mcp_auto_name="OpenCode" ;;
+                continue)       _mcp_auto_name="Continue" ;;
+                *)              _mcp_auto_name="$_mcp_auto_id" ;;
+            esac
+            _mcp_auto_names="${_mcp_auto_names:+$_mcp_auto_names, }$_mcp_auto_name"
+        done
+        rm -f "$_result_file"
+        [ "$_setup_status" -eq 0 ] || return "$_setup_status"
+        ok "AI clients connected: ${_mcp_auto_names:-none}"
+        exakit_clear_soft_failure mcp_clients
+        return 0
+    fi
     [ "$_mcp_table_shown" = 1 ] || info "Applying MCP setup"
     if exakit_run_mcp_setup_cli "$_clients_csv" "$_result_file"; then
         :
@@ -10283,6 +14372,9 @@ EOF
         return "$_setup_status"
     fi
     exakit_print_mcp_ready_panel "permanent"
+    # The clients are written: an earlier install's "AI client (MCP) setup did
+    # not finish" is history. ⇄ twin: the same clear in Invoke-McpSetup.
+    exakit_clear_soft_failure mcp_clients
     # The panel above IS the guidance; announcing that it exists, directly
     # under it, told the reader nothing they had not just read.
     return 0
@@ -10297,12 +14389,13 @@ exakit_mcp_operation() {
     }
     _result_file="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-operation.XXXXXX")"
     _operation_status=0
-    # _exakit_stamp_mcp_json <file> — print the MCP result with `installed` and
-    # `remedy` added. Fails (prints nothing) when the file is not a JSON object,
-    # so the caller can fall back to passing it through untouched.
+    # _exakit_stamp_mcp_json <file> [privileges] — print the MCP result with
+    # `installed` and `remedy` added, and `mcp_privileges` when given. Fails
+    # (prints nothing) when the file is not a JSON object, so the caller can
+    # fall back to passing it through untouched.
     _exakit_stamp_mcp_json() {
         exakit_can_run_python || return 1
-        run_python - "$1" <<'EXAKIT_MCP_STAMP_PY' 2>/dev/null
+        run_python - "$1" "${2:-}" <<'EXAKIT_MCP_STAMP_PY' 2>/dev/null
 import json, sys
 try:
     with open(sys.argv[1]) as handle:
@@ -10332,7 +14425,17 @@ if "remedy" not in doc:
         scope = finding.get("scope") if isinstance(finding.get("scope"), dict) else {}
         candidates.append((RANK[severity], 0 if scope.get("path") else 1, index, finding["recommended_action"]))
     remedy = min(candidates)[3] if candidates else None
+    # No client connected at all is the one gap status reports without a
+    # finding: name the command that closes it, as status --json does (AGT-13).
+    clients = (doc.get("details") or {}).get("clients") if isinstance(doc.get("details"), dict) else None
+    if remedy is None and doc.get("operation") == "status" and isinstance(clients, list) and \
+            not any(isinstance(c, dict) and c.get("state") == "configured" for c in clients):
+        remedy = "exakit mcp-setup"
     doc["remedy"] = remedy
+# The read-only user's own privilege list (doctor/validate), one per line.
+privileges = [p for p in (sys.argv[2] if len(sys.argv) > 2 else "").splitlines() if p.strip()]
+if privileges and "mcp_privileges" not in doc:
+    doc["mcp_privileges"] = privileges
 # The caller's remedy (mcp-doctor over a deployment the launcher records as
 # failed while its database answers) only where the doctor found none of its
 # own: a client fix it found is not hidden behind exakit start.
@@ -10352,6 +14455,15 @@ EXAKIT_MCP_STAMP_PY
         else
             _operation_status=$?
         fi
+        # The posture re-check before the answer, so the answer carries the
+        # privilege list it reads (mcp_privileges). Twin of Invoke-McpOperation.
+        _mo_privileges=""
+        case "$_operation" in
+            doctor|validate)
+                _exakit_reassert_mcp_readonly_posture >/dev/null 2>&1 || _operation_status=1
+                _mo_privileges="${EXAKIT_MCP_READONLY_PRIVILEGES:-}"
+                ;;
+        esac
         if [ -s "$_result_file" ]; then
             # Add the discriminators every --json answer from a state query
             # carries — `installed` and `remedy` — so one parser handles the
@@ -10359,15 +14471,19 @@ EXAKIT_MCP_STAMP_PY
             # answer alike. The subsystem's own fields are never touched, and a
             # result that is not valid JSON is passed through byte for byte
             # rather than swallowed.
-            _exakit_stamp_mcp_json "$_result_file" || cat "$_result_file"
+            _exakit_stamp_mcp_json "$_result_file" "$_mo_privileges" || cat "$_result_file"
+        elif [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" != sidecar ]; then
+            # A record from before the sidecar (0.2.5 and older): the runtime has
+            # no server to check and says so on stderr only. The answer is the
+            # command that moves the clients, not "see the log". Twin of
+            # Get-McpNotSetUpJson in mcp.ps1.
+            exakit_json_out '{"installed": true, "status": "blocked", "operation": "%s", "remedy": "exakit update", "remedy_hint": "the AI clients still start the MCP server a kit before 0.3.0 set up for them; exakit update moves them to the MCP server beside your database (exakit mcp-setup does the same for the clients you name)", "error": "the MCP server beside your database is not set up yet"}\n' "$_operation"
+            [ "$_operation_status" -eq 0 ] && _operation_status=1
         else
             exakit_json_out '{"installed": true, "status": "error", "remedy": "exakit logs setup", "error": "the MCP %s operation produced no result; what it printed is in: exakit logs setup"}\n' "$_operation"
             [ "$_operation_status" -eq 0 ] && _operation_status=1
         fi
         rm -f "$_result_file"
-        case "$_operation" in
-            doctor|validate) _exakit_reassert_mcp_readonly_posture >/dev/null 2>&1 || _operation_status=1 ;;
-        esac
         return "$_operation_status"
     fi
     # The spinner says it, rather than a line that stays on screen after the
@@ -10400,6 +14516,8 @@ EXAKIT_MCP_STAMP_PY
     if [ -s "$_result_file" ] && _exakit_mcp_result_repairable "$_result_file"; then
         EXAKIT_MCP_LAST_REPAIRABLE=1
     fi
+    EXAKIT_MCP_LAST_UNTOUCHED=""
+    [ "$_operation" = uninstall ] && EXAKIT_MCP_LAST_UNTOUCHED="$(_exakit_mcp_result_untouched "$_result_file")"
     rm -f "$_result_file"
 
     case "$_operation" in
@@ -10431,7 +14549,9 @@ exakit_maybe_offer_mcp_setup() {
     # non-interactive runs keep that default.
     # No lead-in: the ticks directly above already said the runtime and the
     # server are ready, and this restated them in a sentence.
-    if ! exakit_mcp_setup; then
+    # EXAKIT_MCP_AUTO: the install connects every AI client found here without a
+    # table; `exakit mcp-setup` run by hand still asks.
+    if ! EXAKIT_MCP_AUTO=1 exakit_mcp_setup; then
         warn "Your local database is installed, but AI client setup did not finish cleanly."
         warn "Retry any time with: exakit mcp-setup"
         exakit_note_failure "the AI client configuration did not finish (see the log)"
@@ -10439,14 +14559,117 @@ exakit_maybe_offer_mcp_setup() {
     fi
 }
 
+# _exakit_offer_fail <reason> — book the installer's data step as failed and
+# keep EVERY reason: a dataset and the file can both fail, and the failure note
+# holds one line that the closing summary quotes (a later note replaced an
+# earlier one, so the first reason was lost).
+_exakit_offer_fail() {
+    _data_failed=1
+    _data_reasons="${_data_reasons:+$_data_reasons; }$1"
+    exakit_note_failure "$_data_reasons"
+}
+
+# _exakit_offer_local_file — the installer's local-file load (the file row, or
+# EXAKIT_DATA_FILE), once nothing on screen animates any more. What it has to
+# say goes into the caller's _data_notes. Nothing here books the data step as
+# failed: whatever happens to the reader's own file - refused, declined, or a
+# load that did not finish - it is the file, not the install. Booking it used
+# to say "sample data is not installed" over datasets that had loaded, and the
+# soft failure it recorded skipped the marketplace offer.
+_exakit_offer_local_file() {
+    command -v exakit_data_file_announce >/dev/null 2>&1 && exakit_data_file_announce
+    # The loader runs in a subshell, so the names of the files that did not
+    # load come back through a file (EXAKIT_LOCAL_FILE_NAMES).
+    _lf_names="$(mktemp "${TMPDIR:-/tmp}/exakit-localfile.XXXXXX" 2>/dev/null)" || _lf_names=""
+    ( EXAKIT_LOCAL_FILE_NAMES="$_lf_names"; exakit_load_local_file )
+    _local_status=$?
+    if [ "$_local_status" -eq 2 ]; then
+        _data_notes="${_data_notes}info|Local file load skipped.
+"
+    elif [ "$_local_status" -eq 3 ]; then
+        # Refused as bad input (the file, not the install): say so, but
+        # do not book it as a failed step.
+        _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
+"
+    elif [ "$_local_status" -eq 5 ]; then
+        # Declined: the target already held rows this kit did not load and
+        # nobody said replace or append, so the loader changed nothing
+        # (the remedy is printed above it). Not a failed step - the
+        # install is fine, the table is the reader's.
+        _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
+"
+    elif [ "$_local_status" -ne 0 ]; then
+        # The reason is on screen already, against the file. Said, not booked.
+        _lf_count=0; _lf_list=""
+        if [ -n "$_lf_names" ] && [ -s "$_lf_names" ]; then
+            _lf_count="$(grep -c . "$_lf_names" 2>/dev/null || echo 0)"
+            _lf_list="$(grep . "$_lf_names" 2>/dev/null | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+        fi
+        if [ "$_lf_count" -gt 1 ]; then
+            _lf_say="Your files $_lf_list did not load (reason above)."
+        elif [ "$_lf_count" -eq 1 ]; then
+            _lf_say="Your file $_lf_list did not load (reason above)."
+        else
+            _lf_say="Your local file did not load (reason above)."
+        fi
+        _data_notes="${_data_notes}warn|$_lf_say Retry any time with: exakit data-load
+"
+    fi
+    [ -n "$_lf_names" ] && rm -f "$_lf_names"
+    return 0
+}
+
+# exakit_print_notes <notes> — kind|text lines, said as warn or info, in order.
+exakit_print_notes() {
+    while IFS='|' read -r _pn_kind _pn_text; do
+        [ -n "$_pn_text" ] || continue
+        case "$_pn_kind" in
+            warn) warn "$_pn_text" ;;
+            *)    info "$_pn_text" ;;
+        esac
+    done <<EXAKIT_PRINT_NOTES_EOF
+$1
+EXAKIT_PRINT_NOTES_EOF
+}
+
+# _exakit_offer_notes — the notes the loads left in _data_notes, said once, and
+# cleared, so a later flush does not repeat them.
+_exakit_offer_notes() {
+    exakit_print_notes "$_data_notes"
+    _data_notes=""
+}
+
+# _exakit_offer_answered_rest <external-named:0|1> — after an unattended answer
+# for the datasets (EXAKIT_DATASETS or EXAKIT_LOAD_SAMPLE), the other two rows,
+# in the table's order. The file EXAKIT_DATA_FILE names is its own answer and
+# loads too: a persona fills in EXAKIT_DATASETS, and that answer used to return
+# before the file was looked at, so EXAKIT_PERSONA plus EXAKIT_DATA_FILE loaded
+# the persona's datasets and dropped the file without a word. Then the external
+# source, which unattended is only ever the command to run.
+_exakit_offer_answered_rest() {
+    if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
+        info "Loading a local file (EXAKIT_DATA_FILE)."
+        _exakit_offer_local_file
+    fi
+    if [ "$1" = 1 ]; then
+        _data_notes="${_data_notes}info|$(exakit_data_external_hint_text 2>/dev/null || printf 'Connect an external source any time with: exakit connect')
+"
+    fi
+    _exakit_offer_notes
+}
+
 # exakit_maybe_offer_data_load <kit_root> — load data during install, via the
 # dynamic dataset checkbox (bundled datasets not loaded yet are pre-selected;
-# the user can additionally or instead pick a local file, or explicitly skip).
+# the user can additionally or instead pick a local file or an external source,
+# or explicitly skip). The rows run in the table's order: the datasets, then the
+# file, then the external source (`exakit connect`, at a terminal only).
 # Scripted installs can still steer with EXAKIT_DATASETS (csv of bundled
-# dataset ids) or EXAKIT_LOAD_SAMPLE (=0 skips, =1 bundled sample);
-# EXAKIT_DATASETS takes precedence. Non-interactive runs keep the
-# pre-selected defaults. Each load runs in a subshell so a die() inside the
-# loading flow never aborts the surrounding install.
+# dataset ids; `external` names the external-source row, which unattended only
+# prints the command) or EXAKIT_LOAD_SAMPLE (=0 skips the samples, =1 bundled
+# sample); EXAKIT_DATASETS takes precedence. EXAKIT_DATA_FILE loads alongside
+# either. Non-interactive runs keep the pre-selected defaults. Each load runs
+# in a subshell so a die() inside the loading flow never aborts the
+# surrounding install.
 exakit_maybe_offer_data_load() {
     _kit_root="$1"
     : "$_kit_root"
@@ -10472,9 +14695,12 @@ exakit_maybe_offer_data_load() {
     # database is a thing to repair with one command, not a reason to abandon an
     # install whose database is already up.
     _data_failed=0
+    _data_notes=""
+    _data_reasons=""
     if [ -n "${EXAKIT_DATASETS:-}" ]; then
         _known_ids=" $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ') "
         _valid_any=0
+        _data_external_named=0
         for _env_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
             case "$_known_ids" in
                 *" $_env_id "*)
@@ -10482,37 +14708,50 @@ exakit_maybe_offer_data_load() {
                     info "Loading dataset '$_env_id' (EXAKIT_DATASETS)."
                     if ! ( exakit_load_dataset "$_kit_root" "$_env_id" ); then
                         warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-                        exakit_note_failure "loading dataset '$_env_id' did not finish (see the log)"
-                        _data_failed=1
+                        _exakit_offer_fail "loading dataset '$_env_id' did not finish (see the log)"
                     fi
                     ;;
                 *)
-                    warn "Unknown dataset id '$_env_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_known_ids" | sed 's/ *$//'))."
+                    if [ "$_env_id" = external ]; then
+                        # The external-source row, by the id the table gives
+                        # it. An answer, not an unknown id - and unattended
+                        # only ever the command to run (after the file).
+                        _valid_any=1
+                        _data_external_named=1
+                    else
+                        warn "Unknown dataset id '$_env_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_known_ids" | sed 's/ *$//'))."
+                    fi
                     ;;
             esac
         done
         if [ "$_valid_any" -ne 1 ]; then
             error "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset — nothing was loaded."
-            exakit_note_failure "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
-            return 1
+            _exakit_offer_fail "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
         fi
+        _exakit_offer_answered_rest "$_data_external_named"
         return "$_data_failed"
     fi
 
     # EXAKIT_LOAD_SAMPLE lets an agent-driven or scripted install decide up front:
-    # =1 loads the bundled sample without asking, =0 skips data loading entirely.
+    # =1 loads the bundled sample without asking, =0 skips the sample data. A
+    # file named in EXAKIT_DATA_FILE loads after either.
     if [ "${EXAKIT_LOAD_SAMPLE:-}" = "0" ]; then
-        info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
-        return 0
+        if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
+            info "Skipping the sample data (EXAKIT_LOAD_SAMPLE=0)."
+        else
+            info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
+        fi
+        _exakit_offer_answered_rest 0
+        return "$_data_failed"
     fi
     if [ "${EXAKIT_LOAD_SAMPLE:-}" = "1" ]; then
         info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
         if ! ( exakit_load_sample_data "$_kit_root" ); then
             warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-            exakit_note_failure "the bundled sample data did not finish loading (see the log)"
-            return 1
+            _exakit_offer_fail "the bundled sample data did not finish loading (see the log)"
         fi
-        return 0
+        _exakit_offer_answered_rest 0
+        return "$_data_failed"
     fi
 
     # No lead-in sentence: the checkbox below names every dataset on offer and
@@ -10523,8 +14762,9 @@ exakit_maybe_offer_data_load() {
     # loading flow never aborts the surrounding install.
     exakit_data_load_select "Skip"
     if [ "$EXAKIT_DATA_LOAD_SELECTION" = "none" ]; then
-        info "Skipping data loading. Run it any time with: exakit data-load"
-        return 0
+        # The install's compact table loaded its samples before it asked: Skip is only "nothing more".
+        [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] || info "Skipping data loading. Run it any time with: exakit data-load"
+        return "$_data_failed"
     fi
     # The SAME table the selection was just made in becomes the progress display.
     # This is the path an install actually takes, and it was the one left out:
@@ -10541,6 +14781,7 @@ exakit_maybe_offer_data_load() {
     fi
     _data_notes=""
     _data_has_local=0
+    _data_has_external=0
     # Anything fatal inside the loads below is written here instead of onto the
     # animating table; it is read out after ui_table_end.
     EXAKIT_DEFER_ERRORS=""
@@ -10556,12 +14797,18 @@ exakit_maybe_offer_data_load() {
                 # off the screen: the animator kept repainting over the prompt.
                 _data_has_local=1
                 ;;
+            external)
+                _data_has_external=1
+                ;;
             *)
                 if ! ( ui_table_detach; exakit_load_dataset "$_kit_root" "$_data_id" ); then
-                    _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
-"
-                    exakit_note_failure "loading dataset '$_data_id' did not finish (see the log)"
-                    _data_failed=1
+                    # Said once, however many datasets failed: each one's own reason is above.
+                    case "$_data_notes" in
+                        *"Data loading did not finish cleanly."*) ;;
+                        *) _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
+" ;;
+                    esac
+                    _exakit_offer_fail "loading dataset '$_data_id' did not finish (see the log)"
                 fi
                 ;;
         esac
@@ -10578,6 +14825,7 @@ exakit_maybe_offer_data_load() {
         rm -f "$EXAKIT_DEFER_ERRORS"
     fi
     EXAKIT_DEFER_ERRORS=""
+    exakit_data_table_release
     # The local file / folder load, now that the box has stopped moving.
     #
     # This is the INSTALLER's copy of the data-load loop -- `exakit data-load`
@@ -10591,48 +14839,31 @@ exakit_maybe_offer_data_load() {
     # killing the animator, it does not take the frame off the screen.
     if [ "$_data_has_local" = 1 ]; then
         printf '\n'
-        ( exakit_load_local_file )
-        _local_status=$?
-        if [ "$_local_status" -eq 2 ]; then
-            _data_notes="${_data_notes}info|Local file load skipped.
-"
-        elif [ "$_local_status" -eq 3 ]; then
-            # Refused as bad input (the file, not the install): say so, but
-            # do not book it as a failed step.
-            _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
-"
-        elif [ "$_local_status" -eq 5 ]; then
-            # Declined: the target already held rows this kit did not load and
-            # nobody said replace or append, so the loader changed nothing
-            # (the remedy is printed above it). Not a failed step - the
-            # install is fine, the table is the reader's.
-            _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
-"
-        elif [ "$_local_status" -ne 0 ]; then
-            _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
-"
-            exakit_note_failure "loading the local file did not finish (see the log)"
-            _data_failed=1
-        fi
+        _exakit_offer_local_file
     fi
-    while IFS='|' read -r _dn_kind _dn_text; do
-        [ -n "$_dn_text" ] || continue
-        case "$_dn_kind" in
-            warn) warn "$_dn_text" ;;
-            *)    info "$_dn_text" ;;
-        esac
-    done <<EXAKIT_DATA_NOTES_EOF
-$_data_notes
-EXAKIT_DATA_NOTES_EOF
+    # The external source last, the table's order: `exakit connect` asking for
+    # everything. A connect that failed or was cancelled is said, with the
+    # command, and is not a failed data step: the install carries on. What the
+    # loads above left to say is said first, so a "see above" stays next to
+    # what it points at.
+    if [ "$_data_has_external" = 1 ]; then
+        _exakit_offer_notes
+        exakit_data_external_run
+        [ -n "$EXAKIT_DATA_EXTERNAL_NOTE" ] && _data_notes="${_data_notes}$EXAKIT_DATA_EXTERNAL_NOTE
+"
+    fi
+    _exakit_offer_notes
     return "$_data_failed"
 }
 
 # kit_shared_steps <first-step-no> <total-steps> <script-dir> <kit-root>
 # The steps every platform runs after its runtime is up, in order: exapump,
-# the sample-data load offer, the MCP server, the exakit helper, and the MCP
-# client setup offer. Data is loaded before MCP so the read-only user is
-# provisioned against a populated schema. One implementation so the per-OS
-# setup scripts cannot drift apart.
+# the MCP server (with the AI client and skills offers), pyexasol and the exakit
+# helper. The sample data is not one of them any more: it follows the persona
+# question, which the setup scripts ask after these steps (exakit_persona_flow).
+# Only a kit copy without persona.sh still loads it here, between exapump and
+# the MCP server. One implementation so the per-OS setup scripts cannot drift
+# apart.
 # exakit_soft_step <component> <repair-command> <label> <function...> — run one
 # component's install without letting it end the run.
 #
@@ -10782,27 +15013,67 @@ exakit_print_soft_failures() {
 _exakit_install_exapump() {
     _eie_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
+    # Under "Setup Utilities" the item's spinner names what it is doing now.
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="downloading"
     exapump_install || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="writing the connection profile"
     exapump_create_profile || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="verifying the connection"
     exapump_validate_connection
     _eie_rc=$?
     EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"
     return $_eie_rc
 }
 
-# One line for this step's server work: the spinner narrates the prime and the
-# handshake, so the info/ok pairs beneath were the second telling.
+# The exapump item's tick line and detail, from the lines it held: the version
+# it reports installing (or that it found one already there), the profile name
+# someone types again, and that the connection was verified.
+_exakit_exapump_item_title() {
+    _eit_v="$(grep -oE '^OK exapump v[0-9][^ ]* installed' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK exapump v//; s/ installed$//')"
+    if [ -n "$_eit_v" ]; then printf 'exapump v%s\n' "$_eit_v"; else printf '%s\n' "$1"; fi
+}
+_exakit_exapump_item_detail() {
+    _eid=""
+    exakit_item_held '^OK exapump already installed' && _eid="already installed"
+    exakit_item_held '^OK exapump runs via the ' && _eid="${_eid:+$_eid · }runs in a container"
+    _eid_p="$(grep -oE '^OK Connection profile \[[^]]*\]' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK Connection //')"
+    [ -z "$_eid_p" ] || _eid="${_eid:+$_eid · }$_eid_p"
+    exakit_item_held '^OK Database ready' && _eid="${_eid:+$_eid · }connection verified"
+    printf '%s\n' "$_eid"
+}
+
+# One line for this step's server work: the launcher's MCP server, as the
+# read-only user, healed where it does not serve (mcp_sidecar_apply). Nothing to
+# download; the step's line names the endpoint. A server that still does not
+# serve fails the step softly with its error and fix: the install carries on,
+# and `exakit mcp-doctor` tries again. The read-only user is made here for it;
+# a subshell keeps a die() in there from ending the step.
 _exakit_install_mcp() {
     _eim_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
-    if ! mcp_install; then
-        EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
-        return 1
-    fi
-    mcp_validate
+    EXAKIT_MCP_STEP_T0="$(date +%s 2>/dev/null || echo 0)"
+    ( exakit_configure_mcp_readonly_access ) >/dev/null 2>&1 || true
+    ui_spin_begin "Starting the MCP server and checking it answers"
+    _eim_out="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-step.XXXXXX")"
+    mcp_sidecar_apply >"$_eim_out" 2>&1
     _eim_rc=$?
+    ui_spin_end
+    cat "$_eim_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
     EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
-    return $_eim_rc
+    if [ "$_eim_rc" -eq 0 ]; then
+        exakit_record_ownership mcp kit
+        # What it healed on the way is worth its line; the rest was the spinner.
+        grep -a 'Self-heal:' "$_eim_out" 2>/dev/null | sed 's/^[^S]*Self-heal:/Self-heal:/' | while IFS= read -r _eim_line; do
+            info_step "$_eim_line"
+        done
+        rm -f "$_eim_out"
+        ok_step "MCP server answering at $(manifest_get components.mcp_server.url 2>/dev/null) as the read-only user ($(( $(date +%s 2>/dev/null || echo 0) - EXAKIT_MCP_STEP_T0 ))s)"
+        return 0
+    fi
+    # The error and its fix, as mcp_sidecar_apply said them.
+    cat "$_eim_out" >&2
+    rm -f "$_eim_out"
+    return 1
 }
 
 # pyexasol_validate used to run OUTSIDE the soft step, which defeated the whole
@@ -11099,140 +15370,26 @@ PWB_BODY
     return 0
 }
 
-kit_shared_steps() {
+# kit_helper_step <step-no> <total-steps> <script-dir> <kit-root> — the exakit
+# command and the kit copy it reads, refreshed and ticked: the install's last
+# step, after the persona's data, so it is what the reader sees last before the
+# panel. The command is in place from the start (exakit_install_helper_early);
+# this records the tick and refreshes anything that changed.
+kit_helper_step() {
     _step_no="$1"
     _total="$2"
     _script_dir="$3"
     _kit_root="$4"
-
-    # NO DATABASE, NO STEPS THAT NEED ONE. When the database step records
-    # itself as unfinished - today that means Podman was not installed - every
-    # step after it would fail one at a time against a database that is not
-    # there, each with its own error and its own entry in the closing summary.
-    # One reason, said once, is the truth: the summary already carries it, and
-    # `exakit update` runs the lot once Podman is in place. The exakit command
-    # itself is still installed at the end, because it is what the reader needs
-    # next.
-    _kss_nodb=0
-    if exakit_soft_failed runtime; then
-        _kss_nodb=1
-        info "Skipping exapump, the sample data, the AI bridge and pyexasol - they all need the database, which is not installed"
-    fi
-
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v exapump_install >/dev/null 2>&1; then
-        if begin_step exapump "Step ${_step_no}/${_total}  exapump (data loading CLI)"; then
-            if exakit_soft_step exapump "exakit update" "exapump" \
-                    _exakit_install_exapump; then
-                mark_step exapump
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  exapump — not part of this installation, skipping"
-    fi
-    _step_no=$((_step_no + 1))
-
-    # Load the sample data before any MCP configuration. exapump is now up
-    # (its only dependency), and doing this first means the read-only MCP
-    # user is provisioned, granted, and posture-checked against a schema
-    # that already holds the sample tables — and the AI client has data to
-    # query the moment it connects.
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif exakit_soft_failed exapump; then
-        info "Skipping the sample data — it is loaded with exapump, which is not installed"
-    else
-        # `|| true` alone hid a failed load completely: the run carried on (right)
-        # and the closing summary said nothing (wrong). Record it so the user
-        # leaves knowing the database is empty and which command fills it.
-        exakit_clear_failure_note
-        # THE BRIDGE'S DOWNLOAD STARTS HERE, not two steps later. Priming the
-        # MCP package is a network download and an unpack; the load below is a
-        # local database reading local files. Neither needs the other, so the
-        # download runs underneath the load and the AI bridge step collects a
-        # finished one. See mcp_prefetch_begin.
-        if command -v mcp_prefetch_begin >/dev/null 2>&1; then
-            mcp_prefetch_begin || true
-        fi
-        if ! exakit_maybe_offer_data_load "$_kit_root"; then
-            exakit_record_soft_failure sample_data "exakit data-load" \
-                "$(exakit_take_failure_note)" "sample data"
-            warn "Sample data did not finish loading — carrying on so the rest of the install completes"
-        else
-            exakit_clear_soft_failure sample_data
-        fi
-        exakit_clear_failure_note
-    fi
-
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v mcp_install >/dev/null 2>&1; then
-        if begin_step mcp "Step ${_step_no}/${_total}  AI bridge (MCP server, clients and skills)"; then
-            if exakit_soft_step mcp "exakit update" "the MCP server" _exakit_install_mcp; then
-                mark_step mcp
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  MCP server — not part of this installation, skipping"
-    fi
-
-    # The AI bridge is finished HERE, in the step that says it is being built:
-    # the server, the clients that talk to it, the skills those clients load, and
-    # the "restart your client" line that makes all three take effect. These two
-    # offers used to run at the very end of the run instead — so a reader watched
-    # step 4 announce the AI bridge, sat through pyexasol and the exakit helper,
-    # and was then asked which AI clients to connect, under no step at all. The
-    # step numbering said one thing and the screen did another.
-    #
-    # Nothing here needs a later step. The client configs point at `uvx
-    # <mcp-server>`, never at the exakit command, and exakit_repo_root falls back
-    # to the checkout for skills/ when the helper step has not staged its copy
-    # yet. What they DO need is the database and exapump, which are two steps
-    # back.
-    #
-    # Both offers are best-effort and neither may end the run — but "best-effort"
-    # used to mean "vanishes without trace". Each books itself in the closing
-    # summary with the command that retries it.
-    exakit_clear_failure_note
-    if ! ( exakit_maybe_offer_mcp_setup ); then
-        exakit_record_soft_failure mcp_clients "exakit mcp-setup" \
-            "$(exakit_take_failure_note)" "AI client (MCP) setup"
-    else
-        exakit_clear_soft_failure mcp_clients
-    fi
-    exakit_clear_failure_note
-    if ! ( exakit_maybe_offer_skills_install ); then
-        exakit_record_soft_failure skills "exakit skills-install" \
-            "$(exakit_take_failure_note)" "AI skills"
-    else
-        exakit_clear_soft_failure skills
-    fi
-    exakit_clear_failure_note
-    _step_no=$((_step_no + 1))
-
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v pyexasol_install >/dev/null 2>&1; then
-        if begin_step pyexasol "Step ${_step_no}/${_total}  pyexasol (Exasol Python driver)"; then
-            # pyexasol is the last, optional Component and it must not be able to
-            # end the run: the exakit helper step below still has to happen, or
-            # the user is left without the command that fixes everything else. A
-            # soft failure explains itself, records validated=false, and leaves
-            # the step unmarked so a re-run (or `exakit update pyexasol`) retries.
-            if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
-                mark_step pyexasol
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  pyexasol — not part of this installation, skipping"
-    fi
-    _step_no=$((_step_no + 1))
-
     # The step flag alone is not trusted: if the exakit command was removed
     # (cleanup, testing), a re-run must reinstall it rather than skip.
     _helper_needed=0
-    if begin_step exakit_helper "Step ${_step_no}/${_total}  exakit helper command"; then
+    # Inside Setup Utilities (kit_shared_steps) it runs within an item the
+    # caller opened: no line of its own, and the PATH advice is left to the
+    # caller (EXAKIT_HELPER_PATH_HINT), to print once no bar owns the line.
+    _khs_path=0
+    _khs_title="Step ${_step_no}/${_total}  exakit helper command"
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && _khs_title="exakit command"
+    if begin_step exakit_helper "$_khs_title"; then
         _helper_needed=1
     elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
         info "exakit command is missing — reinstalling it"
@@ -11249,7 +15406,7 @@ kit_shared_steps() {
         info "exakit command is out of date — refreshing it"
         _helper_needed=1
     else
-        ensure_path_hint "$EXAKIT_BIN_DIR"
+        _khs_path=1
     fi
     if [ "$_helper_needed" -eq 1 ]; then
         mkdir -p "$EXAKIT_BIN_DIR" || die "Could not create $EXAKIT_BIN_DIR for the exakit command."
@@ -11280,11 +15437,21 @@ kit_shared_steps() {
             # already established this is not the kit home itself.
             for _kss_stale in "$EXAKIT_HOME/kit/setup/lib" "$EXAKIT_HOME/kit/setup/help" \
                               "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
-                              "$EXAKIT_HOME/kit/skills"; do
+                              "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace" \
+                              "$EXAKIT_HOME/kit/setup/core" "$EXAKIT_HOME/kit/setup/preprocessor" \
+                              "$EXAKIT_HOME/kit/setup/virtual-schemas" "$EXAKIT_HOME/kit/docs/virtual-schemas"; do
                 rm -rf "$_kss_stale"
             done
             cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
                 || die "Could not copy the kit library to $EXAKIT_HOME/kit/setup."
+            # setup/core/ and setup/preprocessor/ are what `exakit update`
+            # reads to decide whether this kit asks for setup this machine has
+            # not finished, and what the database step runs. Without them in
+            # the staged copy, a checkout install's update could never see a
+            # pending task.
+            for _kss_core in core preprocessor virtual-schemas; do
+                [ -d "$_script_dir/$_kss_core" ] && cp -R "$_script_dir/$_kss_core" "$EXAKIT_HOME/kit/setup/"
+            done
             # Copy the assets exakit needs after the checkout is gone: the mcp/
             # and sql/ packages, the data/ CSVs, load-data.sh, and the versions
             # manifest (the offline tier of version resolution, and the record of
@@ -11304,6 +15471,12 @@ kit_shared_steps() {
             # checkout — it shadows it, so every one of those commands reports
             # "no skills/ directory in this kit build" on a working install.
             [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
+            [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
+            # docs/virtual-schemas/ is what `exakit connect <connector> --help`
+            # draws its guide from (engine/guide.py), and the full guide it names.
+            if [ -d "$_kit_root/docs/virtual-schemas" ]; then
+                mkdir -p "$EXAKIT_HOME/kit/docs" && cp -R "$_kit_root/docs/virtual-schemas" "$EXAKIT_HOME/kit/docs/"
+            fi
             # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
             # `exakit help <topic>` resolves through exakit_repo_root, which
             # PREFERS this staged copy once kit/mcp exists. Omitting it did not
@@ -11323,10 +15496,211 @@ kit_shared_steps() {
             [ -d "$_kit_root/setup/help" ] && cp -R "$_kit_root/setup/help" "$EXAKIT_HOME/kit/setup/"
             [ -f "$_script_dir/load-data.sh" ] && cp "$_script_dir/load-data.sh" "$EXAKIT_HOME/kit/setup/"
         fi
-        ensure_path_hint "$EXAKIT_BIN_DIR"
+        _khs_path=1
         mark_step exakit_helper
         ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
     fi
+    if [ "$_khs_path" = 1 ]; then
+        if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then EXAKIT_HELPER_PATH_HINT=1
+        else ensure_path_hint "$EXAKIT_BIN_DIR"; fi
+    fi
+    return 0
+}
+
+# _kss_helper — kit_helper_step inside an open item of Setup Utilities. It
+# shares kit_shared_steps' globals' names, so those are kept around the call.
+_kss_helper() {
+    _kssh_no="$_step_no"; _kssh_tot="$_total"
+    kit_helper_step "" "" "$_script_dir" "$_kit_root"
+    _step_no="$_kssh_no"; _total="$_kssh_tot"
+}
+
+kit_shared_steps() {
+    _step_no="$1"
+    _total="$2"
+    _script_dir="$3"
+    _kit_root="$4"
+
+    # NO DATABASE, NO STEPS THAT NEED ONE. When the database step records
+    # itself as unfinished - today that means Podman was not installed - every
+    # step after it would fail one at a time against a database that is not
+    # there, each with its own error and its own entry in the closing summary.
+    # One reason, said once, is the truth: the summary already carries it, and
+    # `exakit update` runs the lot once Podman is in place. The exakit command
+    # itself is still installed at the end, because it is what the reader needs
+    # next.
+    _kss_nodb=0
+    if exakit_soft_failed runtime; then
+        _kss_nodb=1
+        info "Skipping exapump, the sample data, the AI bridge and pyexasol - they all need the database, which is not installed"
+    fi
+
+    # SETUP UTILITIES: exapump, then the database features, as ONE step with
+    # one item each. Two steps underneath, as before -- exapump is recorded in
+    # steps_completed and resumes on its own, the database features run on
+    # every pass -- shown under one heading (exakit_step_group_begin).
+    #
+    # The database features come right after exapump: the database is up and
+    # exapump can run the setup SQL, and nothing has loaded data or connected
+    # an AI client yet. The core tasks of scope "database" run here (today the
+    # SQL preprocessor framework) - installed when missing, verified on every
+    # pass. A task that fails is booked in the closing summary and the steps
+    # after it still run; each checks its own prerequisites.
+    _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
+    # SETUP UTILITIES AS ONE BAR: three items the reader sees -- the data loader
+    # (exapump), the SQL preprocessor (the database features), the Python driver
+    # (pyexasol) -- each one line when done. Every step underneath runs, records
+    # and resumes exactly as before; the grouping is the screen's only. pyexasol
+    # used to be its own step after the AI bridge; it needs only the database
+    # (and uv, which exakit_ensure_uv provides on its own), so it runs here.
+    #
+    # The kit's own command (kit_helper_step: the exakit command's refresh, the
+    # kit copy, the step tick) was the install's last step for the screen's sake
+    # only -- the command is in place from the start (exakit_install_helper_early).
+    # It runs here, inside the Python driver item: no line of its own, its time
+    # in that item's, the bar saying "finishing" while it runs. Without a
+    # database it is the step's only work and reads "Command line ready".
+    if [ "$_kss_nodb" = 1 ]; then
+        exakit_step_group_begin "$_kss_util_label" 1
+        exakit_item_begin "Command line ready"
+        _kss_helper
+        exakit_item_end 0
+    else
+        exakit_step_group_begin "$_kss_util_label" 3
+        if command -v exapump_install >/dev/null 2>&1; then
+            exakit_item_begin "Data Loader"
+            if begin_step exapump "Data Loader"; then
+                if exakit_soft_step exapump "exakit update" "exapump" \
+                        _exakit_install_exapump; then
+                    mark_step exapump
+                    exakit_item_end 0
+                else
+                    exakit_item_end 1
+                fi
+            else
+                exakit_item_end 0
+            fi
+        else
+            info "exapump — not part of this installation, skipping"
+        fi
+        if ! command -v exakit_core_database_step >/dev/null 2>&1; then
+            info "Database features — not part of this installation, skipping"
+        elif exakit_soft_failed exapump; then
+            info "Database features — skipped: they are set up through exapump, which is not installed"
+        else
+            exakit_core_database_step "Database features" "$_kit_root"
+        fi
+        # pyexasol is optional and must not be able to end the run: a soft
+        # failure explains itself, records validated=false, and leaves the step
+        # unmarked so a re-run (or `exakit update pyexasol`) retries.
+        exakit_item_begin "Python Driver"
+        _kss_py=0
+        if command -v pyexasol_install >/dev/null 2>&1; then
+            if begin_step pyexasol "Python Driver"; then
+                if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
+                    mark_step pyexasol
+                else
+                    _kss_py=1
+                fi
+            fi
+        else
+            info "pyexasol — not part of this installation, skipping"
+        fi
+        ui_spin_relabel "finishing"
+        _kss_helper
+        exakit_item_end "$_kss_py"
+    fi
+    # The PATH advice the helper found needed, now that no bar owns the line.
+    [ "${EXAKIT_HELPER_PATH_HINT:-0}" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    EXAKIT_HELPER_PATH_HINT=0
+    exakit_step_group_end
+    _step_no=$((_step_no + 1))
+
+    # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW. The parts everyone needs
+    # run first, then "What will you use this machine for?", and its answer
+    # ticks the datasets: exakit_persona_flow, which the setup scripts call
+    # after these steps. Loaded here only by a kit copy without persona.sh.
+    if [ "$_kss_nodb" = 1 ] || command -v exakit_persona_flow >/dev/null 2>&1; then
+        :
+    elif exakit_soft_failed exapump; then
+        info "Skipping the sample data — it is loaded with exapump, which is not installed"
+    elif command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+        # An installer an update started to finish new setup: the datasets
+        # were the first install's question, and its answer stands.
+        :
+    else
+        # `|| true` alone hid a failed load completely: the run carried on (right)
+        # and the closing summary said nothing (wrong). Record it so the user
+        # leaves knowing the database is empty and which command fills it.
+        exakit_clear_failure_note
+        if ! exakit_maybe_offer_data_load "$_kit_root"; then
+            exakit_record_soft_failure sample_data "exakit data-load" \
+                "$(exakit_take_failure_note)" "some of the data"
+            warn "Some of the data did not finish loading — carrying on so the rest of the install completes"
+        else
+            exakit_clear_soft_failure sample_data
+        fi
+        exakit_clear_failure_note
+    fi
+
+    if [ "$_kss_nodb" = 1 ]; then
+        :
+    elif command -v mcp_sidecar_apply >/dev/null 2>&1; then
+        if begin_step mcp "Step ${_step_no}/${_total}  Setting up AI bridge (MCP server, clients and skills)"; then
+            if exakit_soft_step mcp "exakit update" "the MCP server" _exakit_install_mcp; then
+                mark_step mcp
+            fi
+        fi
+    else
+        info "Step ${_step_no}/${_total}  MCP server — not part of this installation, skipping"
+    fi
+
+    # The AI bridge is finished HERE, in the step that says it is being built:
+    # the server, the clients that talk to it, the skills those clients load, and
+    # the "restart your client" line that makes all three take effect. These two
+    # offers used to run at the very end of the run instead — so a reader watched
+    # step 4 announce the AI bridge, sat through pyexasol and the exakit helper,
+    # and was then asked which AI clients to connect, under no step at all. The
+    # step numbering said one thing and the screen did another.
+    #
+    # Nothing here needs a later step. The client configs point at the MCP
+    # server's loopback URL, never at the exakit command, and exakit_repo_root falls back
+    # to the checkout for skills/ when the helper step has not staged its copy
+    # yet. What they DO need is the database and exapump, which are two steps
+    # back.
+    #
+    # Both offers are best-effort and neither may end the run — but "best-effort"
+    # used to mean "vanishes without trace". Each books itself in the closing
+    # summary with the command that retries it.
+    #
+    # Neither is asked again by an installer an update started to finish new
+    # setup: which clients and skills to wire was the first install's question.
+    if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+        :
+    else
+        exakit_clear_failure_note
+        if ! ( exakit_maybe_offer_mcp_setup ); then
+            exakit_record_soft_failure mcp_clients "exakit mcp-setup" \
+                "$(exakit_take_failure_note)" "AI client (MCP) setup"
+        else
+            exakit_clear_soft_failure mcp_clients
+        fi
+        exakit_clear_failure_note
+        # The skills are placed without a word on screen (the log keeps every line): the
+        # AI clients connected above are the step's last line. A warning still shows.
+        if ! ( EXAKIT_QUIET_DETAIL=1; exakit_maybe_offer_skills_install ); then
+            exakit_record_soft_failure skills "exakit skills-install" \
+                "$(exakit_take_failure_note)" "AI skills"
+        else
+            exakit_clear_soft_failure skills
+        fi
+    fi
+    exakit_clear_failure_note
+    _step_no=$((_step_no + 1))
+
+
+    # The exakit helper is the last item of Setup Utilities (above). The command
+    # itself is in place from the start (exakit_install_helper_early).
 
     # Autostart is NOT decided here. It used to be: an unconditional
     # exakit_autostart_enable, which unconditionally writes
@@ -11374,6 +15748,12 @@ connection_summary() {
     else
         ui_panel_line "$(printf '%-13s %s' "SQL client" "$(ui_link https://dbeaver.io/download/ "DBeaver") or $(ui_link https://www.dbvis.com/download/ "DbVisualizer")")"
     fi
+    # Federation: shown where a source can be connected from here, the same
+    # test as the data table's "Connect other data sources" row (the module is
+    # loaded and the kit's pyexasol, which runs the engine, is installed).
+    if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
+        ui_panel_line "$(printf '%-13s %s' "Federation" "exakit connect  ·  exakit source")"
+    fi
     ui_panel_line "$(printf '%-13s %s' "Everything" "exakit info  ·  exakit guide")"
     ui_panel_end
 }
@@ -11398,17 +15778,18 @@ connection_panel() {
     # to read one key out of the same file: ~53ms each, ~890ms for the panel.
     # The spinner above explains that wait; batching removes it.
     #
-    # THE ORDER OF THESE SIX NAMES IS THE CONTRACT with the loop below. Every
+    # THE ORDER OF THESE NAMES IS THE CONTRACT with the loop below. Every
     # variable is initialised first, so a missing manifest leaves them empty
     # and the panel prints "unknown" exactly as it did before.
-    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""
+    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""; _cp_tls_fp=""
     _cp_values="$(manifest_get_many \
         runtime.type \
         runtime.dsn \
         runtime.user \
         runtime.password_file \
         components.mcp_server.connection.user \
-        components.mcp_server.connection.password_file 2>/dev/null)"
+        components.mcp_server.connection.password_file \
+        runtime.tls_fingerprint 2>/dev/null)"
     _cp_i=0
     while IFS= read -r _cp_line; do
         _cp_i=$((_cp_i + 1))
@@ -11419,6 +15800,7 @@ connection_panel() {
             4) _pwfile="$_cp_line" ;;
             5) _mcp_user="$_cp_line" ;;
             6) _mcp_pwfile="$_cp_line" ;;
+            7) _cp_tls_fp="$_cp_line" ;;
         esac
     done <<_EXAKIT_CONN_EOF
 $_cp_values
@@ -11438,7 +15820,19 @@ _EXAKIT_CONN_EOF
     [ -n "$_pwfile" ]    && ui_panel_line "Admin pass:   $(ui_tilde "$_pwfile")"
     [ -n "$_mcp_user" ]  && ui_panel_line "MCP user:     $_mcp_user"
     [ -n "$_mcp_pwfile" ] && ui_panel_line "MCP pass:     $(ui_tilde "$_mcp_pwfile")"
-    ui_panel_line "TLS:          enabled (self-signed certificate)"
+    # The pin, from the manifest only (no handshake here: `exakit status`
+    # compares it with the live certificate). The command goes on its own row:
+    # on the TLS row it would take the panel past 80 columns. The same test as
+    # exakit_tls_recorded_fingerprint: 64 lowercase hex digits or no pin.
+    case "$_cp_tls_fp" in ''|*[!0-9a-f]*) _cp_tls_fp="" ;; esac
+    [ "${#_cp_tls_fp}" -eq 64 ] || _cp_tls_fp=""
+    if [ -n "$_cp_tls_fp" ]; then
+        ui_panel_line "TLS:          enabled (self-signed certificate) · pinned"
+        ui_panel_line "              details: exakit tls-pin"
+    else
+        ui_panel_line "TLS:          enabled (self-signed certificate) · not pinned"
+        ui_panel_line "              pin it: exakit tls-pin --accept"
+    fi
 
     _exapump="$(manifest_get components.exapump.path 2>/dev/null)"
     if [ -n "$_exapump" ]; then
@@ -11509,15 +15903,17 @@ _EXAKIT_CONN_EOF
 exakit_print_no_ai_panel() {
     _nap_dsn="$(manifest_get runtime.dsn 2>/dev/null)"
     _nap_host="${_nap_dsn%%:*}"; _nap_port="${_nap_dsn##*:}"
+    _nap_python="$(manifest_get components.pyexasol.python 2>/dev/null || true)"
+    [ -n "$_nap_python" ] || _nap_python="$EXAKIT_HOME/pyexasol-venv/bin/python"
     printf '\n'
     ui_panel_begin "Using your database without an AI client"
     ui_panel_line "Your database works great on its own — three easy ways in:"
     ui_panel_line ""
     ui_panel_line "GUI client:  $(ui_link https://dbeaver.io/download/ "DBeaver") or $(ui_link https://www.dbvis.com/download/ "DbVisualizer")"
     ui_panel_line "             New Connection > Exasol > Host ${_nap_host:-127.0.0.1} Port ${_nap_port:-8563}"
-    ui_panel_line "Python:      pyexasol is preinstalled in its own environment:"
-    ui_panel_line "             $(ui_tilde "$EXAKIT_HOME/pyexasol-venv/bin/python")"
-    ui_panel_line "Terminal:    exapump interactive -p starter-kit   (SQL shell)"
+    ui_panel_line "Python:      pyexasol works in:"
+    ui_panel_line "             $(ui_tilde "$_nap_python")"
+    ui_panel_line "Terminal:    exakit sql \"SELECT 42\"   (a SQL shell: exakit guide)"
     ui_panel_line ""
     ui_panel_line "Step-by-step (credentials, TLS setting, first query):"
     ui_panel_line "  exakit guide"
@@ -11538,6 +15934,27 @@ exakit_guide() {
     _g_user="$(manifest_get runtime.user 2>/dev/null)"; _g_user="${_g_user:-sys}"
     _g_pwfile="$(manifest_get runtime.password_file 2>/dev/null)"
     _g_mcp_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
+    # What this kit actually holds: the loaded datasets' schemas, the persona, the
+    # Python pyexasol lives in (a reused one of yours, or the kit's own) and Dash Server.
+    _g_facts="$(run_python_any - "$EXAKIT_MANIFEST" <<'PY' 2>/dev/null || true
+import json, sys
+doc = json.load(open(sys.argv[1]))
+sets = (doc.get("data") or {}).get("datasets") or {}
+print(",".join(sorted({v["schema"] for v in sets.values() if isinstance(v, dict) and v.get("loaded") and v.get("schema")})))
+persona = doc.get("persona") or {}
+print(persona.get("id", "") if isinstance(persona, dict) else "")
+parts = doc.get("components") or {}
+print((parts.get("pyexasol") or {}).get("python", ""))
+print(",".join(k for k in ("dash_server",) if (parts.get(k) or {}).get("version")))
+print((parts.get("dash_server") or {}).get("port", ""))
+print(" ".join(sorted(k for k, v in sets.items() if isinstance(v, dict) and v.get("loaded"))))
+PY
+)"
+    _g_schemas="$(printf '%s\n' "$_g_facts" | sed -n 1p)"
+    _g_python="$(printf '%s\n' "$_g_facts" | sed -n 3p)"
+    [ -n "$_g_python" ] || _g_python="$EXAKIT_HOME/pyexasol-venv/bin/python"
+    _g_addons=",$(printf '%s\n' "$_g_facts" | sed -n 4p),"
+    _g_dash_port="$(printf '%s\n' "$_g_facts" | sed -n 5p)"
 
     ui_banner "How to connect" "AI clients, SQL clients, Python — pick your door"
 
@@ -11550,7 +15967,19 @@ exakit_guide() {
     ui_panel_line "First thing to ask it:"
     ui_panel_line "  \"List the schemas and tables in my Exasol database, then answer my"
     ui_panel_line "   questions with read-only SQL — show me the SQL before you run it.\""
-    ui_panel_line "14 ready-made questions: data/example-questions.md (in the kit)"
+    # Ready-made questions for the data this kit holds, not a fixed TPC-H list a
+    # persona that never loads TPC-H cannot ask (audit NEW-01).
+    _g_root="$(exakit_repo_root 2>/dev/null || true)"
+    _g_asked=""
+    for _g_id in $(printf '%s\n' "$_g_facts" | sed -n 6p); do
+        if [ "$_g_id" = tpch ]; then _g_q="$_g_root/data/example-questions.md"; else _g_q="$_g_root/data/datasets/$_g_id/examples.sql"; fi
+        [ -n "$_g_root" ] && [ -f "$_g_q" ] || continue
+        [ -n "$_g_asked" ] || ui_panel_line "Ready-made questions for your data (each with its SQL):"
+        ui_panel_line "  $_g_id:"
+        ui_panel_line "    $(ui_tilde "$_g_q")"
+        _g_asked=1
+    done
+    [ -n "$_g_asked" ] || ui_panel_line "Ready-made questions come with each dataset: exakit data-load <id>"
     ui_panel_end
 
     ui_panel_begin "2 · Browse and query with a SQL client (GUI)"
@@ -11567,28 +15996,49 @@ exakit_guide() {
     ui_panel_line "  TLS:       local self-signed certificate — in Driver properties set"
     ui_panel_line "             validateservercertificate = 0 (or add ;validateservercertificate=0"
     ui_panel_line "             to the JDBC URL), then Test Connection > Finish."
-    ui_panel_line "Each bundled dataset has its own schema (TPCH, ENERGY, WEATHER);"
+    if [ -n "$_g_schemas" ]; then
+        ui_panel_line "Each loaded dataset has its own schema: $(printf '%s' "$_g_schemas" | sed 's/,/, /g');"
+    else
+        ui_panel_line "No dataset is loaded yet (exakit data-load); each one gets its own schema;"
+    fi
     ui_panel_line "your own uploads default to STARTER_KIT."
     ui_panel_end
 
     ui_panel_begin "3 · Terminal and Python"
-    ui_panel_line "Interactive SQL shell:   exapump interactive -p starter-kit"
-    ui_panel_line "One-off query:           exapump sql -p starter-kit \"SELECT 42\""
+    ui_panel_line "One-off query:           exakit sql \"SELECT 42\""
+    ui_panel_line "Interactive SQL shell, with the kit's exapump profile:"
+    ui_panel_line "  export EXAPUMP_CONFIG=$(ui_tilde "$EXAKIT_HOME/exapump/config.toml")"
+    ui_panel_line "  exapump interactive -p starter-kit"
     ui_panel_line ""
-    ui_panel_line "Python (pyexasol preinstalled in its own environment):"
-    ui_panel_line "  $(ui_tilde "$EXAKIT_HOME/pyexasol-venv/bin/python")"
-    ui_panel_line "  import pyexasol"
-    ui_panel_line "  c = pyexasol.connect(dsn='$_g_host:$_g_port', user='$_g_user',"
-    ui_panel_line "                       password=open('<password file above>').read(),"
-    ui_panel_line "                       websocket_sslopt={'cert_reqs': 0})"
-    ui_panel_line "  c.export_to_pandas('SELECT * FROM TPCH.CUSTOMER LIMIT 5')"
+    # Shell line, then Python lines marked by their prompt, with the password
+    # file's real path: Python's open() does not expand a ~ (audit NEW-02).
+    ui_panel_line "Python with pyexasol - start the kit's Python:"
+    ui_panel_line "  $(ui_tilde "$_g_python")"
+    ui_panel_line "then, at its >>> prompt:"
+    ui_panel_line "  >>> import os, pyexasol"
+    ui_panel_line "  >>> pw = open(os.path.expanduser("
+    ui_panel_line "  ...     '$(ui_tilde "${_g_pwfile:-$EXAKIT_CREDS_DIR/<password file>}")')).read().strip()"
+    # The dsn carries the database's TLS pin once recorded (SEC-14).
+    ui_panel_line "  >>> c = pyexasol.connect(dsn='$(exakit_tls_pinned_dsn "$_g_host:$_g_port")', user='$_g_user',"
+    ui_panel_line "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
+    ui_panel_line "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
+    ui_panel_end
+
+    ui_panel_begin "4 · Dashboards and other sources"
+    case "$_g_addons" in
+        *,dash_server,*) ui_panel_line "Dashboards:           http://127.0.0.1:${_g_dash_port:-5100}" ;;
+        *) ui_panel_line "Dashboards:           exakit marketplace dash-server" ;;
+    esac
+    ui_panel_line "Federation:           exakit connect · exakit source"
     ui_panel_end
 
     ui_panel_begin "Everything else"
     ui_panel_line "Connection summary:   exakit info"
     ui_panel_line "Load more data:       exakit data-load"
-    ui_panel_line "Optional add-ons:     exakit marketplace (dashboards & more)"
+    ui_panel_line "Optional add-ons:     exakit marketplace"
+    ui_panel_line "Your settings:        $(ui_tilde "$EXAKIT_HOME/exakit.env")"
     ui_panel_line "Health check:         exakit status · exakit mcp-doctor"
+    ui_panel_line "Every command:        exakit help · exakit catalog"
     ui_panel_end
     printf '\n'
 }
@@ -11689,6 +16139,7 @@ exakit_install_command() {
 # to the known names when the checkout is already gone.
 _exakit_remove_installed_skills() {
     _rs_dry="${1:-0}"
+    unset _EXAKIT_SKR_MEMO
     _skill_names=""
     _repo_root="$(exakit_repo_root 2>/dev/null || true)"
     if [ -n "$_repo_root" ] && [ -d "$_repo_root/skills" ]; then
@@ -11712,10 +16163,19 @@ _exakit_remove_installed_skills() {
     # uninstall - long enough to push everything else off a screen, and saying
     # nothing the count and the folder do not. The individual paths are still
     # worth having in the log, where a reader goes when they want them.
-    for _root in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
+    # Continue's folder too, whether or not ~/.continue is still there: the
+    # install places skills in it only when Continue is on the machine, and the
+    # user may have removed Continue since. Only the kit's names are touched.
+    for _root in "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.continue/skills"; do
         _rs_found=0
         for _name in $_skill_names; do
             [ -e "$_root/$_name" ] || continue
+            # Only a folder the kit placed (its mark, or an older kit's copy):
+            # one of the same name the user keeps is theirs.
+            if ! _exakit_skill_is_kits "$_root" "$_name"; then
+                _exakit_log_file "INFO  kept $_root/$_name: not placed by the kit"
+                continue
+            fi
             _rs_found=$((_rs_found + 1))
             _exakit_log_file "INFO  AI skill $_root/$_name"
             [ "$_rs_dry" = "1" ] || rm -rf "$_root/$_name"
@@ -11781,6 +16241,17 @@ _exakit_uninstall_component() {
     _uc_key="$1"
     _uc_dry="${2:-0}"
     case "$_uc_key" in
+        database|launcher|personal|exapump|pyexasol)
+            if ! exakit_component_is_managed "$_uc_key"; then
+                exakit_preserve_component "$_uc_key"
+                return 0
+            fi ;;
+    esac
+    if _exakit_addon_registered "$_uc_key" && ! exakit_component_is_managed "$_uc_key"; then
+        exakit_preserve_component "$_uc_key"
+        return 0
+    fi
+    case "$_uc_key" in
         database)
             _uc_type="$(manifest_get runtime.type 2>/dev/null || true)"
             if [ "$_uc_dry" = "1" ]; then
@@ -11811,6 +16282,13 @@ _exakit_uninstall_component() {
             if command -v exakit_mcp_operation >/dev/null 2>&1; then
                 exakit_mcp_operation uninstall >/dev/null 2>&1 || \
                     warn "Removing the managed AI client config reported issues"
+                _exakit_warn_lines "${EXAKIT_MCP_LAST_UNTOUCHED:-}"
+            fi
+            # Nobody is pointed at the launcher's MCP server any more: it goes too.
+            if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
+               command -v personal_cli >/dev/null 2>&1; then
+                run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || true
+                command -v mcp_sidecar_remove >/dev/null 2>&1 && mcp_sidecar_remove
             fi
             ;;
         skills)
@@ -11818,15 +16296,16 @@ _exakit_uninstall_component() {
             ;;
         exapump)
             if [ "$_uc_dry" = "1" ]; then
-                info "  will remove: exapump ($EXAKIT_BIN_DIR/exapump and the profiles at ~/.exapump)"
+                info "  will remove: exapump ($EXAKIT_BIN_DIR/exapump and kit profiles at $EXAKIT_HOME/exapump)"
                 return 0
             fi
             info "Removing exapump and its profiles"
-            rm -f "$EXAKIT_BIN_DIR/exapump"
+            _uc_bin="$(manifest_get components.exapump.ownership_path 2>/dev/null || true)"
+            rm -f "${_uc_bin:-$EXAKIT_BIN_DIR/exapump}"
             # Through the shared variable, never a bare "$HOME/.exapump": a
             # caller that sandboxes EXAKIT_HOME but not HOME would otherwise
             # delete the real profile directory (a test suite did exactly that).
-            rm -rf "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}" "$EXAKIT_HOME/libexec"
+            rm -rf "$EXAKIT_HOME/exapump" "$EXAKIT_HOME/libexec"
             manifest_del components.exapump
             exakit_unmark_step exapump
             ;;
@@ -11848,10 +16327,21 @@ _exakit_uninstall_component() {
             if _exakit_addon_registered "$_uc_key"; then
                 _uc_fn="$(_exakit_addon_fn "$_uc_key" uninstall)"
                 if command -v "$_uc_fn" >/dev/null 2>&1; then
-                    "$_uc_fn" "$_uc_dry" || warn "Removing the $_uc_key add-on reported issues"
+                    # Which of its skill folders are the kit's, decided while
+                    # it is still installed (the uninstall drops its receipt).
+                    [ "$_uc_dry" = "1" ] || _exakit_skills_decide_kits "$_uc_key"
+                    if "$_uc_fn" "$_uc_dry"; then :; else
+                        _uc_failed=$?
+                        _EXAKIT_SKILL_KITS=""
+                        warn "Removing the $_uc_key add-on failed; its receipt and integrations were kept"
+                        return "$_uc_failed"
+                    fi
+                    # A preview names what the lines below remove too.
+                    [ "$_uc_dry" = "1" ] && _exakit_addon_removal_preview "$_uc_key"
                     # ...and the skills it owns go with it. Here rather than in
                     # the module, so every add-on gets it without writing a line.
                     [ "$_uc_dry" = "1" ] || exakit_remove_addon_skills "$_uc_key" || true
+                    _EXAKIT_SKILL_KITS=""
                     # ...and so does its BOOT ENTRY. Left behind, launchd or
                     # systemd kept firing a launcher that no longer exists on
                     # every login, forever — the one artifact of the add-on
@@ -11859,12 +16349,31 @@ _exakit_uninstall_component() {
                     [ "$_uc_dry" = "1" ] || _exakit_autostart_unregister "$_uc_key" || true
                 else
                     warn "The $_uc_key module carries no uninstall — update the kit: exakit update"
+                    return 1
                 fi
             else
                 warn "Unknown uninstall target: $_uc_key"
             fi
             ;;
     esac
+    return 0
+}
+
+# _exakit_addon_removal_preview <id> — the part of removing an add-on that is
+# the same for every add-on (the add-on arm of _exakit_uninstall_component):
+# its boot entry and the skills it placed, as plan lines. The module's own
+# preview names only what the module removes, so `uninstall <id> --dry-run`
+# left these out. ⇄ twin: Write-ExakitAddonRemovalPreview in setup/exakit.ps1.
+_exakit_addon_removal_preview() {
+    _exakit_autostart_registered "$1" 2>/dev/null && \
+        info "  will remove: the automatic-start entry for $1"
+    for _arp_name in $(exakit_skills_for_addon "$1" 2>/dev/null); do
+        for _arp_root in $EXAKIT_SKILL_ROOTS; do
+            [ -e "$_arp_root/$_arp_name" ] || continue
+            _exakit_skill_is_kits "$_arp_root" "$_arp_name" || continue
+            info "  will remove: AI skill $(ui_tilde "$_arp_root/$_arp_name")"
+        done
+    done
     return 0
 }
 
@@ -11890,11 +16399,30 @@ exakit_log_targets() {
     _lt_setup="$(ls -t "$EXAKIT_LOG_DIR"/install-*.log 2>/dev/null | head -1)"
     [ -n "$_lt_setup" ] && printf 'setup|Installer and setup runs|file|%s\n' "$_lt_setup"
 
+    # `exakit connect` and `exakit source`: the engine's day log, every SQL
+    # statement it sent and every event, secrets redacted (engine/vslog.py).
+    _lt_vs="$(ls -t "$EXAKIT_LOG_DIR"/virtual-schemas-*.log 2>/dev/null | head -1)"
+    [ -n "$_lt_vs" ] && printf 'virtual-schemas|connect and source runs|file|%s\n' "$_lt_vs"
+
+    # <id>_log_path prints a path (the target is the add-on's id), or for an
+    # add-on with more than one log, one "target|what|path" line each - the
+    # target being the id or "<id>-<name>".
     for _lt_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
         _lt_fn="$(_exakit_addon_fn "$_lt_id" log_path)"
         command -v "$_lt_fn" >/dev/null 2>&1 || continue
-        _lt_path="$("$_lt_fn" 2>/dev/null || true)"
-        [ -n "$_lt_path" ] && printf '%s|%s service|file|%s\n' "$_lt_id" "$_lt_id" "$_lt_path"
+        while IFS= read -r _lt_path; do
+            case "$_lt_path" in
+                '') ;;
+                *'|'*'|'*)
+                    _lt_target="${_lt_path%%|*}"
+                    case "$_lt_target" in "$_lt_id"|"$_lt_id"-*) ;; *) continue ;; esac
+                    _lt_rest="${_lt_path#*|}"
+                    printf '%s|%s|file|%s\n' "$_lt_target" "${_lt_rest%%|*}" "${_lt_rest#*|}" ;;
+                *) printf '%s|%s service|file|%s\n' "$_lt_id" "$_lt_id" "$_lt_path" ;;
+            esac
+        done <<EXAKIT_LT_EOF
+$("$_lt_fn" 2>/dev/null || true)
+EXAKIT_LT_EOF
     done
 
     # What the boot entries wrote at login — the only record of a start that
@@ -11931,7 +16459,7 @@ _exakit_log_mtime() {
 # object, including when there are no logs at all, so a parser never gets empty
 # stdout (the same rule the other --json surfaces follow).
 exakit_logs_overview_json() {
-    exakit_can_run_python || return 1
+    exakit_can_run_python_any || return 1   # json only: any Python 3 (audit AGT-02)
     _loj_rows=""
     while IFS='|' read -r _loj_id _loj_label _loj_kind _loj_src; do
         [ -n "$_loj_id" ] || continue
@@ -11948,7 +16476,7 @@ EXAKIT_LOJ_EOF
     # Rows go through argv, not stdin: run_python reads the PROGRAM from stdin
     # (the here-doc), so a piped payload arrives as an empty read and the
     # listing silently comes back with zero targets.
-    run_python - "$_loj_rows" <<'EXAKIT_LOJ_PY'
+    run_python_any - "$_loj_rows" <<'EXAKIT_LOJ_PY'
 import json, sys
 targets = []
 for line in sys.argv[1].splitlines():
@@ -12086,6 +16614,11 @@ EXAKIT_AUTOSTART_PREFIX="com.exasol.exakit"
 # exakit_service_ids — every service on this machine, database first. Add-ons
 # appear only when installed AND carrying the service hooks.
 exakit_service_ids() {
+    # A read-only screen that already worked the list out (exakit status) keeps it.
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] && [ -n "${EXAKIT_SERVICE_IDS_MEMO:-}" ]; then
+        printf '%s\n' "$EXAKIT_SERVICE_IDS_MEMO"
+        return 0
+    fi
     [ -n "$(manifest_get runtime.type 2>/dev/null || true)" ] && printf '%s\n' database
     for _si_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
         command -v "$(_exakit_addon_fn "$_si_id" status)" >/dev/null 2>&1 && printf '%s\n' "$_si_id"
@@ -12151,8 +16684,18 @@ _exakit_service_autostart_command() {
     if [ "$1" = "database" ]; then
         case "$(exakit_installation_runtime_type 2>/dev/null || true)" in
             personal)
-                _sac_cli="$(personal_cli 2>/dev/null || true)"
-                [ -n "$_sac_cli" ] && printf '%s\nstart\n' "$_sac_cli"
+                # THE KIT'S OWN START, NOT THE LAUNCHER'S. The entry used to
+                # run `<launcher> start`, which brings the database up and
+                # nothing else - and every start rebuilds the language
+                # containers with empty DNS files, which only the kit's start
+                # repairs (personal_slc_dns_repair). After each reboot every
+                # virtual schema on a host name failed with an unknown host
+                # until someone ran exakit start by hand, which then answered
+                # "already running" and repaired nothing. `exakit start
+                # database` is the launcher start and the repair as one step,
+                # and it starts the database alone, as the old entry did: each
+                # add-on has its own entry.
+                printf '%s\nstart\ndatabase\n' "$EXAKIT_BIN_DIR/exakit"
                 ;;
         esac
         return 0
@@ -12221,10 +16764,66 @@ EOF_ARGV
     printf '%s' "$_aal_out"
 }
 
-# _exakit_autostart_register <id> — write the platform's boot entry. Returns 1
-# (with an explanation) when the platform has no supervisor to register with.
+# _exakit_autostart_path — the PATH a boot entry runs with. launchd hands a
+# job /usr/bin:/bin:/usr/sbin:/sbin and a systemd user manager its own short
+# list: neither has ~/.local/bin, Homebrew, or wherever the user's container
+# engine lives, and the kit's start needs them (the launcher, the engine the
+# DNS repair asks, the Python it runs). The kit's bin dir first, then the
+# directory of each tool the start runs (as this session resolves it), then
+# Homebrew and the system dirs.
+# NOT THE SESSION'S PATH. It was copied whole, so an AI agent's tool dirs, an
+# activated venv or a directory under /tmp that happened to be on PATH when
+# `exakit update` ran was searched by a job that runs at every login. A tool's
+# directory is kept only when _exakit_autostart_dir_ok trusts it. Absolute
+# entries only, each once.
+_exakit_autostart_path() {
+    _aap_extra="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    [ "$(detect_os 2>/dev/null)" = macos ] && _aap_extra="/opt/homebrew/bin:$_aap_extra"
+    _aap_tools=""
+    for _aap_t in docker podman uv; do
+        _aap_p="$(command -v "$_aap_t" 2>/dev/null)" || continue
+        case "$_aap_p" in /*) ;; *) continue ;; esac
+        _aap_d="$(dirname "$_aap_p")"
+        _exakit_autostart_dir_ok "$_aap_d" && _aap_tools="$_aap_tools:$_aap_d"
+    done
+    _aap_out=""
+    while IFS= read -r _aap_dir; do
+        case "$_aap_dir" in /*) ;; *) continue ;; esac
+        case ":$_aap_out:" in *":$_aap_dir:"*) continue ;; esac
+        _aap_out="${_aap_out:+$_aap_out:}$_aap_dir"
+    done <<EOF_PATH
+$(printf '%s%s:%s' "$EXAKIT_BIN_DIR" "$_aap_tools" "$_aap_extra" | tr ':' '\n')
+EOF_PATH
+    printf '%s' "$_aap_out"
+}
+
+# _exakit_autostart_dir_ok <dir> — may a boot entry search this directory? Not
+# a temporary one (/tmp, $TMPDIR: deleted, then re-created by anyone), and only
+# one owned by the user or root that neither group nor others can write.
+_exakit_autostart_dir_ok() {
+    case "$1/" in
+        /tmp/*|/private/tmp/*|/var/tmp/*|/private/var/tmp/*) return 1 ;;
+    esac
+    if [ -n "${TMPDIR:-}" ]; then
+        case "$1/" in "${TMPDIR%/}"/*) return 1 ;; esac
+    fi
+    [ -d "$1" ] || return 1
+    read -r _ado_mode _ado_links _ado_uid _ado_rest <<EOF_LS
+$(ls -ldLn "$1" 2>/dev/null)
+EOF_LS
+    case "$_ado_mode" in ?????w*|????????w*) return 1 ;; esac
+    [ "$_ado_uid" = 0 ] || [ "$_ado_uid" = "$(id -u)" ]
+}
+
+# _exakit_autostart_register <id> [refresh] — write the platform's boot entry.
+# Returns 1 (with an explanation) when the platform has no supervisor to
+# register with. "refresh" rewrites an entry that is already registered
+# (exakit_autostart_refresh) WITHOUT loading it on macOS: a load runs the
+# entry now, and an update has no business starting a database the user
+# stopped. launchd reads the new file at the next login.
 _exakit_autostart_register() {
     _ar_id="$1"
+    _ar_mode="${2:-}"
     _ar_cmd="$(_exakit_service_autostart_command "$_ar_id")"
     # Nothing to register is not a failure: a service with no boot command
     # simply has no entry to write.
@@ -12246,6 +16845,9 @@ _exakit_autostart_register() {
                     printf '    <string>%s</string>\n' "$(_exakit_xml_escape "$_ar_arg")"
                 done
                 printf '  </array>\n'
+                printf '  <key>EnvironmentVariables</key>\n  <dict>\n'
+                printf '    <key>PATH</key><string>%s</string>\n' "$(_exakit_xml_escape "$(_exakit_autostart_path)")"
+                printf '  </dict>\n'
                 printf '  <key>RunAtLoad</key><true/>\n'
                 printf '  <key>StandardOutPath</key><string>%s/autostart-%s.log</string>\n' "$EXAKIT_LOG_DIR" "$_ar_id"
                 printf '  <key>StandardErrorPath</key><string>%s/autostart-%s.log</string>\n' "$EXAKIT_LOG_DIR" "$_ar_id"
@@ -12255,6 +16857,10 @@ _exakit_autostart_register() {
             # kit log is owner-only; create these first so they are too.
             ( umask 077; : >> "$EXAKIT_LOG_DIR/autostart-$_ar_id.log" ) 2>/dev/null
             chmod 600 "$EXAKIT_LOG_DIR/autostart-$_ar_id.log" 2>/dev/null
+            if [ "$_ar_mode" = refresh ]; then
+                _exakit_log_file "OK    $_ar_id: login entry rewritten for the next login ($_ar_plist)"
+                return 0
+            fi
             # Load it now so the entry is live without a logout, and so a
             # rewritten plist replaces the old registration.
             launchctl unload "$_ar_plist" >/dev/null 2>&1
@@ -12313,13 +16919,31 @@ _exakit_autostart_register() {
             # 100 ms, which burns DefaultStartLimitBurst in half a second and
             # then stops trying for good - so a service that fails once at boot
             # for a transient reason never comes back at all.
+            #
+            # The handoff retries too (LNX-08): the transient failure at boot this
+            # file describes - the container runtime not up yet - otherwise left
+            # the box with no database until someone ran exakit start. systemd
+            # takes Restart= on a oneshot only from 244 and REFUSES to load the
+            # unit before that (RHEL 8 ships 239), so it is added where it loads.
+            _ar_limit=""
             case "$(_exakit_service_autostart_kind "$_ar_id")" in
-                handoff) _ar_svc='Type=oneshot\nRemainAfterExit=yes' ;;
+                handoff)
+                    _ar_svc='Type=oneshot\nRemainAfterExit=yes'
+                    _ar_sd="$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9][0-9]*\).*/\1/p')"
+                    if [ "${_ar_sd:-0}" -ge 244 ] 2>/dev/null; then
+                        _ar_svc="$_ar_svc"'\nRestart=on-failure\nRestartSec=15'
+                        _ar_limit='StartLimitIntervalSec=600\nStartLimitBurst=5\n'
+                    fi
+                    ;;
                 *)       _ar_svc='Type=simple\nRestart=on-failure\nRestartSec=5' ;;
             esac
             {
-                printf '[Unit]\nDescription=Exasol Starter Kit: %s\n\n' "$_ar_id"
-                printf "[Service]\n${_ar_svc}\nExecStart=%s\n\n" "$_ar_exec"
+                printf "[Unit]\nDescription=Exasol Starter Kit: %s\n${_ar_limit}\n" "$_ar_id"
+                # Quoted for systemd: a backslash or a quote escaped, and % is
+                # systemd's specifier character, so a literal one is %%.
+                printf '[Service]\nEnvironment="PATH=%s"\n' \
+                    "$(_exakit_autostart_path | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')"
+                printf "${_ar_svc}\nExecStart=%s\n\n" "$_ar_exec"
                 printf '[Install]\nWantedBy=default.target\n'
             } > "$_ar_unit" || { warn "Could not write $_ar_unit"; return 1; }
             systemctl --user daemon-reload >/dev/null 2>&1
@@ -12459,6 +17083,12 @@ exakit_autostart_enable() {
         # `exakit autostart` produced no output at all once the per-service
         # lines went.
         ok "Automatic start after a restart is on."
+        # In WSL "a restart" is the DISTRO's, not the PC's (WSL-05): Windows
+        # starts a distro when it is opened and stops it when idle, so after a
+        # reboot nothing here runs until the distro does.
+        if [ "$(detect_os 2>/dev/null)" = wsl ]; then
+            info "In WSL that is when this distro starts: after a Windows reboot, open the distro (or start it from a Windows logon task: wsl.exe -d ${WSL_DISTRO_NAME:-<distro>} --exec true) and the database comes up with it."
+        fi
     else
         manifest_set autostart.enabled false
     fi
@@ -12537,6 +17167,61 @@ exakit_autostart_disable() {
     return 0
 }
 
+# _exakit_autostart_current <id> — does the boot entry on disk run the command
+# this kit writes for it? True when there is no entry, or nothing to write.
+_exakit_autostart_current() {
+    _acu_cmd="$(_exakit_service_autostart_command "$1")"
+    [ -n "$_acu_cmd" ] || return 0
+    _acu_label="$(_exakit_autostart_label "$1")"
+    _acu_plist="$EXAKIT_LAUNCHAGENT_DIR/$_acu_label.plist"
+    if [ -f "$_acu_plist" ]; then
+        # The argument list, not the text: the add-on installer writes the same
+        # entry with Python's plistlib (tabs, not this writer's four spaces), and
+        # a text compare took every such entry for stale on every update. Each
+        # <string> of ProgramArguments, unindented and unescaped, in order.
+        _acu_want="$(printf '%s\n' "$_acu_cmd" | sed '/^$/d')"
+        _acu_have="$(sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/p' "$_acu_plist" |
+            sed -n 's/^[[:space:]]*<string>\(.*\)<\/string>[[:space:]]*$/\1/p' |
+            sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&apos;/'/g" -e 's/&amp;/\&/g')"
+        [ "$_acu_want" = "$_acu_have" ] || return 1
+        # And the PATH: an entry that froze a session's PATH is rewritten. Its
+        # value, on the key's line (this writer) or the next one (plistlib); an
+        # entry with no PATH, as the add-on installer writes it, froze none.
+        _acu_path="$(awk '/<key>PATH<\/key>/ { s = $0; sub(/.*<key>PATH<\/key>/, "", s)
+                if (s !~ /<string>/) { getline s } print s; exit }' "$_acu_plist" |
+            sed -n 's/^[[:space:]]*<string>\(.*\)<\/string>.*$/\1/p')"
+        if grep -q '<key>PATH</key>' "$_acu_plist"; then
+            [ "$_acu_path" = "$(_exakit_xml_escape "$(_exakit_autostart_path)")" ] || return 1
+        fi
+    fi
+    _acu_unit="$EXAKIT_SYSTEMD_USER_DIR/$_acu_label.service"
+    if [ -f "$_acu_unit" ]; then
+        grep -Fqx "ExecStart=$(_exakit_autostart_argv_line "$_acu_cmd")" "$_acu_unit" || return 1
+        grep -Fqx "Environment=\"PATH=$(_exakit_autostart_path | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')\"" "$_acu_unit" || return 1
+    fi
+    return 0
+}
+
+# exakit_autostart_refresh — rewrite every registered boot entry an earlier kit
+# wrote with a command this kit no longer runs. `exakit update` calls it: the
+# database entry of every kit before 0.3.0 runs the bare launcher, which skips
+# the DNS repair of the kit's start, and turning autostart off and on again is
+# not something anyone would think to do after an update. Only entries that are
+# registered (a unit the user disabled stays disabled) and stale are touched,
+# and nothing is loaded or started (see _exakit_autostart_register refresh).
+exakit_autostart_refresh() {
+    for _arf_id in $(exakit_service_ids 2>/dev/null); do
+        _exakit_autostart_registered "$_arf_id" 2>/dev/null || continue
+        _exakit_autostart_current "$_arf_id" && continue
+        if _exakit_autostart_register "$_arf_id" refresh >/dev/null 2>&1; then
+            _exakit_log_file "OK    $_arf_id: boot entry updated to this kit's start command"
+        else
+            warn "$_arf_id: the automatic-start entry could not be updated - turn it off and on again with: exakit autostart"
+        fi
+    done
+    return 0
+}
+
 # exakit_autostart_print — the state of every boot entry.
 exakit_autostart_print() {
     # A card, like every other framed answer the kit gives. The service ids come
@@ -12586,7 +17271,7 @@ exakit_uninstall_menu() {
     # otherwise and named a syntax the parser rejects.
 
     # Kit-managed add-ons, each removable on its own.
-    _um_addons="$(exakit_marketplace_installed_addons 2>/dev/null || true)"
+    _um_addons="$(exakit_marketplace_removable_addons 2>/dev/null || true)"
     if [ -n "$_um_addons" ]; then
         # "Clear the add-ons, keep the kit" was already reachable - tick every
         # add-on row and leave EVERYTHING alone - but nothing on the screen said
@@ -12739,14 +17424,18 @@ EXAKIT_UM_PANEL_EOF
     printf '\n'
     _um_rc=0
     for _um_key in $_um_picked; do
-        _exakit_uninstall_component "$_um_key" 0 || _um_rc=1
+        # A failed component stops the run with its own exit code; a database
+        # that survived is also said plainly below.
+        _exakit_uninstall_component "$_um_key" 0 || { _um_rc=$?; break; }
     done
     printf '\n'
     # The database survived (the report above names it and the command that
     # removes it): "Done" would be the one false line of the run.
     if [ "$_um_rc" -ne 0 ]; then
-        error "Uninstall did not finish: the database is still on this machine (see above)."
-        return 1
+        case "$_um_key" in
+            database|everything) error "Uninstall did not finish: the database is still on this machine (see above)." ;;
+        esac
+        return "$_um_rc"
     fi
     # A full uninstall has just deleted the exakit binary, so pointing at
     # `exakit info` sends the reader to a command that no longer exists -
@@ -12765,12 +17454,32 @@ EXAKIT_UM_PANEL_EOF
                 ok "Done. The kit is gone."
             fi
             info "Install it again any time: $(exakit_install_command)"
+            exakit_uninstall_leftovers
             ;;
         *)
             ok "Done. See where you stand with: exakit info"
             ;;
     esac
     return 0
+}
+
+# exakit_uninstall_leftovers — after a full uninstall, what is still on the
+# machine because it is not the kit's alone to remove: a PATH line in the shell
+# profile, and the Python uv downloaded for the kit's environments, which lives
+# in uv's own shared folder (another project of yours may use it). Said with
+# the command that removes each, never removed here (audit DAY-09).
+exakit_uninstall_leftovers() {
+    # One line, not two paragraphs: both items are optional tidying, and each
+    # carries the one thing needed to act on it.
+    _ul_more=""
+    if command -v uv >/dev/null 2>&1; then
+        _ul_dir="$(uv python dir 2>/dev/null || true)"
+        if [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] && \
+           [ -n "$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)" ]; then
+            _ul_more="; uv's Python $EXAKIT_MANAGED_PYTHON_VERSION (if nothing else uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION)"
+        fi
+    fi
+    info "Left for you: any PATH entry for $(ui_tilde "$EXAKIT_BIN_DIR") in your shell profile$_ul_more"
 }
 
 # _exakit_kit_mcp_server_pids - the pids of running exasol-mcp-server processes
@@ -12865,8 +17574,7 @@ _exakit_uninstall_closing_hints() {
     if ! command -v uv >/dev/null 2>&1 && [ -x "${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv" ]; then
         _uch_uv="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv"
     fi
-    info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
-    info "uv keeps the MCP server package in its cache; free that space with: $_uch_uv cache clean exasol-mcp-server"
+    info "Restart any AI client that was open so it drops the Exasol MCP server; free uv's cached copy with: $_uch_uv cache clean exasol-mcp-server"
 }
 
 # _exakit_uninstall_kit_images <dry> - the container images the database used.
@@ -12881,20 +17589,96 @@ _exakit_uninstall_closing_hints() {
 # the launcher's own VM, so the host engine holds nothing of the kit's there.
 # Every engine call is bounded, so a hung engine cannot stall the uninstall.
 # Twin of Invoke-ExakitUninstallKitImages.
-# Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx), so an
-# image of it on this machine is the user's own.
-EXAKIT_KIT_IMAGE_REPOS="exasol/nano"
+# The Federation kit pulls two more through the launcher, into the same
+# engine: the MCP server that runs beside the database (exasol/mcp-server,
+# pulled by digest, so the engine lists it as <none>) and the script language
+# containers a first `exakit connect` installs
+# (exasol/script-language-container, the Java one is ~1 GB). Both were left
+# behind by a full uninstall. Only these exact repositories, the same rules.
+#
+# AND ONLY THE IMAGES THIS DEPLOYMENT RAN FROM, ON ITS OWN ENGINE (audit
+# LNX-01). Another installation can share the engine - a Windows kit and a WSL
+# kit on one Docker Desktop, or Docker for other work beside the kit's Podman -
+# and an image of those repositories may be its. So the sweep asks only the
+# engine the kit recorded for the deployment, and removes only the images
+# _exakit_uninstall_kit_image_ids found the deployment using before its
+# teardown. Any other image of these repositories is kept, and said so.
+EXAKIT_KIT_IMAGE_REPOS="exasol/nano exasol/mcp-server exasol/script-language-container"
+
+# _exakit_uninstall_kit_image_ids - the images THIS deployment ran from, read
+# while it is still there (before its teardown): the engine the kit recorded
+# for it on the first line, then one image id per line. The ids are those of
+# its own containers (exasol-db-<id> and its sidecars, running or stopped) and
+# of every image its launcher state names: the language containers
+# (.exasolLauncherState.json installedSlcs) and the sidecars (sidecars.yaml).
+# Nothing at all when there is no engine to ask (macOS, or no deployment
+# record). Read-only; every engine call is bounded. Twin of
+# Get-ExakitUninstallKitImageIds.
+_exakit_uninstall_kit_image_ids() {
+    case "$(detect_os 2>/dev/null || uname -s 2>/dev/null)" in macos|Darwin) return 0 ;; esac
+    if command -v personal_engine_recorded >/dev/null 2>&1; then
+        _kii_eng="$(personal_engine_recorded 2>/dev/null || true)"
+    else
+        _kii_eng="$(manifest_get runtime.engine 2>/dev/null || true)"
+    fi
+    case "$_kii_eng" in docker|podman) ;; *) return 0 ;; esac
+    printf '%s\n' "$_kii_eng"
+    command -v "$_kii_eng" >/dev/null 2>&1 || return 0
+    _kii_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+    [ -n "$_kii_dir" ] && [ -d "$_kii_dir" ] || return 0
+    _kii_id=""
+    for _kii_f in "$_kii_dir/.exasolLauncherState.json" "$_kii_dir/deployment.json"; do
+        [ -f "$_kii_f" ] || continue
+        _kii_id="$(tr -d '\012\015' < "$_kii_f" 2>/dev/null | \
+            sed -n 's/.*"deploymentId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [ -n "$_kii_id" ] && break
+    done
+    {
+        if [ -n "$_kii_id" ] && [ "$_kii_id" != local ]; then
+            exakit_run_bounded 30 "$_kii_eng" ps -a --filter "name=exasol-db-$_kii_id" --format '{{.Names}}' 2>/dev/null | \
+                while read -r _kii_name; do
+                    # The filter matches a part of the name: exasol-db-<id>2 is another deployment's.
+                    case "$_kii_name" in "exasol-db-$_kii_id"|"exasol-db-$_kii_id-sidecar-"*) ;; *) continue ;; esac
+                    exakit_run_bounded 30 "$_kii_eng" inspect --format '{{.Image}}' "$_kii_name" 2>/dev/null
+                done
+        fi
+        {
+            [ -f "$_kii_dir/.exasolLauncherState.json" ] && tr -d '\012\015' < "$_kii_dir/.exasolLauncherState.json" 2>/dev/null | \
+                sed 's/"image"[[:space:]]*:[[:space:]]*"/\
+EXAKIT_IMAGE_REF /g' | sed -n 's/^EXAKIT_IMAGE_REF \([^"]*\)".*/\1/p'
+            # The file's newlines were dropped above: end its last ref here.
+            echo
+            [ -f "$_kii_dir/sidecars.yaml" ] && sed -n "s/^[[:space:]]*image:[[:space:]]*[\"']\{0,1\}\([^\"' ]*\).*/\1/p" "$_kii_dir/sidecars.yaml" 2>/dev/null
+        } | while read -r _kii_ref || [ -n "$_kii_ref" ]; do
+            [ -n "$_kii_ref" ] || continue
+            exakit_run_bounded 30 "$_kii_eng" image inspect --format '{{.Id}}' "$_kii_ref" 2>/dev/null
+        done
+    } | sed 's/^sha256://' | grep -E '^[0-9a-z]+$' | sort -u
+    return 0
+}
+
+# _exakit_kit_image_label <repo> - the short name a ✓ line uses for a repo.
+_exakit_kit_image_label() {
+    case "$1" in
+        exasol/script-language-container) printf 'script-language-container' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+# _exakit_uninstall_kit_images <dry> <record> - <record> is what
+# _exakit_uninstall_kit_image_ids answered before the teardown.
 _exakit_uninstall_kit_images() {
     _kim_dry="${1:-0}"
     _kim_os="$(detect_os 2>/dev/null || uname -s 2>/dev/null)"
     case "$_kim_os" in macos|Darwin) return 0 ;; esac
+    _kim_record="${2:-}"
+    _kim_ids=" $(printf '%s\n' "$_kim_record" | sed 1d | tr '\n' ' ')"
     _kim_any=0
     _kim_gone=""
-    for _kim_eng in docker podman; do
+    for _kim_eng in $(printf '%s\n' "$_kim_record" | head -1); do
         command -v "$_kim_eng" >/dev/null 2>&1 || continue
         _kim_any=1
         if ! _kim_list="$(exakit_run_bounded 30 "$_kim_eng" images --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)"; then
-            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano"
+            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/*"
             continue
         fi
         _kim_rows="$(printf '%s\n' "$_kim_list" | while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
@@ -12934,24 +17718,118 @@ _exakit_uninstall_kit_images() {
                 info "Kept image $_kr_name (id $_kr_id): it also carries another repository's tag."
                 continue
             fi
+            # Not one this deployment ran from: it may be another
+            # installation's on the same engine. Kept.
+            _kr_ours=0
+            if [ -n "$_kr_id" ]; then
+                case "$_kim_ids" in *" $_kr_id"*) _kr_ours=1 ;; esac
+            fi
+            if [ "$_kr_ours" = 0 ]; then
+                info "Kept image $_kr_name: the kit has no record that its database used it, so it may be another installation's. If nothing uses it, remove it with: $_kim_eng rmi $_kr_ref"
+                continue
+            fi
             if [ "$_kim_dry" = "1" ]; then
                 info "  will remove: $_kim_eng image $_kr_name${_kr_size:+ ($_kr_size)}"
                 continue
             fi
             if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
-                _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
+                # One name per repository on the ✓ line, however many tags went.
+                _kr_label="$(_exakit_kit_image_label "$_kr_repo")"
+                case ", $_kim_gone, " in *", $_kr_label, "*) : ;; *) _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_label" ;; esac
             else
                 info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows
 KIMROWS
-        [ -n "$_kim_gone" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_gone"
+        # In the fixed repository order, whatever order the engine listed them.
+        _kim_line=""
+        for _kr_want in $EXAKIT_KIT_IMAGE_REPOS; do
+            _kr_label="$(_exakit_kit_image_label "$_kr_want")"
+            case ", $_kim_gone, " in *", $_kr_label, "*) _kim_line="${_kim_line:+$_kim_line, }$_kr_label" ;; esac
+        done
+        [ -n "$_kim_line" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_line"
         _kim_gone=""
     done
     if [ "$_kim_any" = 0 ]; then
-        info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+        _kim_eng="$(printf '%s\n' "$_kim_record" | head -1)"
+        if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+            info "Neither Docker nor Podman was found, so the kit's container images were not checked."
+        elif [ -n "$_kim_eng" ]; then
+            info "$_kim_eng, the engine the database ran on, was not found, so the kit's container images were not checked."
+        else
+            info "The kit has no record of the engine the database ran on, so its container images were kept. Check them with: docker images exasol/* (or podman images exasol/*)"
+        fi
     fi
+    return 0
+}
+
+# _exakit_uninstall_other_runs - every OTHER exakit run of this kit that is
+# still alive, one "pid|short command" line each.
+#
+# An `exakit connect` left open in another window kept running while a full
+# uninstall deleted the kit from under it: nothing said it was there, and it
+# failed half-way through whatever it was doing. A run is this kit's when its
+# command line names the installed command ($EXAKIT_BIN_DIR/exakit) or a
+# script in the kit's own copy ($EXAKIT_HOME/kit/setup/), run directly or by
+# a shell (an editor with the file open is not a run). This shell, its
+# parents and its own children (subshells, spinner animators) are not "other".
+# Read-only: nothing is ever stopped. Twin of Get-ExakitUninstallOtherRuns.
+_exakit_uninstall_other_runs() {
+    _uor_bin="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/exakit"
+    _uor_kit="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/kit/setup/"
+    _uor_ps="$(ps -axo pid=,ppid=,command= 2>/dev/null)" || return 0
+    [ -n "$_uor_ps" ] || return 0
+    printf '%s\n' "$_uor_ps" | awk -v self="$$" -v bin="$_uor_bin" -v kit="$_uor_kit" '
+        {
+            line = $0; sub(/^[ \t]+/, "", line)
+            pid = line; sub(/[ \t].*$/, "", pid)
+            rest = line; sub(/^[0-9]+[ \t]+/, "", rest)
+            ppid = rest; sub(/[ \t].*$/, "", ppid)
+            cmd = rest; sub(/^[0-9]+[ \t]*/, "", cmd)
+            par[pid] = ppid; c[pid] = cmd; ord[++n] = pid
+        }
+        END {
+            p = self; k = 0
+            while (p != "" && p != "0" && !(p in anc) && k < 128) { anc[p] = 1; p = par[p]; k++ }
+            for (i = 1; i <= n; i++) {
+                pid = ord[i]
+                if (pid in anc) continue
+                cmd = c[pid]; at = 0
+                b = index(cmd, bin)
+                if (b > 0) { nx = substr(cmd, b + length(bin), 1); if (nx == "" || nx == " ") at = b }
+                if (!at) { kk = index(cmd, kit); if (kk > 0) { tail = substr(cmd, kk + length(kit)); sub(/[ \t].*$/, "", tail); if (tail == "exakit" || tail ~ /\.sh$/) at = kk } }
+                if (!at) continue
+                # Only a RUN of it: the path is the program, or what a shell
+                # (bash/sh/zsh, through env) was told to run - not an editor
+                # or a pager that has the file open.
+                pre = substr(cmd, 1, at - 1); np = split(pre, pw, /[ \t]+/); okp = 1
+                for (j = 1; j <= np; j++) {
+                    if (pw[j] == "") continue
+                    bn = pw[j]; sub(/.*\//, "", bn)
+                    if (bn !~ /^-?(ba|z|da|k)?sh$/ && bn != "env" && pw[j] !~ /^-/) { okp = 0; break }
+                }
+                if (!okp) continue
+                q = par[pid]; d = 0; k = 0
+                while (q != "" && q != "0" && k < 128) { if (q == self) { d = 1; break }; q = par[q]; k++ }
+                if (d) continue
+                s = substr(cmd, at); n1 = split(s, w, /[ \t]+/)
+                name = w[1]; sub(/.*\//, "", name)
+                out = name; for (j = 2; j <= n1 && j <= 4; j++) out = out " " w[j]
+                print pid "|" out
+            }
+        }'
+}
+
+# exakit_uninstall_blocked <dry> - say which other exakit runs are alive; 0
+# when at least one is (the uninstall must not start), 1 when none is.
+exakit_uninstall_blocked() {
+    _ub_list="$(_exakit_uninstall_other_runs 2>/dev/null || true)"
+    [ -n "$_ub_list" ] || return 1
+    printf '%s\n' "$_ub_list" | while IFS='|' read -r _ub_pid _ub_cmd; do
+        [ -n "$_ub_pid" ] || continue
+        warn "exakit is still running in another window: $_ub_cmd (pid $_ub_pid). Close it, then run exakit uninstall again."
+    done
     return 0
 }
 
@@ -12979,10 +17857,19 @@ exakit_uninstall_run() {
     # NOT in a dry run: there, listing every path IS the output. That is the
     # only thing --dry-run produces and the reason anyone asks for it.
     _un_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
-    if [ "$_dry" != "1" ] && [ -t 1 ]; then
+    #
+    # Quiet on EVERY real run, not only on a terminal: an agent's shell or a
+    # pipe has no spinner to read, so there the record lines are the whole
+    # output, one per area, instead of every plan line under them.
+    if [ "$_dry" != "1" ]; then
         EXAKIT_QUIET_DETAIL=1
         ui_spin_begin "Removing the kit"
     fi
+    # _un_phase <label> — the spinner line names the phase under way. Display
+    # only: no spinner (dry run, no terminal) and it does nothing.
+    _un_phase() {
+        [ "$_dry" = "1" ] || ! command -v ui_spin_relabel >/dev/null 2>&1 || ui_spin_relabel "$1"
+    }
     _step() { # _step <message>  — narrate the action (or the plan line)
         if [ "$_dry" = "1" ]; then info "  will remove: $1"; else info "$1"; fi
     }
@@ -13024,12 +17911,39 @@ exakit_uninstall_run() {
                           libexec workflows migration .last-failure .install.lock; do
             [ -e "$1/$_un_marker" ] && return 0
         done
-        # Nothing of ours in it. Empty is still fine; anything else is not.
+        # Nothing of ours in it. Empty is still fine, and so is a home holding
+        # only the work an earlier uninstall kept (step 5: notebooks, mlflow,
+        # dash-server/instance); anything else is not.
         for _un_entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
             [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
+            case "${_un_entry#"$1"/}" in
+                notebooks|mlflow|dash-server) [ -d "$_un_entry" ] && [ ! -L "$_un_entry" ] && continue ;;
+            esac
             return 1
         done
         return 0
+    }
+    # _un_keep_notebooks — step 5 keeps the user's own work in the kit home, not
+    # the kit's: their notebooks (notebooks/), their MLflow runs, registry and
+    # artifacts (mlflow/) and their dashboards (dash-server/instance). A
+    # reinstall picks all three up again. EXAKIT_UNINSTALL_NOTEBOOKS=remove
+    # takes them too. Not EXAKIT_UNINSTALL_FULL: that one only tells add-on
+    # hooks a full uninstall is under way (it is set below on every full run).
+    _un_work="notebooks mlflow dash-server/instance"
+    _un_keep_notebooks() {
+        case "$(printf '%s' "${EXAKIT_UNINSTALL_NOTEBOOKS:-}" | tr '[:upper:]' '[:lower:]')" in remove) return 1 ;; esac
+        for _un_w in $_un_work; do
+            [ -d "$EXAKIT_HOME/$_un_w" ] && [ ! -L "$EXAKIT_HOME/$_un_w" ] && return 0
+        done
+        return 1
+    }
+    # _un_kept_work — the kept folders that exist, as a reader names them.
+    _un_kept_work() {
+        _un_kw=""
+        [ -d "$EXAKIT_HOME/notebooks" ] && _un_kw="${_un_kw:+$_un_kw, }notebooks"
+        [ -d "$EXAKIT_HOME/mlflow" ] && _un_kw="${_un_kw:+$_un_kw, }MLflow runs and models"
+        [ -d "$EXAKIT_HOME/dash-server/instance" ] && _un_kw="${_un_kw:+$_un_kw, }dashboards"
+        printf '%s' "$_un_kw"
     }
     _rm() { # _rm <path> — remove a path unless dry-run
         [ "$_dry" = "1" ] || rm -rf "$1"
@@ -13051,6 +17965,31 @@ exakit_uninstall_run() {
         info "Nothing was removed. Check EXAKIT_HOME, or unset it to use the default ~/.exasol-starter-kit."
         die "Unsafe EXAKIT_HOME: $EXAKIT_HOME"
     fi
+
+    _un_preserved_paths="$(exakit_preserved_component_paths)"
+    _un_entry_preserved() {
+        while IFS= read -r _un_kept_path; do
+            [ -n "$_un_kept_path" ] || continue
+            case "$_un_kept_path" in "$1"|"$1"/*) return 0 ;; esac
+            case "$1" in "$_un_kept_path"/*) return 0 ;; esac
+        done <<EXAKIT_PRESERVED_PATHS_EOF
+$_un_preserved_paths
+EXAKIT_PRESERVED_PATHS_EOF
+        return 1
+    }
+    _un_protected_bins=""
+    _un_exasol_path="$(manifest_get components.personal.ownership_path 2>/dev/null || true)"
+    _un_exapump_path="$(manifest_get components.exapump.ownership_path 2>/dev/null || true)"
+    # Read the add-on ids once, here: the registry is marketplace/catalog.json
+    # under the kit copy, which step 5 removes with the kit home, so asked again
+    # at step 6 it answered nothing and the add-on launchers were not swept.
+    # Twin of $uninstallAddonIds in exakit.ps1.
+    _un_addon_ids="$(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+    for _un_bin in exasol exapump $_un_addon_ids; do
+        if ! exakit_component_is_managed "$_un_bin"; then
+            _un_protected_bins="$_un_protected_bins $_un_bin "
+        fi
+    done
 
     # 0a) Boot entries first: a LaunchAgent or systemd unit left behind would
     #     try to start something that no longer exists on the next login.
@@ -13075,12 +18014,20 @@ exakit_uninstall_run() {
     #    VS Code extension). Anything under the kit home or the bin dir is
     #    swept by steps 5-6 regardless; a system-installed copy the kit never
     #    managed is not touched (each hook enforces that itself).
+    _un_phase "Removing add-ons"
     _un_addons_gone=""
     # Tells an add-on hook that the kit home goes next, so it does not promise
     # to keep something step 5 is about to delete (dash-server's instance).
     EXAKIT_UNINSTALL_FULL=1
+    # Which add-on skill folders are the kit's, decided before the add-ons go
+    # (their uninstall drops the receipt the decision reads); step 3 removes them.
+    if [ "$_dry" != "1" ] && command -v exakit_marketplace_installed_addons >/dev/null 2>&1; then
+        # shellcheck disable=SC2046
+        _exakit_skills_decide_kits $(exakit_marketplace_removable_addons 2>/dev/null)
+    fi
     if command -v exakit_marketplace_installed_addons >/dev/null 2>&1; then
-        for _un_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
+        for _un_id in $(exakit_marketplace_removable_addons 2>/dev/null); do
+            if ! exakit_component_is_managed "$_un_id"; then exakit_preserve_component "$_un_id"; continue; fi
             _un_fn="$(_exakit_addon_fn "$_un_id" uninstall)"
             command -v "$_un_fn" >/dev/null 2>&1 || continue
             if "$_un_fn" "$_dry"; then
@@ -13092,6 +18039,7 @@ exakit_uninstall_run() {
     fi
     [ -n "$_un_addons_gone" ] && _done "Add-ons removed: $_un_addons_gone"
 
+    _un_phase "Removing the database"
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
@@ -13109,7 +18057,18 @@ exakit_uninstall_run() {
     _un_mcp_port=""
     [ "$_un_had_deploy" = 1 ] && \
         _un_mcp_port="$(_exakit_uninstall_recorded_db_port "$EXAKIT_PERSONAL_DEPLOY_DIR")"
-    if [ -n "$_type" ]; then
+    # The images the deployment runs from, read now: the teardown removes its
+    # containers, and step 1c removes only these.
+    _un_kit_images=""
+    if [ "$_un_had_deploy" = 1 ] && [ "$_type" = personal ] && exakit_component_is_managed database; then
+        _un_kit_images="$(_exakit_uninstall_kit_image_ids)"
+    fi
+    if [ -n "$_type" ] && ! exakit_component_is_managed database; then
+        exakit_preserve_component database
+        # A database the kit does not own stays, and so do its images and the
+        # MCP servers pointed at it.
+        _un_had_deploy=0
+    elif [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
         # see what is about to be deleted.
@@ -13132,7 +18091,7 @@ exakit_uninstall_run() {
         case "$_type" in
             personal)
                 [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ] || \
-                    _done "Database removed: the local Exasol Personal deployment and all its data"
+                    _done "Database removed: the local deployment and all its data"
                 # A container check that could not run is said right under
                 # that line, never folded into it.
                 [ "$_dry" = "1" ] || _exakit_uninstall_teardown_warnings ;;
@@ -13193,11 +18152,13 @@ exakit_uninstall_run() {
        [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
        command -v _exakit_uninstall_kit_images >/dev/null 2>&1 && \
        [ -z "$(personal_other_deployments 2>/dev/null)" ]; then
-        _exakit_uninstall_kit_images "$_dry"
+        _un_phase "Removing container images"
+        _exakit_uninstall_kit_images "$_dry" "$_un_kit_images"
     fi
 
     # 2) Managed MCP configuration in every AI client the kit configures.
     #    Best-effort: a failure here must not block the rest.
+    _un_phase "Removing AI client settings"
     if command -v exakit_mcp_operation >/dev/null 2>&1; then
         # The client list comes from the one function that owns it rather than
         # being spelled out here: this line named three clients while the
@@ -13208,9 +18169,23 @@ exakit_uninstall_run() {
         if [ "$_dry" != "1" ]; then
             exakit_mcp_operation uninstall >/dev/null 2>&1 || \
                 warn "Removing the managed AI client config reported issues (continuing uninstall)"
+            _exakit_warn_lines "${EXAKIT_MCP_LAST_UNTOUCHED:-}"
         fi
-        _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
+        _done "MCP entry removed from the AI clients: ${_un_mcp_clients:-all managed clients}"
     fi
+    # The launcher's MCP server the kit set up (mcp_sidecar_apply), on a
+    # deployment that stays: a database the kit did not remove keeps running,
+    # and so would a server nobody is pointed at any more. A removed deployment
+    # took its sidecars with it.
+    if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
+       [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && command -v personal_cli >/dev/null 2>&1; then
+        _step "the MCP server the kit set up beside your database (sidecar '${EXAKIT_MCP_SIDECAR:-mcp}')"
+        if [ "$_dry" != "1" ]; then
+            run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || \
+                warn "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable ${EXAKIT_MCP_SIDECAR:-mcp} --remove"
+        fi
+    fi
+
     # 2b) MCP servers the open AI clients still run for the kit, now pointed
     #     at nothing. Only processes proven to be the kit's (see the helper),
     #     and only when this run found a deployment: a sandboxed HOME (the
@@ -13221,13 +18196,15 @@ exakit_uninstall_run() {
 
     # 3) Installed AI skills (shared with the selectable uninstall menu).
     _exakit_remove_installed_skills "$_dry"
+    _EXAKIT_SKILL_KITS=""
 
     # 4) exapump profile store (the kit created it; the binary goes in step 6).
-    if [ -e "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}" ]; then
-        _step "exapump profiles at ${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
-        _rm "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
+    if [ -e "$EXAKIT_HOME/exapump" ] && ! _un_entry_preserved "$EXAKIT_HOME/exapump"; then
+        _step "kit exapump profiles at $EXAKIT_HOME/exapump"
+        _rm "$EXAKIT_HOME/exapump"
     fi
 
+    _un_phase "Removing kit files"
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots,
     #    and the pyexasol / marketplace add-on virtual environments and state
     #    (dash-server's venv and instance data live under the kit home too).
@@ -13240,43 +18217,94 @@ exakit_uninstall_run() {
         if [ "$_dry" != "1" ] && [ -d "$EXAKIT_HOME/backups" ] && [ -n "$(ls -A "$EXAKIT_HOME/backups" 2>/dev/null)" ]; then
             _un_keep="${EXAKIT_HOME}-backups-$(date +%Y%m%d-%H%M%S)"
             if mv "$EXAKIT_HOME/backups" "$_un_keep" 2>/dev/null; then
-                info "AI client config snapshots kept at $_un_keep (delete it when you are sure)"
+                # The configs hold the kit's MCP password and other servers' keys:
+                # yours alone, and only the newest - the one that restores the
+                # configs as this uninstall found them (audit SEC-16).
+                chmod -R go-rwx "$_un_keep" 2>/dev/null || true
+                for _un_old in "${EXAKIT_HOME}"-backups-*; do
+                    [ -d "$_un_old" ] && [ ! -L "$_un_old" ] && [ "$_un_old" != "$_un_keep" ] && rm -rf "$_un_old"
+                done
+                # On screen even in a quiet run: a folder holding a password,
+                # left behind on purpose, is the one thing to read here.
+                info_step "AI client config snapshots kept at $(ui_tilde "$_un_keep") (they hold the MCP password). Delete once your AI clients work: rm -rf '$_un_keep'"
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
-        _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
-        _rm "$EXAKIT_HOME"
-        _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+        if _un_keep_notebooks || [ -n "$_un_preserved_paths" ]; then
+            # Everything in the kit home but the user's work. The home is left
+            # holding only that, which an install or an uninstall later accepts
+            # as a kit home (see _un_safe_target).
+            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons) - all but your work"
+            _un_keep_notebooks && info "  your work stays in $EXAKIT_HOME: $(_un_kept_work) (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes it too)"
+            [ -z "$_un_preserved_paths" ] || info "  reused component files under the kit home are preserved"
+            if [ "$_dry" != "1" ]; then
+                for _un_entry in "$EXAKIT_HOME"/* "$EXAKIT_HOME"/.[!.]* "$EXAKIT_HOME"/..?*; do
+                    [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
+                    if _un_keep_notebooks && [ ! -L "$_un_entry" ]; then
+                        case "${_un_entry#"$EXAKIT_HOME"/}" in
+                            notebooks|mlflow) continue ;;
+                            dash-server)
+                                # The server goes; its instance (the dashboards) stays.
+                                if [ -d "$_un_entry/instance" ]; then
+                                    for _un_sub in "$_un_entry"/* "$_un_entry"/.[!.]* "$_un_entry"/..?*; do
+                                        [ -e "$_un_sub" ] || [ -L "$_un_sub" ] || continue
+                                        [ "$_un_sub" = "$_un_entry/instance" ] && continue
+                                        _un_entry_preserved "$_un_sub" && continue
+                                        rm -rf "$_un_sub"
+                                    done
+                                    continue
+                                fi ;;
+                        esac
+                    fi
+                    _un_entry_preserved "$_un_entry" && continue
+                    rm -rf "$_un_entry"
+                done
+            fi
+            if _un_keep_notebooks; then
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); your $(_un_kept_work) stay there"
+            else
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); files other tools reuse stay there"
+            fi
+        else
+            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
+            _rm "$EXAKIT_HOME"
+            _done "Kit home removed: $(ui_tilde "$EXAKIT_HOME")"
+        fi
     fi
 
+    _un_phase "Removing commands"
     # 6) CLI binaries. Removed last so earlier steps can still call the launcher.
     #    Removing the running exakit binary itself is safe (the inode survives
     #    until the process exits). Marketplace add-on launchers are swept by
     #    registry id — a new add-on needs no edit here, and a machine without
     #    one simply has no file to remove.
-    _bins="exasol exakit exapump"
-    if command -v exakit_marketplace_addons >/dev/null 2>&1; then
-        _bins="$_bins $(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ')"
-    fi
+    _bins="exasol exakit exapump $_un_addon_ids"
     _un_bins_gone=""
     for _bin in $_bins; do
-        if [ -e "$EXAKIT_BIN_DIR/$_bin" ]; then
-            _step "CLI binary $EXAKIT_BIN_DIR/$_bin"
-            _rm "$EXAKIT_BIN_DIR/$_bin"
+        # Named only when there is something there to keep: the registry lists
+        # every add-on, and "Keeping dbt-exasol" over one never installed read
+        # as if the kit had found it.
+        case "$_un_protected_bins" in *" $_bin "*) [ -e "$EXAKIT_BIN_DIR/$_bin" ] && info "Keeping $_bin (not installed by this kit)."; continue ;; esac
+        _un_bin_path="$EXAKIT_BIN_DIR/$_bin"
+        case "$_bin" in
+            exasol) _un_bin_path="${_un_exasol_path:-$_un_bin_path}" ;;
+            exapump) _un_bin_path="${_un_exapump_path:-$_un_bin_path}" ;;
+        esac
+        if [ -e "$_un_bin_path" ]; then
+            # An add-on's own dry run (step 0b) already listed its launcher:
+            # listed once, on the add-on's row. Twin of the same check in exakit.ps1.
+            case ", $_un_addons_gone, " in
+                *", $_bin, "*) [ "$_dry" = "1" ] || _step "CLI binary $_un_bin_path" ;;
+                *) _step "CLI binary $_un_bin_path" ;;
+            esac
+            _rm "$_un_bin_path"
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi
     done
-    [ -n "$_un_bins_gone" ] && _done "Commands removed from $EXAKIT_BIN_DIR: $_un_bins_gone"
+    [ -n "$_un_bins_gone" ] && _done "Commands removed: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
     command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints "$_dry"
-    # Said last, and said plainly, because it is the one thing the reader cannot
-    # find out afterwards: the logfile that held the per-path detail lived inside
-    # the kit home this run has just deleted, so the lines above are the only
-    # account of what was removed that still exists anywhere.
-    if [ "$_dry" != "1" ]; then
-        info_step "The lines above are the whole record of this uninstall — the install log lived in the kit home and went with it."
-    fi
     # Every step here is best-effort - each failure warns and carries on - with
     # ONE exception: the database. A run that left it on the machine says so,
     # last, with the command that removes it, and answers 1 so no caller can

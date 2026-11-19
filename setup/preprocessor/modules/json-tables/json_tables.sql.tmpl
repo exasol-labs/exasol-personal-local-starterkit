@@ -1,0 +1,108 @@
+--/
+CREATE OR REPLACE LUA SCALAR SCRIPT PREPROC_RT.JSON_TABLES_REFUSE_V{VERSION}(message VARCHAR(2000000)) RETURNS VARCHAR(2000000) AS
+-- Raises the JSON Tables message it is given (JVS-PATH-ERROR: ..., JVS-SCOPE-ERROR:
+-- ...), so a JSON query JSON Tables refuses fails with JSON Tables' own words.
+function run(ctx)
+    error(ctx.message, 0)
+end
+/
+
+--/
+CREATE OR REPLACE LUA SCRIPT PREPROC_RT.JSON_TABLES_LIB_V{VERSION}() AS
+-- JSON Tables' own rewriter with this database's configuration, built by the kit
+-- (setup/preprocessor/modules/json-tables/generate.py) from upstream
+-- exasol-json-tables: generate_preprocessor_library_body() is the library every
+-- wrapper's preprocessor imports, and CONFIG is build_preprocessor_config() over
+-- every installed wrapper package (load_installed_wrapper_manifests), the union
+-- upstream's COMPILE_SQL serves.
+__LIBRARY__
+/
+
+--/
+CREATE OR REPLACE LUA SCRIPT PREPROC_RT.JSON_TABLES_V{VERSION}() AS
+-- JSON Tables as a module of the SQL preprocessor framework.
+--
+-- Upstream installs one preprocessor per wrapper package (<prefix>_PP.
+-- JSON_WRAPPER_PREPROCESSOR) and a session switches to it with ALTER SESSION SET
+-- SQL_PREPROCESSOR_SCRIPT. On a starter-kit database the framework's
+-- PREPROC_RT.MASTER owns that slot, so this module does the same rewrite as one of
+-- MASTER's rules, for every user (rule scope ROLE PUBLIC), across every installed
+-- package at once. Upstream stays untouched; only the framing is the kit's.
+--
+-- Phase TRANSLATE. A JSON query ("meta.info.note", "tags[LAST]", TO_JSON(*) on a
+-- wrapper view) is not SQL the database can run; JSON Tables turns it into the
+-- physical SQL over its helper schema. TRANSLATE runs every rule and threads the
+-- text, so the entry always returns a statement, the input unchanged when it is
+-- not a JSON query.
+--
+-- Only a statement that names a wrapper schema is a JSON query here. Upstream's
+-- rewrite also refuses JSON syntax outside its schemas ("a.b" quoted on any other
+-- table), which a session that chose the preprocessor asked for; a rule that
+-- reaches every user must leave everyone else's SQL alone.
+--
+-- Loading the rewriter. JSON Tables' library is about 140 KB of Lua, and this
+-- module runs for every statement of every user, so the library is imported only
+-- when the statement names a wrapper schema. The framework loads a module with
+-- import(), and import() works only at the top of a script, never inside a
+-- function of an imported one (framework ADR, how-it-works.md), so the library is
+-- imported here at the top, guided by the statement the database is
+-- preprocessing. The entry still decides on the text it is handed; when that text
+-- names a wrapper schema the statement did not (an earlier TRANSLATE rule wrote
+-- it), the library is not loaded and the text is returned as it came.
+--
+-- The one pcall, and why. The framework's rule is that a module never wraps its
+-- body in pcall: MASTER's own pcall is the error boundary, and a module-level pcall
+-- turns a fault into a silent wrong answer. Here the boundary is the problem: when
+-- JSON Tables refuses a statement (a mistyped path, a path through a derived
+-- table) it raises a clear JVS-...-ERROR, MASTER swallows it and runs the
+-- statement unchanged, and the user sees the database's "object not found" for a
+-- column that never existed instead of JSON Tables' explanation. So the entry
+-- catches JSON Tables' error and returns a statement that fails with exactly that
+-- message (PREPROC_RT.JSON_TABLES_REFUSE_V{VERSION}). Loud, never silent: the
+-- caught error is never turned into a result.
+
+local SCHEMAS = __SCHEMAS__
+
+local function names_wrapper_schema(text)
+    if type(text) ~= "string" then
+        return false
+    end
+    local upper = string.upper(text)
+    for i = 1, #SCHEMAS do
+        if string.find(upper, "%f[%w_]" .. SCHEMAS[i] .. "%f[^%w_]") ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+local hinted = #SCHEMAS > 0
+if hinted and sqlparsing ~= nil and sqlparsing.getsqltext ~= nil then
+    hinted = names_wrapper_schema(sqlparsing.getsqltext())
+end
+
+local rewriter = nil
+if hinted then
+    import("PREPROC_RT.JSON_TABLES_LIB_V{VERSION}", "json_tables_lib")
+    rewriter = json_tables_lib
+end
+
+local function quoted(text)
+    local escaped = string.gsub(text, "'", "''")
+    return "'" .. escaped .. "'"
+end
+
+function json_tables(sqltext)
+    if rewriter == nil or not names_wrapper_schema(sqltext) then
+        return sqltext
+    end
+    local ok, result = pcall(rewriter.rewrite_statement, sqltext)
+    if not ok then
+        return "SELECT PREPROC_RT.JSON_TABLES_REFUSE_V{VERSION}(" .. quoted(tostring(result)) .. ")"
+    end
+    if type(result) ~= "string" then
+        return sqltext
+    end
+    return result
+end
+/

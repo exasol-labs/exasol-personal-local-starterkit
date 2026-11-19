@@ -43,7 +43,7 @@ exakit_pending_datasets() {
 
 # Still the exapump step's title when the loads run: no begin_step happens in
 # between, and it is what made the competing spinner's line 45 columns wide.
-EXAKIT_ACTIVE_LABEL="Step 3/6  exapump (data loading CLI)"
+EXAKIT_ACTIVE_LABEL="Step 3/7  exapump (data loading CLI)"
 EXAKIT_LOG_FILE="$W/install.log"
 UI_TABLE_TITLE="Datasets to load"
 EXAKIT_TABLE_STATE="$W/table"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from pathlib import Path
@@ -35,12 +36,15 @@ _BLOCK_FILE_STEM = "exasol-starter-kit"
 # out of the blocks directory or confuse a path is folded to a dash.
 _UNSAFE_FILE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
-_YAML_BARE = re.compile(r"^[A-Za-z0-9_./@+-]+$")
+# A bare token must start with a letter: that alone rules out every number,
+# date, hex/octal/binary literal, `.inf`/`.nan` and YAML indicator (`@`, `-`,
+# `*`, `&`, `!`, ...) a parser would otherwise read as something else.
+_YAML_BARE = re.compile(r"^[A-Za-z][A-Za-z0-9_./@+-]*$")
 # YAML 1.1 parsers (common in JS/TS tooling) coerce these bare tokens to
 # booleans/null, and coerce numeric-looking tokens to numbers. Env values like
 # "no" (EXA_SSL_CERT_VALIDATION) or a bare port MUST stay strings, so quote them.
 _YAML_RESERVED = frozenset(
-    {"true", "false", "yes", "no", "on", "off", "null", "none", "~"}
+    {"true", "false", "yes", "no", "on", "off", "y", "n", "null", "none", "~"}
 )
 _YAML_NUMERIC = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 
@@ -287,5 +291,7 @@ def _yaml_scalar(value: object) -> str:
         and not _YAML_NUMERIC.match(text)
     ):
         return text
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    # A JSON string is a valid YAML double-quoted scalar, and json.dumps
+    # escapes quotes, backslashes and control characters (a newline stays a
+    # newline instead of folding into a space).
+    return json.dumps(text, ensure_ascii=False)

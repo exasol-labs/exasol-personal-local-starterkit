@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "What the kit knows about the SQL preprocessor framework package, beyond",
+    "the pin. The pin itself - version, release, asset and SHA-256 - lives in",
+    "versions.json under components.preprocessor, like every other component:",
+    "sha256.release-sql pins the download, sha256.core-only the text the kit runs",
+    "(release.sql without its PYTHON3 scripts; `manage.py derive` computes it).",
+    "",
+    "The laptop's record of what was installed is a different file:",
+    "~/.exasol-starter-kit/manifest.json, components.preprocessor.",
+    "",
+    "  dispatcher        the script that holds Exasol's one preprocessor slot",
+    "  schemas, role     the objects release.sql creates, and the only ones the",
+    "                    kit may ever drop (recovering its own interrupted install)",
+    "  required_scripts  checked after install and on every installer rerun",
+    "  seed_scripts      the scripts release.sql's own CONFIG rows point at; a",
+    "                    rule naming anything else is someone's configuration",
+    "  module_scripts    the admin scripts an add-on module's registration calls;",
+    "                    without them the framework cannot take modules (skipped)",
+    "  upgrades          tested in-place upgrade paths. release.sql is fresh-install",
+    "                    only: it re-creates the role and re-seeds rules. Until an",
+    "                    entry exists here ({\"from\", \"to\", \"migration\"}), an",
+    "                    installed framework is verified and left at its version."
+  ],
+  "upstream": "exasol-labs/preprocessor-framework",
+  "dispatcher": "PREPROC_RT.MASTER",
+  "schemas": [
+    "PREPROC",
+    "PREPROC_RT"
+  ],
+  "role": "PREPROC_ADMIN",
+  "required_scripts": [
+    "PREPROC_RT.MASTER",
+    "PREPROC_RT.CONTROL_SUGAR_V1",
+    "PREPROC.REFRESH_CORE",
+    "PREPROC.REFRESH",
+    "PREPROC.STATUS",
+    "PREPROC.RULE_ENSURE",
+    "PREPROC.RULE_DROP",
+    "PREPROC.RULE_LIST"
+  ],
+  "seed_scripts": [
+    "PREPROC_RT.CONTROL_SUGAR_V1"
+  ],
+  "module_scripts": [
+    "PREPROC.RULE_ENSURE",
+    "PREPROC.RULE_DROP",
+    "PREPROC.REFRESH",
+    "PREPROC.MODULE_REGISTER",
+    "PREPROC.MODULE_RETIRE"
+  ],
+  "upgrades": []
+}
