@@ -12,11 +12,16 @@ while keeping the ones that matter gated.
 
 Allow without prompting:
 - The kit's **read-only commands** — they change nothing: `exakit status`,
-  `info`, `version`, `mcp-doctor`, `logs`, `catalog`, `preflight`, `guide`,
-  `mcp-status`, `help`, and the exact forms `exakit skills` and
-  `exakit skills --json`.
-- The **`exasol` MCP tools** — the MCP server connects as a dedicated
+  `info`, `version`, `logs`, `catalog`, `preflight`, `guide`,
+  `mcp-status`, `help`, and the exact forms `exakit skills`,
+  `exakit skills --json`, `exakit tls-pin`, `exakit tls-pin --json` and
+  `exakit mcp-doctor --json` (the report only: a plain `exakit mcp-doctor`
+  repairs what it finds, so it keeps asking).
+- The **kit's MCP tools** — the MCP server connects as a dedicated
   least-privilege read-only user, so the database itself rejects any write.
+  That is the kit's entry only: `mcp__exasol`, or `mcp__exasol-starter-kit`
+  when you already had an MCP server of your own named `exasol` (the kit then
+  adds its own beside it and never pre-approves yours).
 
 Keep prompting (do **not** auto-allow):
 - **`exapump sql …` and `exakit sql …`** — both connect as the **admin** user and
@@ -25,7 +30,8 @@ Keep prompting (do **not** auto-allow):
   use — but that gate is a seatbelt, not a sandbox.) Auto-allowing either would
   defeat the kit's inspect-before-run trust model. Every query should be seen first.
 - **Mutating / lifecycle commands** — `exakit uninstall`, installs, upgrades,
-  and `exakit mcp-setup`, which writes to AI client config files.
+  `exakit mcp-setup`, which writes to AI client config files, and a plain
+  `exakit mcp-doctor`, which repairs them.
 
 That split kills the noise (all the harmless status checks) without weakening
 the guardrail that makes the kit trustworthy.
@@ -34,8 +40,13 @@ the guardrail that makes the kit trustworthy.
 
 **`exakit skills-install` already does this for you.** It merges the allowlist below
 into `~/.claude/settings.json` — additively and idempotently, never removing or
-overwriting anything you have set. The block below is the **complete** list it
-writes on macOS, Linux and WSL — 37 allow entries and 3 deny entries — so you can
+overwriting anything you have set, and keeping the file's permissions (a new one
+is readable by you only). It records which rules it added: a rule an earlier kit
+added that this one no longer grants (`mcp-doctor:*`, `mcp__exasol` beside your
+own `exasol`) is taken out again, and `exakit uninstall` removes only the rules
+the kit added — one you had written yourself stays. The block below is the
+**complete** list it writes on macOS, Linux and WSL — 43 allow entries and 3 deny
+entries, the last allow entry being the kit's Claude Code MCP entry — so you can
 see what was granted, and paste it by hand if the merge was skipped (it declines
 rather than clobber a settings file it cannot parse). To see the list this
 machine actually has, open `~/.claude/settings.json`; to re-apply it, run
@@ -48,7 +59,6 @@ machine actually has, open `~/.claude/settings.json`; to re-apply it, run
       "Bash(exakit status:*)",
       "Bash(exakit info:*)",
       "Bash(exakit version:*)",
-      "Bash(exakit mcp-doctor:*)",
       "Bash(exakit logs:*)",
       "Bash(exakit catalog:*)",
       "Bash(exakit preflight:*)",
@@ -57,10 +67,12 @@ machine actually has, open `~/.claude/settings.json`; to re-apply it, run
       "Bash(exakit help:*)",
       "Bash(exakit skills)",
       "Bash(exakit skills --json)",
+      "Bash(exakit tls-pin)",
+      "Bash(exakit tls-pin --json)",
+      "Bash(exakit mcp-doctor --json)",
       "Bash(~/.local/bin/exakit status:*)",
       "Bash(~/.local/bin/exakit info:*)",
       "Bash(~/.local/bin/exakit version:*)",
-      "Bash(~/.local/bin/exakit mcp-doctor:*)",
       "Bash(~/.local/bin/exakit logs:*)",
       "Bash(~/.local/bin/exakit catalog:*)",
       "Bash(~/.local/bin/exakit preflight:*)",
@@ -69,10 +81,12 @@ machine actually has, open `~/.claude/settings.json`; to re-apply it, run
       "Bash(~/.local/bin/exakit help:*)",
       "Bash(~/.local/bin/exakit skills)",
       "Bash(~/.local/bin/exakit skills --json)",
+      "Bash(~/.local/bin/exakit tls-pin)",
+      "Bash(~/.local/bin/exakit tls-pin --json)",
+      "Bash(~/.local/bin/exakit mcp-doctor --json)",
       "Bash($HOME/.local/bin/exakit status:*)",
       "Bash($HOME/.local/bin/exakit info:*)",
       "Bash($HOME/.local/bin/exakit version:*)",
-      "Bash($HOME/.local/bin/exakit mcp-doctor:*)",
       "Bash($HOME/.local/bin/exakit logs:*)",
       "Bash($HOME/.local/bin/exakit catalog:*)",
       "Bash($HOME/.local/bin/exakit preflight:*)",
@@ -81,6 +95,9 @@ machine actually has, open `~/.claude/settings.json`; to re-apply it, run
       "Bash($HOME/.local/bin/exakit help:*)",
       "Bash($HOME/.local/bin/exakit skills)",
       "Bash($HOME/.local/bin/exakit skills --json)",
+      "Bash($HOME/.local/bin/exakit tls-pin)",
+      "Bash($HOME/.local/bin/exakit tls-pin --json)",
+      "Bash($HOME/.local/bin/exakit mcp-doctor --json)",
       "mcp__exasol"
     ],
     "deny": [
@@ -109,7 +126,7 @@ repeat every `Bash(exakit …)` rule three more times with `exakit.cmd`,
 `~/.local/bin/exakit.cmd` and `$HOME/.local/bin/exakit.cmd` in place of
 `exakit`, then add a `PowerShell(exakit …)` form of each — Claude Code's
 PowerShell tool has its own rule namespace, and bare `exakit` resolves there.
-That is what `exakit skills-install` writes on Windows: 85 allow entries and
+That is what `exakit skills-install` writes on Windows: 99 allow entries and
 7 deny entries. On macOS, Linux and WSL those extra spellings match nothing you
 can type, which is why the block above leaves them out. Rules for
 commands that no longer exist (`update-check`, `mcp-validate`) are swept out on

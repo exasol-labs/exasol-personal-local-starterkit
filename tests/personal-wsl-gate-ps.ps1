@@ -819,7 +819,24 @@ switch ($Step) {
     }
 }
 # Last, because it exits: the CLI prints the status object over many lines.
-if ($Step -ne "retire") { Write-Output "JSON-BEGIN"; Invoke-CmdStatus -Json }
+# "screen" reads the human status, "info" the info --json object. "spin" logs
+# the spinner label each slow probe of the human status runs under.
+if ($Step -eq "spin") {
+    $script:SpinLog = "$Work/spinlog"
+    $script:SpinNow = ""
+    function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body, [switch]$Quiet)
+        $script:SpinNow = $Label; try { return (& $Body) } finally { $script:SpinNow = "" } }
+    function Write-SpinProbe([string]$Name) { Add-Content -Path $script:SpinLog -Value "${Name}:$($script:SpinNow)" }
+    function Get-ExakitDbClockSkew { Write-SpinProbe "clock"; return $null }
+    function Get-ExakitComponentCurrent([string]$Name) { if ($Name -eq "pyexasol") { Write-SpinProbe "pyexasol" }; return "" }
+    function Get-ExakitUvReport { Write-SpinProbe "uv"; return @{ Verdict = "ok"; Path = ""; Version = ""; Min = "" } }
+    function Get-ExakitTlsFingerprint { return "AB:CD" }
+    function Get-ExakitTlsLiveFingerprint { Write-SpinProbe "tls"; return "AB:CD" }
+    Invoke-CmdStatus
+}
+elseif ($Step -eq "screen") { Invoke-CmdStatus }
+elseif ($Step -eq "info") { Write-Output "JSON-BEGIN"; Invoke-CmdInfoJson }
+elseif ($Step -ne "retire") { Write-Output "JSON-BEGIN"; Invoke-CmdStatus -Json }
 '@
 $engine = (Get-Process -Id $PID).Path
 if (-not $engine) { $engine = Join-Path $PSHOME "powershell.exe" }
@@ -903,6 +920,32 @@ $doc = Check-StatusDoc "stopped, release unread" (Invoke-StatusChild "unreadstop
 if ($doc) {
     Check "stopped, release unread -> wsl --version" "wsl --version" $doc.remedy
 }
+
+# The launcher is there, no deployment: the same remedy as cmd_status and
+# cmd_info_json - repair-runtime re-runs setup-windows.ps1 from the deployment
+# step, which deploys one (AIO-04).
+$deployHint = "the launcher is installed but no database is deployed; this deploys one"
+$doc = Check-StatusDoc "not deployed" (Invoke-StatusChild "notdeployed" "status" "not deployed")
+if ($doc) {
+    Check "not deployed -> exakit repair-runtime" "exakit repair-runtime|$deployHint" "$($doc.remedy)|$($doc.remedy_hint)"
+}
+$child = Invoke-StatusChild "notdeployed" "screen" "not deployed"
+Has   "  the screen names the same command" "Deploy it:  exakit repair-runtime   ($deployHint)" $child.Out
+Lacks "  and never 'Start it'" "Start it:" $child.Out
+$doc = Check-StatusDoc "info --json, not deployed" (Invoke-StatusChild "notdeployed" "info" "not deployed")
+if ($doc) {
+    Check "info --json, not deployed -> no database, repair-runtime" "no database|not running|exakit repair-runtime|$deployHint" `
+        "$($doc.status)|$($doc.database)|$($doc.remedy)|$($doc.remedy_hint)"
+}
+
+# NEW-08 on Windows: the clock, Python driver, uv and TLS probes ran with the
+# screen blank for seconds before the first panel. Each runs under a spinner,
+# with the labels the bash twin uses.
+$child = Invoke-StatusChild "spin" "spin" "running"
+$spun = (@(Get-Content -Path (Join-Path $work "st-spin/spinlog") -ErrorAction SilentlyContinue | Select-Object -First 4) -join ",")
+Check "the status probes before the first panel each run under a spinner" `
+    "clock:Checking the database,pyexasol:Checking the Python driver,uv:Checking the Python driver,tls:Checking the database" $spun
+if (-not $spun) { Show-ChildOutput "spin" $child }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""

@@ -1,0 +1,14 @@
+# The SKILL.md of every add-on skill an earlier kit placed, one line per shipped version: "<skill> <sha256>", the
+# digest taken with carriage returns removed (a Windows copy may carry CRLF). Kit 0.2.x placed these folders without
+# the .exakit-owned mark, so an update read the kit's own dash-server, json-tables or exasol-scheduler skill as the
+# user's and kept it stale. A folder holding exactly one of these files, of an add-on the kit installed, is the
+# kit's copy and is replaced; any other unmarked folder stays the user's. Written from main's history (every version
+# a kit or a skills update could have placed); a later release marks what it places, so nothing is added here.
+# Read by _exakit_skill_is_kits (common.sh), Test-ExakitSkillIsKits (exakit-common.ps1), integration.py.
+dash-server 149fb45ba7d5da18e3c6ed39480ad0724704984c426e4232dc455a07f02936fb
+dash-server 70bf1f75aec24fa79c68f1d6fb419bc8cffea44a59c7a6f387398982565cb9f9
+dbt-exasol c5c86b50cbe7e1cd97f90c41918a7677c3c414523ae17380fb035d3c42cc6d51
+exasol-scheduler 06aa634a20a17612a5f74acacd3459cfdf45fbe7f8d71dd3c646450f60484609
+exasol-scheduler 9f3fdeeb98e86d00b080a86829c7fcc3be18ee91c84ce0ce2a9938b3f8c84d87
+exasol-vscode 035238e02e2d0e05ed41f32c2500a3fa4010aef6a08bb437e29e552e8ac1090a
+json-tables 341eb126dbfcbef367326676b2a416a0e7a962419dd213d5250650e479ba65d9

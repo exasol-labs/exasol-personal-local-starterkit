@@ -479,7 +479,7 @@ has "the ps side reads through one query helper" "function Invoke-LegacyQuery" \
 has "...inside a Continue window" 'ErrorActionPreference = "Continue"' \
     "$(cat "$ROOT/setup/lib/legacy-crossing.ps1")"
 check "and no query bypasses it" "1" \
-    "$(grep -c 'Get-ExapumpCli) sql' "$ROOT/setup/lib/legacy-crossing.ps1")"
+    "$(grep -cE '& \(Get-ExapumpCli\)' "$ROOT/setup/lib/legacy-crossing.ps1")"
 
 echo
 echo "the CLI explains a legacy install instead of calling it broken:"

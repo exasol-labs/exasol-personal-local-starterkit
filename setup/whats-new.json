@@ -20,6 +20,12 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.3.0": [
+    "Federate: exakit connect turns other sources into live SQL tables.",
+    "Fuse: Semantic Views model local and federated tables as one.",
+    "Semantic SQL and JSON paths work in every session, with no setup.",
+    "One shared, read-only MCP server for all your AI clients."
+  ],
   "0.2.5": [
     "macOS: install works with stock LibreSSL and recovers a failed boot.",
     "Uninstall also removes the kit's cache, empty folders, autostart,",

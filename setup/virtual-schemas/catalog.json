@@ -1,0 +1,154 @@
+{
+  "_comment": [
+    "The connector catalog: what `exakit connect` can search and offer.",
+    "",
+    "  tier    GA, every connector: a rollout label, not an upstream",
+    "          certification. Kept for exakit source catalog, its --json and the plan.",
+    "  status  candidate = defined and unit-tested, not yet qualified end to end",
+    "          against a real source; kit-tested = qualified; gated = defined but",
+    "          blocked by a named release gate (see `gate`).",
+  "  caveat  said in the plan's warnings: what a candidate has not been run",
+  "          against yet (no connector has one today).",
+    "  aliases what a search also matches; ambiguous input lists the choices.",
+    "  summary what a source of this kind becomes, for the exakit connect menu.",
+    "",
+    "A connector's inputs, artifacts and SQL live in connectors/<id>/; the",
+    "deployment recipe it shares with others in profiles/<profile>/."
+  ],
+  "schema_version": 1,
+  "connectors": [
+    {
+      "id": "s3",
+      "name": "Amazon S3", "summary": "JSON, CSV and Parquet files in a bucket",
+      "aliases": [
+        "aws-s3",
+        "s3-files",
+        "s3-documents",
+        "amazon-s3"
+      ],
+      "profile": "java-document-files",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "azure-blob",
+      "name": "Azure Blob Storage", "summary": "JSON, CSV and Parquet blobs in a container",
+      "aliases": [
+        "azure",
+        "abs",
+        "azure-storage",
+        "azure-blob-storage",
+        "blob-storage"
+      ],
+      "profile": "java-document-files",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "databricks",
+      "name": "Databricks", "summary": "a Unity Catalog schema",
+      "aliases": [
+        "dbx",
+        "databricks-sql"
+      ],
+      "profile": "lua-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "bigquery",
+      "name": "Google BigQuery", "summary": "a BigQuery dataset",
+      "aliases": [
+        "bq",
+        "gbq",
+        "google-bigquery"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "lakehouse",
+      "name": "Lakehouse (Iceberg / Delta)", "summary": "Iceberg or Delta tables through Iceberg REST, Unity Catalog or AWS Glue, or Parquet files in a folder, on S3 or Azure",
+      "aliases": [
+        "glue",
+        "aws-glue",
+        "iceberg",
+        "delta",
+        "lakehouse-iceberg"
+      ],
+      "profile": "rust-native",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "mongodb",
+      "name": "MongoDB", "summary": "a MongoDB collection",
+      "aliases": [
+        "mongo",
+        "atlas",
+        "mongodb-atlas"
+      ],
+      "profile": "rust-native",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "mysql",
+      "name": "MySQL", "summary": "a MySQL or MariaDB database",
+      "aliases": [
+        "mysql8",
+        "mysql-server"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "oracle",
+      "name": "Oracle", "summary": "an Oracle database",
+      "aliases": [
+        "oracle-db",
+        "ora"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "postgresql",
+      "name": "PostgreSQL", "summary": "a PostgreSQL database",
+      "aliases": [
+        "pg",
+        "postgres",
+        "pgsql"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "snowflake",
+      "name": "Snowflake", "summary": "a Snowflake schema",
+      "aliases": [
+        "sf",
+        "snow"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    },
+    {
+      "id": "sqlserver",
+      "name": "SQL Server", "summary": "a SQL Server database",
+      "aliases": [
+        "mssql",
+        "sql-server",
+        "microsoft-sql-server"
+      ],
+      "profile": "java-jdbc",
+      "tier": "GA",
+      "status": "candidate"
+    }
+  ]
+}

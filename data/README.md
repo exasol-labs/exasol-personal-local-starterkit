@@ -1,8 +1,7 @@
 # Sample data
 
-This folder holds the kit's **bundled datasets** — nothing to install, everything is
-committed to the repo. Each dataset is a self-contained folder under
-[`datasets/`](datasets/):
+This folder holds the kit's **bundled datasets**. Each dataset is a self-contained folder
+under [`datasets/`](datasets/):
 
 ```
 datasets/<id>/
@@ -21,11 +20,38 @@ without a per-schema grant. The `exakit data-load` menu discovers datasets from 
 folders and only offers ones **not already in the database** (verified against the marker
 tables, not just a manifest flag).
 
+**Adding a dataset needs no code.** Put its folder under `datasets/` and check it:
+
+```bash
+python3 tools/dataset_check.py data/datasets/<id>
+```
+
+The check reads the files first - UTF-8 without a byte-order mark, every CSV against its
+`CREATE TABLE` (names, order, row widths, empty `NOT NULL` values, repeated primary keys),
+Exasol's reserved words, the schema it creates, the markers and the verify script - then
+loads the dataset into your database as `exakit data-load` does, verifies it and drops it
+again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a schema that
+is already there). The kit offers every folder that has a `dataset.conf` without
+`hidden=yes`.
+
+The kit offers two datasets, both bundled and loaded with no internet (`default=yes`: the
+General persona every install applies ticks them in the install's data table):
+
 | Dataset | Schema | Contents |
 |---|---|---|
-| [`datasets/tpch/`](datasets/tpch/) | `TPCH` | TPC-H retail benchmark (below) — the original sample |
-| [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
-| [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
+| [`datasets/retail_sales/`](datasets/retail_sales/) | `RETAIL_SALES` | 1,000 customer purchases by date, product category and amount |
+| [`datasets/bank_transaction/`](datasets/bank_transaction/) | `BANK_TRANSACTION` | 2,512 card and account transactions: debits and credits by account, channel and location |
+
+TPC-H, energy and weather, the samples earlier kits loaded, stay in the kit with
+`hidden=yes`: not offered, listed or loaded, but still recognised on a machine an earlier
+kit set up. Every table and column has a `COMMENT` in its `01_create_schema.sql`, so the
+database itself describes the data.
+
+A dataset folder may also carry a `manifest.json` whose `asset` block names a checksummed
+release archive of its CSVs (`tools/datasets/package.py` writes it); `exakit data-load` then
+downloads and verifies that archive only when the dataset is picked
+(`setup/lib/dataset_asset.py`, `EXAKIT_DATASETS_MIRROR`, `EXAKIT_DATASETS_REPO`). No shipped
+dataset uses one in this release.
 
 ## The TPC-H dataset (`datasets/tpch/`)
 
@@ -66,7 +92,7 @@ part ───────────────< lineitem
 ## Column reference
 
 See **[data-dictionary.md](data-dictionary.md)** for the full per-column reference —
-name, type, description, keys, and allowed values for every table.
+name, type, description, keys, and allowed values for every table of all five datasets.
 
 ## Regenerating at a different size (optional)
 

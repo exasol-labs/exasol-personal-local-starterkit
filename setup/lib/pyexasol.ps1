@@ -16,6 +16,10 @@
 $script:PyexasolVenv = if ($env:EXAKIT_PYEXASOL_VENV) { $env:EXAKIT_PYEXASOL_VENV } else { Join-Path $script:ExakitHome "pyexasol-venv" }
 
 function Get-PyexasolVenvPython {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") {
+        $existing = Get-ExakitManifestValue "components.pyexasol.python"
+        if ($existing) { return $existing }
+    }
     return (Join-Path $script:PyexasolVenv "Scripts\python.exe")
 }
 
@@ -55,7 +59,62 @@ function Write-PyexasolNotInstalled {
     return $false
 }
 
+# The oldest pyexasol that works with Exasol Personal: older ones raise InvalidVersion on its
+# version string ("2026.2.0-nano.3") in every import and export, though SELECT works. A user's
+# older driver is left as it is and the kit installs its own beside it. Twin of pyexasol.sh.
+$script:PyexasolMinVersion = "2.4.0"
+
+# Test-PyexasolNewEnough <version> - $true when <version> is the minimum or later.
+function Test-PyexasolNewEnough {
+    param([string]$Version)
+    if (-not $Version) { return $false }
+    return (-not (Test-ExakitVersionNewer -Latest $script:PyexasolMinVersion -Current $Version))
+}
+
 function Install-Pyexasol {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") {
+        $reused = Get-PyexasolInstalledVersion
+        if (-not $reused) {
+            return (Write-PyexasolNotInstalled "the reused driver no longer works; repair its Python environment outside the kit")
+        }
+        if (Test-PyexasolNewEnough $reused) { Write-ExakitPreservedComponent "pyexasol"; return $true }
+        Info "Your pyexasol $reused is older than $($script:PyexasolMinVersion), which Exasol Personal needs for imports and exports; the kit installs its own beside it and leaves yours as it is."
+        # The kit's own venv from here on: Get-PyexasolVenvPython must stop naming the user's interpreter.
+        Set-ExakitComponentOwnership "pyexasol" "kit" $script:PyexasolVenv
+        Remove-ExakitManifestValue "components.pyexasol.python"
+    }
+    if (-not (Test-Path (Join-Path $script:PyexasolVenv "Scripts/python.exe"))) {
+        $external = Get-Command python -ErrorAction SilentlyContinue
+        if ($external) {
+            $previous = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                $externalVersion = (& $external.Source -c "import pyexasol; print(pyexasol.__version__)" 2>$null | Out-String -Width 4096).Trim()
+                if ($LASTEXITCODE -ne 0) { $externalVersion = "" }
+                $installedDistribution = ""
+                if (-not $externalVersion) {
+                    $installedDistribution = (& $external.Source -c "from importlib.metadata import version; print(version('pyexasol'))" 2>$null | Out-String -Width 4096).Trim()
+                    if ($LASTEXITCODE -ne 0) { $installedDistribution = "" }
+                }
+                if ($externalVersion -and -not (Test-PyexasolNewEnough $externalVersion)) {
+                    Info "Your pyexasol $externalVersion is older than $($script:PyexasolMinVersion), which Exasol Personal needs for imports and exports; the kit installs its own beside it and leaves yours as it is."
+                } elseif ($externalVersion) {
+                    Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.python" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.version" $externalVersion
+                    Remove-ExakitManifestValue "components.pyexasol.venv"
+                    Ok "Reusing user-owned pyexasol $externalVersion"
+                    return $true
+                }
+                if ($installedDistribution) {
+                    Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.python" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.version" $installedDistribution
+                    return (Write-PyexasolNotInstalled "a user-owned driver is installed but cannot import; repair it outside the kit")
+                }
+            } finally { $ErrorActionPreference = $previous }
+        }
+    }
     # Install-ExakitUv fails hard on its own; this step may not end the run, so
     # the throw is caught and turned into a soft miss.
     try {
@@ -86,6 +145,7 @@ function Install-Pyexasol {
     }
 
     Set-ExakitManifestValue "components.pyexasol.version" $script:PyexasolVersion
+    Set-ExakitComponentOwnership "pyexasol" "kit" $script:PyexasolVenv
     Set-ExakitManifestValue "components.pyexasol.venv" $script:PyexasolVenv
     Set-ExakitManifestValue "components.pyexasol.python" $python
     return $true
@@ -96,6 +156,7 @@ function Install-Pyexasol {
 # `exakit status` or `exakit version` reports pyexasol as missing. Asked for
 # explicitly, so a failure here IS a failure. Twin of pyexasol_update.
 function Update-Pyexasol {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") { Write-ExakitPreservedComponent "pyexasol"; return $true }
     $available = Get-ExakitComponentAvailable "pyexasol"
     if (-not $available) { Fail "Could not resolve the advertised pyexasol version." }
     $current = Get-PyexasolInstalledVersion
@@ -166,7 +227,9 @@ finally:
     conn.close()
 '@
     $probeFile = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-pyexasol-probe-$PID.py"
-    $env:EXAKIT_PYX_DSN = $dsn
+    # The DSN carries the recorded TLS pin when there is one (SEC-14): pyexasol
+    # then refuses any certificate but the database's own.
+    $env:EXAKIT_PYX_DSN = Get-ExakitPinnedDsn $dsn
     $env:EXAKIT_PYX_USER = $user
     $env:EXAKIT_PYX_PWFILE = $passwordFile
     try {
@@ -183,7 +246,11 @@ finally:
         # Two lines for the step: what happened, and the interpreter to run it
         # with. Installed-and-validated is one fact - an install that failed
         # validation says so through the Warn2 below, which is never gated.
-        OkStep "pyexasol $($script:PyexasolVersion) installed and validated against the database ($([int]((Get-Date) - $pyvT0).TotalSeconds)s)"
+        $shown = Get-ExakitManifestValue "components.pyexasol.version"
+        if (-not $shown) { $shown = $script:PyexasolVersion }
+        $how = "installed"
+        if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") { $how = "reused" }
+        OkStep "pyexasol $shown $how and validated against the database ($([int]((Get-Date) - $pyvT0).TotalSeconds)s)"
         InfoStep "Use it from Python:  $(Get-ExakitTilde $python)  (import pyexasol)"
     } else {
         Warn2 "pyexasol could not complete SELECT 1 against the database. Why: exakit logs setup. Check the database is up with: exakit status, then re-run setup to retry."

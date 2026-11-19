@@ -52,9 +52,12 @@ STUB="$WORK/exakit"
 # exakit resolves its library relative to its OWN directory, so the stub needs a
 # lib/ beside it or it dies before printing a single row.
 ln -s "$ROOT/setup/lib" "$WORK/lib"
+# The last line that sources a library from $_lib_dir: no one add-on's module, which come and go.
+LAST_LIB="$(grep -n '^\(\[ -f "\$_lib_dir/[^"]*" \] && \)\?\. "\$_lib_dir/' "$ROOT/setup/exakit" | tail -1 | cut -d: -f1)"
+[ -n "$LAST_LIB" ] || { printf 'FAIL could not find where setup/exakit sources its libraries\n'; exit 1; }
 {
     # Everything up to and including the last library source line...
-    sed -n '1,/^\[ -f "\$_lib_dir\/json-tables.sh" \]/p' "$ROOT/setup/exakit"
+    sed -n "1,${LAST_LIB}p" "$ROOT/setup/exakit"
     # ...then the override, so it wins over the real probe...
     cat <<'STUB_EOF'
 if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
@@ -65,9 +68,22 @@ if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
         exakit_component_current_real "$@"
     }
 fi
+# EXAKIT_TEST_SPINLOG: each slow probe of the status screen logs the spinner
+# label it ran under, so a probe outside every spinner logs an empty one.
+if [ -n "${EXAKIT_TEST_SPINLOG:-}" ]; then
+    _t_spin=""
+    ui_spin_begin() { _t_spin="$1"; }
+    ui_spin_end() { _t_spin=""; }
+    exakit_service_ids() { printf 'database\n'; }
+    _exakit_autostart_registered() { printf 'autostart:%s\n' "$_t_spin" >> "$EXAKIT_TEST_SPINLOG"; return 1; }
+    exakit_component_current() { [ "$1" = pyexasol ] && printf 'pyexasol:%s\n' "$_t_spin" >> "$EXAKIT_TEST_SPINLOG"; return 1; }
+    exakit_uv_report() { printf 'uv:%s\n' "$_t_spin" >> "$EXAKIT_TEST_SPINLOG"; }
+    exakit_tls_recorded_fingerprint() { printf 'AB:CD\n'; }
+    exakit_tls_live_fingerprint() { printf 'tls:%s\n' "$_t_spin" >> "$EXAKIT_TEST_SPINLOG"; }
+fi
 STUB_EOF
     # ...then the rest of the script.
-    sed -n '/^\[ -f "\$_lib_dir\/json-tables.sh" \]/,$p' "$ROOT/setup/exakit" | tail -n +2
+    sed -n "$((LAST_LIB + 1)),\$p" "$ROOT/setup/exakit"
 } > "$STUB"
 chmod +x "$STUB"
 # The stub is worthless if the injection missed, and a silent miss would make
@@ -125,6 +141,21 @@ case "$out" in
     *Missing:*) fail "a healthy install still prints a Missing: block" ;;
     *)          pass "a healthy install prints no Missing: block" ;;
 esac
+
+# 3b. No silent stretch: the autostart probes and the pyexasol/uv probes each
+#     run under a spinner (they took 4.7 s and 16.7 s on a loaded Mac with the
+#     screen blank). The labels are the ones Invoke-CmdStatus uses on Windows.
+# A pinned certificate too, so the TLS handshake (up to 3 s) is asked.
+mkdir -p "$WORK/kit-tls"
+sed 's/"type": "personal"/"type": "personal", "dsn": "127.0.0.1:8563"/' "$EXAKIT_HOME/manifest.json" > "$WORK/kit-tls/manifest.json"
+EXAKIT_HOME="$WORK/kit-tls" EXAKIT_TEST_SPINLOG="$WORK/spinlog" bash "$STUB" status >/dev/null 2>&1
+# The first four probes, the ones before the panels are drawn.
+spun="$(head -n 4 "$WORK/spinlog" 2>/dev/null | tr '\n' ',')"
+if [ "$spun" = "autostart:Checking the add-on services,pyexasol:Checking the Python driver,uv:Checking the Python driver,tls:Checking the database," ]; then
+    pass "the autostart, Python driver and TLS probes each run under a spinner"
+else
+    fail "a status probe runs with no spinner up: $spun"
+fi
 
 # 4. steps_completed is machine data and must stay OUT of the human screen but
 #    IN --json: dropping it from both would break agents parsing the install.
@@ -262,7 +293,7 @@ EOF
 #    step 5 of the same function deletes that logfile. An unquieted run would
 #    print those lines from info() and pass this for the wrong reason.
 un_out="$(common_sh '
-manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; *) return 1 ;; esac; }
+manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; runtime.ownership) printf "kit\n" ;; *) return 1 ;; esac; }
 personal_teardown() { return 0; }
 exakit_mcp_operation() { return 0; }
 _exakit_uninstall_mcp_processes() { return 0; }   # never the real process table
@@ -281,7 +312,7 @@ done <<'EOF'
 the database it removed|Database removed
 the kit home it removed|Kit home removed
 the AI clients it edited|MCP entry removed
-that the lines on screen are the only record|whole record of this uninstall
+the commands it removed|Commands removed
 EOF
 
 # The PowerShell twin carries the identical fault, and carried the identical
@@ -383,13 +414,19 @@ done
 #     PowerShell's $HOME is the account's home-directory attribute, which on a
 #     domain machine is H:\ or \\server\share\user -- neither can be
 #     bind-mounted, so the install could not run at all.
-head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,200p')")"
+head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,300p')")"
 if has "$head" 'USERPROFILE'; then
     pass "the Windows kit home prefers the local user profile"
 else
     fail "the Windows kit home is still derived from PowerShell's \$HOME"
 fi
-if has "$head" 'EXAKIT_HOME to a folder on a local drive'; then
+# The notice is read from the block that detects the non-local home - the
+# module's top-level `if ... Test-ExakitLocalPath ... { ... }` - not from a
+# fixed count of lines from the top: the ownership helpers added above it in
+# f8f02ac moved it from line 284 to 323, past the 300 lines read above.
+notice="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" |
+    awk '/^if .*Test-ExakitLocalPath/ { on = 1 } on { print } on && /^}/ { exit }')")"
+if has "$notice" 'EXAKIT_HOME to a folder on a local drive'; then
     pass "a non-local home is detected and EXAKIT_HOME is named as the fix"
 else
     fail "a non-local home is never named, so the fix is never offered"
@@ -525,6 +562,30 @@ if has "$body" "Suspend-ExakitSpinner" && has "$body" "UiErr"; then
     pass "Write-ExakitError hands the spinner its line back and uses the shared error palette"
 else
     fail "Write-ExakitError prints into the spinner's line, or with a hardcoded colour"
+fi
+
+printf '\n== a database that completes the handshake and then never answers ==\n'
+# Measured live: a deadlocked loader left the database accepting logins and
+# answering nothing, and `exakit status` (its dataset check) waited on it for as
+# long as it hung - and every agent that asked with it. Status bounds its SQL
+# and falls back to the manifest's word, as it does for a database that is down.
+cat > "$WORK/hang-exapump" <<'EOF'
+#!/bin/sh
+exec sleep 30
+EOF
+chmod +x "$WORK/hang-exapump"
+_t0=$(date +%s)
+( . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
+  . "$ROOT/setup/lib/exapump.sh" >/dev/null 2>&1
+  exapump_cli() { printf '%s' "$WORK/hang-exapump"; }
+  manifest_get() { [ "$1" = components.exapump.profile ] && printf 'starter-kit\n'; return 0; }
+  EXAKIT_STATUS_SQL_TIMEOUT=2
+  exakit_loaded_datasets >/dev/null 2>&1 ) </dev/null
+_took=$(( $(date +%s) - _t0 ))
+if [ "$_took" -lt 15 ]; then
+    pass "the dataset check gives up on a hung database (${_took}s with a 2s limit)"
+else
+    fail "the dataset check waited ${_took}s on a database that never answers"
 fi
 
 printf '\n%d checks, %d failed\n' "$checks" "$fails"

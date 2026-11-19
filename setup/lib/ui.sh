@@ -315,13 +315,113 @@ _UI_SPIN_NESTED=0
 # landed on the PARENT's table animator -- mid-frame, leaving a half-drawn table
 # on screen with the finished one printed under it. A subshell's nesting counter
 # starts at zero, so counting alone cannot tell the two apart; ownership can.
+# $$ alone is NOT a shell's identity: bash gives a subshell its parent's $$, so
+# the subshell that set up the read-only MCP user passed this check, stopped the
+# step's spinner at (3s), and left it frozen through the half minute the MCP
+# server took to start. BASH_SUBSHELL (bash 3.0+, unlike BASHPID) is what tells
+# them apart; it is read inline, since a $( ) to compute it is a subshell too.
 _UI_SPIN_OWNER=''
+# ONE ITEM OF A GROUPED STEP. A step that shows several items under one heading
+# (the installer's "Setup Utilities": exapump, then the database features) draws
+# each item's spinner one level in, at the item column, and names the item ahead
+# of what it is doing right now: "exapump  downloading (3s)". The caller sets
+# both for the length of the item and clears them after; empty, the spinner is
+# drawn exactly as before. ⇄ twins: UiSpinIndent / UiSpinPrefix in ui.ps1.
+_UI_SPIN_INDENT='  '
+_UI_SPIN_PREFIX=''
+
+# A GROUPED STEP DRAWN AS A BAR. "Setup Utilities" shows its items as one bar
+# line under the ticks of the items already done:
+#
+#     ✓ Data Loader                                          (14s)
+#     ███████░░░░░░░░░░░░░  1/3  SQL Preprocessor · verifying checksum (3s)
+#
+# The bar, the count and the item's name are fixed for the item; what follows
+# the dot is whatever the item's own code says it is doing now. That code calls
+# ui_spin_begin as it always has, often from a subshell (exakit_soft_step), so
+# the words go through a FILE the animator reads every frame: a subshell cannot
+# reach the animator's variables, and a second animator would paint over this
+# one. While the bar runs, ui_spin_begin/_end only write and clear that file,
+# and pause/resume do nothing (the item's own lines are held anyway). Display
+# only. Twins: Start-ExakitStepBar / Stop-ExakitStepBar in ui.ps1.
+_UI_BAR_FILE=''
+_UI_BAR_TITLE=''
+# ui_bar_begin <done> <total> <title> — start the bar for one item. Plain mode
+# or not a terminal: nothing (the item's tick line still prints when it ends).
+ui_bar_begin() {
+    _UI_BAR_FILE=''
+    _UI_BAR_TITLE="$3"
+    [ "${UI_FANCY:-0}" = 1 ] || return 0
+    [ -t 1 ] || return 0
+    _UI_BAR_FILE="$(mktemp "${TMPDIR:-/tmp}/exakit-bar.XXXXXX" 2>/dev/null)" || { _UI_BAR_FILE=''; return 0; }
+    # One animation at a time: whatever is drawing this line hands it over.
+    if [ -n "${_UI_SPIN_PID:-}" ]; then
+        _UI_SPIN_NESTED=0
+        _ui_step_stop_spinner
+    fi
+    _ubb_tot="$2"; [ "$_ubb_tot" -gt 0 ] 2>/dev/null || _ubb_tot=1
+    _ubb_done="$1"; [ "$_ubb_done" -gt "$_ubb_tot" ] 2>/dev/null && _ubb_done="$_ubb_tot"
+    # The count names the item running now (1/3 while the first runs); the
+    # bar's fill stays what is done.
+    _ubb_cur=$(( _ubb_done + 1 )); [ "$_ubb_cur" -gt "$_ubb_tot" ] && _ubb_cur="$_ubb_tot"
+    _ubb_head="$(ui_bar $(( _ubb_done * 100 / _ubb_tot )))  ${_ubb_cur}/${_ubb_tot}  $3"
+    _ubb_t0="$(date +%s 2>/dev/null || echo 0)"
+    _ubb_parent=$$
+    printf '\033[?25l'
+    (
+        exec 2>/dev/null    # stopped by SIGTERM: see ui_spin_begin
+        while :; do
+            kill -0 "$_ubb_parent" 2>/dev/null || exit 0
+            _ubb_sub=''
+            [ -f "$_UI_BAR_FILE" ] || exit 0
+            read -r _ubb_sub < "$_UI_BAR_FILE" 2>/dev/null || true
+            _ubb_el=$(( $(date +%s 2>/dev/null || echo 0) - _ubb_t0 ))
+            if [ -n "$_ubb_sub" ]; then
+                printf '\r%s%s · %s %s(%ss)%s\033[K' "$_UI_SPIN_INDENT" "$_ubb_head" "$_ubb_sub" "$UI_DIM" "$_ubb_el" "$UI_RESET"
+            else
+                printf '\r%s%s %s(%ss)%s\033[K' "$_UI_SPIN_INDENT" "$_ubb_head" "$UI_DIM" "$_ubb_el" "$UI_RESET"
+            fi
+            sleep 0.2
+        done
+    ) &
+    _UI_SPIN_PID=$!
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
+    disown 2>/dev/null || true
+}
+# ui_bar_end — stop the bar and clear its line (the caller prints the tick).
+ui_bar_end() {
+    _ube_file="${_UI_BAR_FILE:-}"
+    _UI_BAR_FILE=''
+    _UI_BAR_TITLE=''
+    [ -n "$_ube_file" ] || return 0
+    rm -f "$_ube_file"
+    _UI_SPIN_NESTED=0
+    _ui_step_stop_spinner
+}
+# _ui_bar_say <label> — what the item is doing now, for the bar to show. The
+# item's own name is already on the bar, so a label that is just that name (the
+# step label run_logged hands down) says nothing new.
+_ui_bar_say() {
+    _ubs="$1"
+    case "$_ubs" in
+        "$_UI_BAR_TITLE"*) _ubs='' ;;
+    esac
+    [ -z "$_ubs" ] || _ubs="$(printf '%s' "${_ubs%"${_ubs#?}"}" | tr '[:upper:]' '[:lower:]')${_ubs#?}"
+    printf '%s\n' "$_ubs" > "$_UI_BAR_FILE" 2>/dev/null || true
+}
 
 # ui_spin_begin <label> — start ONLY the animated spinner (prints no line of
 # its own). No-op unless we are on an interactive fancy terminal *right now*:
 # it re-checks `-t 1` at call time so a spinner can never leak into a
 # $(command substitution) capture, even when UI_FANCY was 1 at load time.
 ui_spin_begin() {
+    command -v exakit_addon_activity >/dev/null 2>&1 && exakit_addon_activity "$1"
+    # A step bar owns the line: say the words on it, keep the count.
+    if [ -n "${_UI_BAR_FILE:-}" ]; then
+        _ui_bar_say "$1"
+        _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED + 1 ))
+        return 0
+    fi
     # Something is already animating this line: take a reference, draw nothing.
     # _UI_LINE_BUSY is checked as well as the pid because the loads run in
     # subshells that had to drop the pid, and run_logged starts one of these for
@@ -333,22 +433,50 @@ ui_spin_begin() {
     fi
     [ "$UI_FANCY" = 1 ] || return 0
     [ -t 1 ] || return 0
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     _UI_STEP_LABEL="$1"
+    # An item's spinner says the item first. A label that already starts with
+    # it (the item's own name, or a label ui_spin_resume hands back) is used as
+    # it is, so a pause and resume never names the item twice.
+    if [ -n "${_UI_SPIN_PREFIX:-}" ]; then
+        case "$1" in
+            "$_UI_SPIN_PREFIX"*) ;;
+            '') _UI_STEP_LABEL="$_UI_SPIN_PREFIX" ;;
+            *)  _UI_STEP_LABEL="$_UI_SPIN_PREFIX  $(printf '%s' "${1%"${1#?}"}" | tr '[:upper:]' '[:lower:]')${1#?}" ;;
+        esac
+    fi
     # $2 is an ORIGINAL start time, passed only by ui_spin_resume: a spinner that
     # was paused so a line could be printed under it has to carry on counting
     # from where it was, not restart at (0s) every time something prints.
     _UI_STEP_T0="${2:-$(date +%s 2>/dev/null || echo 0)}"
     printf '\033[?25l'                          # hide cursor
+    # The animator is disowned, so nothing reaps it if the run dies without
+    # stopping it (Ctrl-C at a menu, an exit from a subshell that held the pid):
+    # it then wrote frames over the shell prompt forever. It checks the shell
+    # that started it each frame and goes when that shell is gone. $$ is that
+    # shell's pid even inside ( ), which is the process that matters.
+    _usb_parent=$$
     (
+        # Nothing this loop says on stderr is for the user. The stop is a
+        # SIGTERM, and one that lands while `date` runs in the $( ) below
+        # leaves the `|| echo 0` writing into a pipe whose reader just died:
+        # bash then printed "echo: write error: Broken pipe" with a file and
+        # line on the user's screen (exakit status, four spinners in a row).
+        exec 2>/dev/null
         _i=0
         while :; do
+            kill -0 "$_usb_parent" 2>/dev/null || exit 0
             _f="${UI_SPIN_FRAMES[$_i]}"
             _now="$(date +%s 2>/dev/null || echo 0)"
             _el=$((_now - _UI_STEP_T0))
-            printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
-                "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
-                "$UI_DIM" "$_el" "$UI_RESET"
+            if [ -z "$_UI_STEP_LABEL" ]; then
+                # No label: the spinner alone (the heading above says what is coming).
+                printf '\r%s%s%s%s\033[K' "$_UI_SPIN_INDENT" "$UI_ACCENT" "$_f" "$UI_RESET"
+            else
+                printf '\r%s%s%s%s %s %s(%ss)%s\033[K' \
+                    "$_UI_SPIN_INDENT" "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
+                    "$UI_DIM" "$_el" "$UI_RESET"
+            fi
             _i=$(((_i + 1) % 10))
             sleep 0.08
         done
@@ -365,10 +493,26 @@ ui_spin_begin() {
 ui_spin_end() {
     # Give back a reference taken while something else owned the line; only the
     # call that actually started the animation stops it.
+    if [ -n "${_UI_BAR_FILE:-}" ] && [ "${_UI_SPIN_NESTED:-0}" -gt 0 ]; then
+        _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED - 1 ))
+        _ui_bar_say ''
+        return 0
+    fi
     if [ "${_UI_SPIN_NESTED:-0}" -gt 0 ]; then
         _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED - 1 ))
         return 0
     fi
+    _ui_step_stop_spinner
+}
+
+# ui_spin_end_all — the line is wanted NOW (a table is about to be drawn by
+# someone else, Python included): stop the animation whatever references are
+# still out, and clear its line. A reference taken by a nested ui_spin_begin
+# and never given back made ui_spin_end only count down, and the owner's last
+# frame stayed frozen above the add-ons table. Twin of Stop-ExakitSpinnerAll.
+ui_spin_end_all() {
+    _UI_SPIN_NESTED=0
+    [ -z "${_UI_BAR_FILE:-}" ] || { rm -f "$_UI_BAR_FILE"; _UI_BAR_FILE=''; }
     _ui_step_stop_spinner
 }
 
@@ -386,8 +530,9 @@ ui_spin_end() {
 _UI_SPIN_PAUSED=0
 ui_spin_pause() {
     _UI_SPIN_PAUSED=0
+    [ -z "${_UI_BAR_FILE:-}" ] || return 0
     [ -n "${_UI_SPIN_PID:-}" ] || return 0
-    [ "${_UI_SPIN_OWNER:-}" = "$$" ] || return 0
+    [ "${_UI_SPIN_OWNER:-}" = "$$.${BASH_SUBSHELL:-0}" ] || return 0
     [ "${_UI_SPIN_NESTED:-0}" -eq 0 ] || return 0
     _UI_SPIN_PAUSED=1
     _UI_SPIN_PAUSE_LABEL="$_UI_STEP_LABEL"
@@ -398,6 +543,22 @@ ui_spin_resume() {
     [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
     _UI_SPIN_PAUSED=0
     ui_spin_begin "$_UI_SPIN_PAUSE_LABEL" "$_UI_SPIN_PAUSE_T0"
+}
+
+# ui_spin_relabel <label> — the same spinner line, now saying what it does next.
+#
+# A long job that narrates itself on ONE line (the uninstall) still has phases,
+# and "Removing the kit (40s)" over all of them hides which one is slow. The
+# animator is a subshell that copied its label when it started, so the label
+# changes the way a pause does: stop, then start again with the new words and a
+# fresh counter. No spinner of our own (not a TTY, or a nested caller): nothing.
+# ⇄ twin: Set-ExakitSpinnerLabel in ui.ps1.
+ui_spin_relabel() {
+    if [ -n "${_UI_BAR_FILE:-}" ]; then _ui_bar_say "$1"; return 0; fi
+    ui_spin_pause
+    [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
+    _UI_SPIN_PAUSED=0
+    ui_spin_begin "$1"
 }
 
 # ui_step_start <label> — begin a visible step: an animated spinner in fancy
@@ -416,7 +577,7 @@ _ui_step_stop_spinner() {
     [ -n "$_UI_SPIN_PID" ] || return 0
     # Started by another shell: this one is a subshell that inherited the pid,
     # and ending someone else's animation is never what it meant to do.
-    if [ -n "${_UI_SPIN_OWNER:-}" ] && [ "$_UI_SPIN_OWNER" != "$$" ]; then
+    if [ -n "${_UI_SPIN_OWNER:-}" ] && [ "$_UI_SPIN_OWNER" != "$$.${BASH_SUBSHELL:-0}" ]; then
         return 0
     fi
     kill "$_UI_SPIN_PID" 2>/dev/null
@@ -424,6 +585,10 @@ _ui_step_stop_spinner() {
     _UI_SPIN_PID=''
     _UI_SPIN_OWNER=''
     printf '\r\033[K\033[?25h'                   # clear spinner line, restore cursor
+    if [ "${_UI_PROGRESS_HELD:-0}" = 1 ]; then
+        _UI_PROGRESS_HELD=0
+        _ui_input_release
+    fi
 }
 
 _ui_step_elapsed() {
@@ -461,7 +626,261 @@ ui_step_fail() {
 # Restore the cursor if we died mid-spin. NOT wired to a trap here on
 # purpose: the installer owns `trap ... EXIT` (exakit_on_failure), which
 # calls this itself, so a trap here would clobber the installer's cleanup.
-ui_restore_cursor() { [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; return 0; }
+ui_restore_cursor() { ui_mouse_off; [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _ui_input_release; return 0; }
+
+# _ui_interrupted <INT|TERM> <prefix> — Ctrl-C (or TERM) while a menu or a live
+# table owns the terminal: mouse reporting off, the cursor back, the saved
+# stty state (echo) back - a terminal left reporting the wheel as
+# "64;78;13M" and typing nothing it shows is what an untrapped Ctrl-C left -
+# then the traps that stood before (<prefix>_INT, <prefix>_TERM, as trap -p
+# printed them) are put back and the one for this signal runs, so its owner
+# says what was cancelled; with none, exit 130. ⇄ twin: the finally blocks
+# around Read-ExakitTableMenu and Invoke-ExakitVsTui (ui.ps1 has no signals).
+_ui_interrupted() {
+    ui_restore_cursor
+    printf '\n'
+    eval "_uii_int=\${${2}_INT:-}; _uii_term=\${${2}_TERM:-}"
+    if [ -n "$_uii_int" ]; then eval "$_uii_int"; else trap - INT; fi
+    if [ -n "$_uii_term" ]; then eval "$_uii_term"; else trap - TERM; fi
+    _uii_prev="$_uii_int"; [ "$1" = TERM ] && _uii_prev="$_uii_term"
+    if [ -n "$_uii_prev" ]; then
+        # "trap -- '<command>' SIGINT": the command is the third word.
+        eval "set -- $_uii_prev"
+        eval "$3"
+    fi
+    exit 130
+}
+
+# --- mouse in the menus -------------------------------------------------------
+# A click on a row of ui_checkbox_menu or ui_table_menu ticks or unticks it, the
+# same as Space on it; only Enter moves on. xterm SGR reporting (modes 1000 and
+# 1006), which Terminal.app, iTerm2, VS Code, GNOME Terminal and Windows
+# Terminal all speak. Fancy terminals only, EXAKIT_NO_MOUSE=1 keeps it off, and
+# it is always switched off again - by the menu, and by ui_restore_cursor on the
+# installer's EXIT trap - so a terminal is never left reporting clicks.
+#
+# Echo stays off for the whole menu, not only inside each read: a click's
+# release report, or the terminal's answer to _ui_cursor_ask, can arrive while
+# a frame is being drawn, and the terminal would echo it there as
+# "^[[<0;8;27m". The menu's own hold is released when the mouse goes off; a
+# hold someone else took is left alone.
+ui_mouse_on() {
+    [ "${UI_FANCY:-0}" = 1 ] && [ "${EXAKIT_NO_MOUSE:-0}" != 1 ] || return 0
+    if [ -z "${_UI_STTY_SAVED:-}" ] && [ "${_UI_MOUSE_HELD:-0}" != 1 ]; then
+        _ui_input_hold
+        [ -n "${_UI_STTY_SAVED:-}" ] && _UI_MOUSE_HELD=1
+    fi
+    printf '\033[?1000h\033[?1006h'
+    _UI_MOUSE=1
+    UI_CURSOR_ROW=""
+}
+ui_mouse_off() {
+    _UI_MOUSE_PAUSED=0
+    if [ "${_UI_MOUSE:-0}" = 1 ]; then
+        printf '\033[?1006l\033[?1000l'
+        _UI_MOUSE=0
+    fi
+    if [ "${_UI_MOUSE_HELD:-0}" = 1 ]; then
+        # Echo back on, and NOTHING dropped: unlike an animation's hold, keys typed
+        # after the Enter that closed the menu are the next question's answers.
+        _UI_MOUSE_HELD=0
+        [ -n "${_UI_STTY_SAVED:-}" ] && stty "$_UI_STTY_SAVED" < "$_UI_STTY_DEV" 2>/dev/null
+        _UI_STTY_SAVED=''
+    fi
+    return 0
+}
+
+# _ui_mouse_pause — THE WHEEL BELONGS TO THE TERMINAL. While clicks are reported
+# the terminal sends its wheel to the menu too, and the scrollback stops moving:
+# the screen feels stuck under the menu. The first wheel tick therefore hands
+# reporting straight back, so the wheel scrolls the terminal as it always does,
+# and _ui_menu_key re-arms clicks after two quiet seconds or on the next key.
+_ui_mouse_pause() {
+    [ "${_UI_MOUSE:-0}" = 1 ] || return 0
+    printf '\033[?1006l\033[?1000l'
+    _UI_MOUSE=0
+    _UI_MOUSE_PAUSED=1
+}
+
+# _ui_menu_key <tty> — one keypress for a menu, no echo: UI_KEY (Enter is
+# empty), and for an escape sequence UI_KEY_SEQ ("[A", "[B", or "[<" for a left
+# click, with UI_MOUSE_Y set). Returns 1 at the end of the input.
+#
+# The wheel never reaches the menu: a wheel report hands the mouse back to the
+# terminal (_ui_mouse_pause) and is swallowed HERE, with no redraw - a redraw
+# would snap a scrolled-back screen to the bottom, which is the stuck scroll this
+# exists to prevent. While paused it waits in two-second slices and re-arms
+# clicks after a quiet one or on the next key.
+_ui_menu_key() {
+    while :; do
+        UI_KEY=""; UI_KEY_SEQ=""
+        if [ "${_UI_MOUSE_PAUSED:-0}" = 1 ]; then
+            # bash 3.2 answers a timeout with 1, like the end of the input: the
+            # clock tells them apart - the end of the input answers at once.
+            _umk_t0="$SECONDS"
+            if [ "$1" = "/dev/tty" ]; then
+                IFS= read -rsn1 -t 2 UI_KEY < /dev/tty; _umk_rc=$?
+            else
+                IFS= read -rsn1 -t 2 UI_KEY; _umk_rc=$?
+            fi
+            _UI_MOUSE_PAUSED=0
+            ui_mouse_on
+            if [ "$_umk_rc" -ne 0 ]; then
+                [ $(( SECONDS - _umk_t0 )) -ge 1 ] && continue
+                return 1
+            fi
+        elif [ -n "${UI_MENU_KEY_TIMEOUT:-}" ]; then
+            # A menu whose rows change behind it (UI_TABLE_MENU_LIVE): 2 when no
+            # key came in the time, so it can redraw. Whole seconds - bash 3.2
+            # reads no fraction - and the clock tells a timeout from the end of
+            # the input, as above: a full second always crosses a second mark.
+            _umk_t0="$SECONDS"
+            if [ "$1" = "/dev/tty" ]; then
+                IFS= read -rsn1 -t "$UI_MENU_KEY_TIMEOUT" UI_KEY < /dev/tty; _umk_rc=$?
+            else
+                IFS= read -rsn1 -t "$UI_MENU_KEY_TIMEOUT" UI_KEY; _umk_rc=$?
+            fi
+            if [ "$_umk_rc" -ne 0 ]; then
+                [ $(( SECONDS - _umk_t0 )) -ge 1 ] && return 2
+                return 1
+            fi
+        elif [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 UI_KEY < /dev/tty || return 1
+        else
+            IFS= read -rsn1 UI_KEY || return 1
+        fi
+        [ "$UI_KEY" = "$(printf '\033')" ] || return 0
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn2 -t 1 UI_KEY_SEQ < /dev/tty || UI_KEY_SEQ=""
+        else
+            IFS= read -rsn2 -t 1 UI_KEY_SEQ || UI_KEY_SEQ=""
+        fi
+        case "$UI_KEY_SEQ" in
+            "[<") ;;
+            "["[0-9])
+                # A longer sequence: the cursor report _ui_cursor_ask asked
+                # for (taken, never handed to the menu - a redraw for it would
+                # ask again, forever), or a key such as Delete (ignored).
+                _ui_read_csi "$1" || continue
+                [ -n "$UI_CSI_ROW" ] && { UI_CURSOR_ROW="$UI_CSI_ROW"; continue; }
+                return 0 ;;
+            *) return 0 ;;
+        esac
+        _ui_read_mouse "$1" || continue
+        case "$UI_MOUSE_PRESS:$UI_MOUSE_BTN" in
+            1:0) return 0 ;;
+            1:64|1:65) _ui_mouse_pause ;;
+        esac
+    done
+}
+
+# _ui_cursor_ask — ask the terminal where the cursor is, right after a frame is
+# drawn: the frame's top is that row minus the lines it drew, wherever the
+# screen has scrolled to. NEVER waited for. The answer ("ESC [ row ; col R")
+# arrives in the input like a key, where _ui_menu_key takes it into
+# UI_CURSOR_ROW and swallows it; a read that blocked for it here would swallow
+# the keys typed ahead of it instead, and a terminal that never answers would
+# hang the menu. Until an answer arrives, a click is ignored.
+_ui_cursor_ask() {
+    [ "${_UI_MOUSE:-0}" = 1 ] || return 0
+    printf '\033[6n'
+}
+
+# _ui_read_csi <tty> — the rest of an escape sequence whose start, "[" and a
+# digit, is in UI_KEY_SEQ: read to its final letter (or "~"). UI_CSI_ROW is the
+# row of a cursor report ("ESC [ row ; col R"), empty for anything else.
+_ui_read_csi() {
+    _urc_s="${UI_KEY_SEQ#\[}"; _urc_c=""; _urc_n=0; UI_CSI_ROW=""
+    while [ "$_urc_n" -lt 16 ]; do
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 -t 1 _urc_c < /dev/tty || return 1
+        else
+            IFS= read -rsn1 -t 1 _urc_c || return 1
+        fi
+        case "$_urc_c" in [A-Za-z~]) break ;; esac
+        _urc_s="$_urc_s$_urc_c"
+        _urc_n=$(( _urc_n + 1 ))
+    done
+    if [ "$_urc_c" = "R" ]; then
+        UI_CSI_ROW="${_urc_s%%;*}"
+        case "$UI_CSI_ROW" in ''|*[!0-9]*) UI_CSI_ROW="" ;; esac
+    fi
+    return 0
+}
+
+# _ui_read_mouse <tty> — the rest of an SGR mouse report, after the menu has
+# read its "ESC [<": UI_MOUSE_BTN (0 left, 64/65 wheel), UI_MOUSE_Y (screen row)
+# and UI_MOUSE_PRESS (1 press, 0 release).
+_ui_read_mouse() {
+    _urm_s=""; _urm_c=""; _urm_n=0
+    while [ "$_urm_n" -lt 24 ]; do
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 -t 1 _urm_c < /dev/tty || return 1
+        else
+            IFS= read -rsn1 -t 1 _urm_c || return 1
+        fi
+        case "$_urm_c" in M|m) break ;; esac
+        _urm_s="$_urm_s$_urm_c"
+        _urm_n=$(( _urm_n + 1 ))
+    done
+    UI_MOUSE_PRESS=0
+    [ "$_urm_c" = "M" ] && UI_MOUSE_PRESS=1
+    UI_MOUSE_BTN="${_urm_s%%;*}"
+    UI_MOUSE_Y="${_urm_s##*;}"
+    case "$UI_MOUSE_BTN$UI_MOUSE_Y" in ''|*[!0-9]*) return 1 ;; esac
+    return 0
+}
+
+# _ui_click_row <top> <count> <starts...> — which entry a click on screen row
+# UI_MOUSE_Y landed on, given the frame's top row and the line each entry starts
+# at (0-based, ascending; the last value is where the entries end). Prints the
+# 1-based entry, or nothing for a click outside them.
+_ui_click_row() {
+    _ucl_off=$(( UI_MOUSE_Y - $1 )); _ucl_n="$2"; shift 2
+    _ucl_i=0; _ucl_hit=""
+    for _ucl_at in "$@"; do
+        if [ "$_ucl_i" -ge 1 ] && [ "$_ucl_off" -lt "$_ucl_at" ]; then _ucl_hit="$_ucl_i"; break; fi
+        [ "$_ucl_off" -ge "$_ucl_at" ] || break
+        _ucl_i=$(( _ucl_i + 1 ))
+        [ "$_ucl_i" -le "$_ucl_n" ] || break
+    done
+    [ -n "$_ucl_hit" ] && printf '%s\n' "$_ucl_hit"
+    return 0
+}
+
+# _ui_input_hold / _ui_input_release — while a table animates, the keys a reader
+# types are not echoed, and when it ends they are thrown away. An Enter echoed
+# under a live table moved the cursor down a line; the next frame then drew one
+# line too low and left the last one stacked above it. A key typed meanwhile
+# could also answer the NEXT question on its own. Only the terminal the kit is
+# talking to (/dev/tty) is touched, and only when there is one.
+_UI_STTY_SAVED=''
+_UI_STTY_DEV=''
+_ui_input_hold() {
+    [ -z "$_UI_STTY_SAVED" ] || return 0
+    # The terminal the reader types into: stdin when it is one, else /dev/tty
+    # (an installer piped from curl reads its answers there).
+    if [ -t 0 ]; then
+        _UI_STTY_DEV=/dev/stdin
+    elif (: < /dev/tty) 2>/dev/null; then
+        _UI_STTY_DEV=/dev/tty
+    else
+        return 0
+    fi
+    _UI_STTY_SAVED="$(stty -g < "$_UI_STTY_DEV" 2>/dev/null)" || { _UI_STTY_SAVED=''; return 0; }
+    stty -echo < "$_UI_STTY_DEV" 2>/dev/null || true
+    return 0
+}
+_ui_input_release() {
+    [ -n "${_UI_STTY_SAVED:-}" ] || return 0
+    # Whatever was typed meanwhile is read without waiting for more, and dropped.
+    if stty -icanon min 0 time 0 < "$_UI_STTY_DEV" 2>/dev/null; then
+        dd if="$_UI_STTY_DEV" of=/dev/null bs=4096 count=1 2>/dev/null || true
+    fi
+    stty "$_UI_STTY_SAVED" < "$_UI_STTY_DEV" 2>/dev/null || true
+    _UI_STTY_SAVED=''
+    return 0
+}
 
 # --- the progress line -----------------------------------------------------
 # ui_progress_creep <pct> <ceiling> <seconds> <elapsed-in-segment> — where
@@ -598,6 +1017,8 @@ ui_progress_animate() {
     # forking a process per frame.
     _upa_cols="$(_ui_term_cols 2>/dev/null || echo 80)"
     while :; do
+        # Run with &: $$ is the shell that started it. Gone with it (see ui_spin_begin).
+        kill -0 "$$" 2>/dev/null || return 0
         _upa_state=""
         read -r _upa_state < "$1" 2>/dev/null || true
         # A read that caught the file mid-write has no phase yet: skip the frame
@@ -648,6 +1069,17 @@ ui_progress_animate() {
 ui_progress_state() {
     printf '%s|%s|%s|%s|%s\n' "$2" "$3" "$4" \
         "$(date +%s 2>/dev/null || echo 0)" "$5" > "$1"
+    _ui_progress_log "$2" "$5"
+}
+
+# _ui_progress_log <pct> <phase> - when EXAKIT_PROGRESS_LOG names a file, every
+# progress update is also one line in it, "pct|phase": how a program without a
+# terminal (a wrapper script or an agent) shows the same live progress the bar and
+# the table draw here. Off unless asked for; a write that fails is ignored.
+# Twin of Write-ExakitProgressLog in ui.ps1.
+_ui_progress_log() {
+    [ -n "${EXAKIT_PROGRESS_LOG:-}" ] || return 0
+    printf '%s|%s\n' "$1" "$(printf '%s' "$2" | tr '\n|' '  ')" >> "$EXAKIT_PROGRESS_LOG" 2>/dev/null || true
 }
 
 # ui_progress_begin <file> <t0> — start painting, in the UI layer's single
@@ -665,6 +1097,7 @@ ui_progress_begin() {
     # through its table row (or in plain lines) instead. Checked before the pid,
     # because a detached subshell has no pid to look at.
     [ -n "${_UI_LINE_BUSY:-}" ] && return 1
+    [ -n "${_UI_BAR_FILE:-}" ] && return 1
     # Same single-animation rule as ui_table_begin: whatever is animating now is
     # about to have its pid overwritten, and would print over this bar forever.
     if [ -n "${_UI_SPIN_PID:-}" ]; then
@@ -672,9 +1105,16 @@ ui_progress_begin() {
         _ui_step_stop_spinner
     fi
     printf '\033[?25l'
-    ui_progress_animate "$1" "$2" &
+    # Keys typed while the bar animates are neither echoed nor kept: an Enter
+    # moved the cursor down a line and every redraw after it landed there, one
+    # bar under another. Only a hold this bar took is released when it stops.
+    if [ -z "${_UI_STTY_SAVED:-}" ]; then
+        _ui_input_hold
+        [ -n "${_UI_STTY_SAVED:-}" ] && _UI_PROGRESS_HELD=1
+    fi
+    ui_progress_animate "$1" "$2" 2>/dev/null &    # stopped by SIGTERM: see ui_spin_begin
     _UI_SPIN_PID=$!
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     # Out of the job table right away, or bash ANNOUNCES the kill: killing a
     # tracked background job prints "line N: 12345 Terminated: 15 ( ... )" —
     # several lines of the loop's own source — straight into the middle of the
@@ -696,6 +1136,7 @@ ui_progress_phase() {
     case "$_upp_state" in
         *"|"*"|"*"|"*"|"*)
             printf '%s|%s\n' "$(printf '%s' "$_upp_state" | cut -d'|' -f1-4)" "$2" > "$1"
+            _ui_progress_log "${_upp_state%%|*}" "$2"
             ;;
     esac
 }
@@ -757,8 +1198,12 @@ ui_bar() {
 #   <kind>|<label>|<tick>|<state>|<pct>|<ceiling>|<secs>|<segment-start>|<phase>|<final>|<col2>|<col3>
 #
 #   kind    group | tee | corner | plain   — the tree connector to draw
+#           tee-tee | tee-corner | corner-tee | corner-corner — a row one level
+#           DEEPER: the first word is its parent's connector (whose spine it
+#           carries on, or not), the second its own. "│  ├─ <child>" is a
+#           tee-tee: a child of a tee row, and not the last of its siblings.
 #   tick    1 while the row is selected
-#   state   idle | waiting | running | done | failed | disabled
+#   state   idle | waiting | running | done | failed | skipped | disabled
 #   final   what the Status column says once the row is finished
 #   col2    the second column's cell, drawn only when UI_TABLE_COL2 names one
 #   col3    the third column's cell, drawn only when UI_TABLE_COL3 names one
@@ -870,7 +1315,21 @@ ui_table_widths() {
         _utw_cols="$(_ui_term_cols 2>/dev/null || echo 80)"
         _UI_TABLE_COLS="$_utw_cols"
     fi
+    # ONE read of the state file per frame: both passes below and the frame's
+    # row loop read this copy. The rows are rewritten under the animator
+    # (ui_table_set replaces the file with mv -f), and read twice the first
+    # pass could find every row idle and withhold the Status column while the
+    # second measured a row that had just started - a negative heading pad, a
+    # bash error printed into the frame, and the animator dead on its first
+    # frames with the table frozen. ⇄ twin: the Status floor in
+    # Get-ExakitTableWidths (its rows are one list in memory, not a file).
+    _UI_TABLE_ROWS=""
+    IFS= read -r -d '' _UI_TABLE_ROWS 2>/dev/null < "$1" || :
     UI_TABLE_NAME_W=10
+    # Never narrower than its own heading ("Name (alias)" is 12): the frame
+    # pads the heading to this width. ⇄ twin: Get-ExakitTableWidths.
+    _utw_h1="${UI_TABLE_COL1:-Dataset}"
+    [ "${#_utw_h1}" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="${#_utw_h1}"
     # A FLOOR, not a starting guess. The status column is measured from the
     # finished statuses, and while the work is still running there are none — so
     # a column sized to what it holds today would be twenty wide during the load
@@ -893,6 +1352,9 @@ ui_table_widths() {
     # to barely wider than the longest name, then doubles the moment the first
     # row starts. The marketplace table has a description holding the width
     # either way, so the column can come and go without the box lurching.
+    # UI_TABLE_STAT_MIN=0 is a pick-only menu that never runs anything in its
+    # rows (the connect menu): no Status column at all. ⇄ twin: the table's
+    # StatMin in Get-ExakitTableWidths (ui.ps1).
     UI_TABLE_STAT_W="${UI_TABLE_STAT_MIN:-44}"
     if [ -n "${UI_TABLE_COL2:-}" ] || [ -n "${UI_TABLE_COL3:-}" ]; then
         UI_TABLE_STAT_W=0
@@ -901,7 +1363,7 @@ ui_table_widths() {
                 ''|idle|disabled) ;;
                 *) UI_TABLE_STAT_W="${UI_TABLE_STAT_MIN:-44}"; break ;;
             esac
-        done < "$1"
+        done <<< "$_UI_TABLE_ROWS"
     fi
     # Zero unless a heading names the column, so a table that asks for neither
     # is measured, and drawn, exactly as it was before they existed.
@@ -910,12 +1372,55 @@ ui_table_widths() {
     # FIXED, never measured: the Description column wraps to fill it rather than
     # growing to fit the longest About.
     [ -n "${UI_TABLE_COL3:-}" ] && UI_TABLE_COL3_W="${UI_TABLE_COL3_FIXED:-44}"
+    # Which rows have rows one level deeper hanging off them, for the frame:
+    # a wrapped description under such a row draws the start of that inner
+    # spine, so the children do not hang from nothing. Collected here because
+    # this pass already reads every row, and a parent is simply the row in
+    # front of its first child.
+    _UI_TABLE_PARENTS=" "
+    _utw_span=0
+    # The widest status a row actually holds (the floor is room kept for a bar,
+    # not text). Twin of $statNeed in Get-ExakitTableWidths.
+    _utw_statneed=0
+    _utw_i=0
+    _utw_prevkind=""
     while IFS='|' read -r _utw_kind _utw_label _utw_tick _utw_state _utw_pct \
                           _utw_ceil _utw_secs _utw_t0 _utw_phase _utw_final \
                           _utw_c2 _utw_c3; do
         [ -n "$_utw_kind" ] || continue
-        case "$_utw_kind" in tee|corner) _utw_len=$(( ${#_utw_label} + 3 )) ;; *) _utw_len="${#_utw_label}" ;; esac
-        [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
+        _utw_i=$(( _utw_i + 1 ))
+        case "$_utw_kind" in
+            *-tee|*-corner)
+                case "$_utw_prevkind" in
+                    *-tee|*-corner) ;;
+                    *) _UI_TABLE_PARENTS="$_UI_TABLE_PARENTS$(( _utw_i - 1 )) " ;;
+                esac ;;
+        esac
+        _utw_prevkind="$_utw_kind"
+        # The connector is part of the name cell: "├─ " is 3 columns, and a row
+        # one level deeper carries its parent's spine in front of its own --
+        # "│  ├─ " -- which is 6. Measured short, the deeper label would be cut.
+        case "$_utw_kind" in
+            tee|corner) _utw_len=$(( ${#_utw_label} + 3 )) ;;
+            # Three levels and deeper (the connect menu's files under a
+            # catalog under Lakehouse): three columns a level.
+            *-*-*) _utw_parts="${_utw_kind//[!-]/}"
+                   _utw_len=$(( ${#_utw_label} + 3 * (${#_utw_parts} + 1) )) ;;
+            *-tee|*-corner) _utw_len=$(( ${#_utw_label} + 6 )) ;;
+            *) _utw_len="${#_utw_label}" ;;
+        esac
+        # A radio row (a "one" group in ui_table_menu) carries "( ) " after
+        # its connector.
+        case "${_UI_TREE_RADIO:- }" in *" $_utw_i "*) _utw_len=$(( _utw_len + 4 )) ;; esac
+        # UI_TABLE_SPAN_EMPTY=1: a row with nothing in the second column may run
+        # its name on into that column's room (the data table's "Federation: ...
+        # - unavailable" beside no description), so it is measured apart.
+        if [ "${UI_TABLE_SPAN_EMPTY:-0}" = 1 ] && [ "$UI_TABLE_COL2_W" -gt 0 ] && \
+           [ -z "${UI_TABLE_COL3:-}" ] && [ -z "${_utw_c2// /}" ]; then
+            [ "$_utw_len" -gt "$_utw_span" ] && _utw_span="$_utw_len"
+        else
+            [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
+        fi
         if [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "${#_utw_c2}" -gt "$UI_TABLE_COL2_W" ]; then
             UI_TABLE_COL2_W="${#_utw_c2}"
         fi
@@ -931,11 +1436,23 @@ ui_table_widths() {
         case "$_utw_state" in
             ''|idle|disabled) ;;
             *)
+                # A skipped row with nothing to add says "skipped".
+                [ "$_utw_state" = skipped ] && [ -z "$_utw_final" ] && _utw_final=skipped
                 _utw_flen=$(( ${#_utw_final} + ${#UI_TICK} + 1 ))
                 [ "$_utw_flen" -gt "$UI_TABLE_STAT_W" ] && UI_TABLE_STAT_W="$_utw_flen"
+                [ "$_utw_flen" -gt "$_utw_statneed" ] && _utw_statneed="$_utw_flen"
                 ;;
         esac
-    done < "$1"
+    done <<< "$_UI_TABLE_ROWS"
+    # A Status column is never narrower than its own heading: the frame pads the
+    # heading row from it, and "Status" is 6.
+    if [ "$UI_TABLE_STAT_W" -gt 0 ] && [ "$UI_TABLE_STAT_W" -lt 6 ]; then
+        UI_TABLE_STAT_W=6
+    fi
+    # A spanning row's name needs what the name and the second column hold together.
+    if [ "$_utw_span" -gt $(( UI_TABLE_NAME_W + 2 + UI_TABLE_COL2_W )) ]; then
+        UI_TABLE_NAME_W=$(( _utw_span - 2 - UI_TABLE_COL2_W ))
+    fi
     # 2 border + 1 space + 4 checkbox + name + 2 gap + status + 1 space + 1 border
     # = 11, PLUS the two-column left margin ui_table_frame prints every row with
     # and one column left unwritten at the right. The margin was missing here,
@@ -993,6 +1510,32 @@ ui_table_widths() {
             UI_TABLE_COL3_W=$(( UI_TABLE_COL3_W - _utw_over ))
             _utw_over=0
             [ "$UI_TABLE_COL3_W" -ge 8 ] || { _utw_over=$(( 8 - UI_TABLE_COL3_W )); UI_TABLE_COL3_W=8; }
+        fi
+    fi
+    # A table that opts in (the add-ons', UI_TABLE_COL2_YIELDS=1) gives up its
+    # second column next, once a Status column runs: the versions were on the
+    # selection screen, and keeping them cut an add-on's child rows on an
+    # 80-column terminal - a name the reader cannot match.
+    if [ "$_utw_over" -gt 0 ] && [ "${UI_TABLE_COL2_YIELDS:-0}" = 1 ] && \
+       [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "$UI_TABLE_STAT_W" -gt 0 ]; then
+        _utw_over=$(( _utw_over - UI_TABLE_COL2_W - _utw_sepw ))
+        UI_TABLE_COL2_W=0
+        [ "$_utw_over" -ge 0 ] || _utw_over=0
+    fi
+    # Without fancy output nothing animates, so the frame is drawn once and its
+    # geometry cannot move under a redraw: the room the status floor keeps for a
+    # bar goes back to the names before a single label is cut (an agent shell
+    # read "Upload a file or fold..." beside an empty Status). Down to the widest
+    # status any row holds, never below 12. Twin of the same block in
+    # Get-ExakitTableWidths.
+    if [ "$_utw_over" -gt 0 ] && [ "${UI_FANCY:-0}" != 1 ] && [ "$UI_TABLE_STAT_W" -gt 0 ]; then
+        _utw_keep="$_utw_statneed"
+        [ "$_utw_keep" -ge 12 ] || _utw_keep=12
+        if [ "$UI_TABLE_STAT_W" -gt "$_utw_keep" ]; then
+            _utw_give=$(( UI_TABLE_STAT_W - _utw_keep ))
+            [ "$_utw_give" -le "$_utw_over" ] || _utw_give="$_utw_over"
+            UI_TABLE_STAT_W=$(( UI_TABLE_STAT_W - _utw_give ))
+            _utw_over=$(( _utw_over - _utw_give ))
         fi
     fi
     if [ "$_utw_over" -gt 0 ]; then
@@ -1062,6 +1605,20 @@ _ui_table_cell() {
                 _utc_at=$(( $2 + _utc_step ))
             fi
             [ "$_utc_at" -gt 100 ] && _utc_at=100
+            # What the row is doing, before its bar ("downloading 8.1 MB",
+            # "installing"): at most half the cell, and only while
+            # the bar keeps eight cells - a narrow terminal shows the bar alone.
+            _utc_ph="$6"; _utc_phw=0
+            if [ -n "$_utc_ph" ]; then
+                _utc_phmax=$(( UI_TABLE_STAT_W / 2 ))
+                [ "${#_utc_ph}" -gt "$_utc_phmax" ] && _utc_ph="${_utc_ph:0:$(( _utc_phmax - 1 ))}…"
+                _utc_phw=$(( ${#_utc_ph} + 1 ))
+                if [ $(( _utc_barw - _utc_phw )) -ge 8 ]; then
+                    _utc_barw=$(( _utc_barw - _utc_phw ))
+                else
+                    _utc_ph=""; _utc_phw=0
+                fi
+            fi
             _utc_units=$(( _utc_at * _utc_barw * 8 / 100 ))
             _utc_full=$(( _utc_units / 8 ))
             _utc_rem=$(( _utc_units % 8 ))
@@ -1077,7 +1634,8 @@ _ui_table_cell() {
             _utc_pct="${_utc_at}%"
             _utc_npad=$(( _utc_num - ${#_utc_pct} )); [ "$_utc_npad" -ge 0 ] || _utc_npad=0
             UI_TABLE_CELL="${UI_ACCENT:-}${_UI_TABLE_FULL:0:$_utc_full}${UI_DIM:-}${_utc_head}${_UI_TABLE_EMPTY:0:$_utc_empty}${UI_RESET:-}${_UI_TABLE_SP:0:$_utc_npad}${_utc_pct}"
-            UI_TABLE_CELL_LEN=$(( _utc_barw + _utc_num ))
+            [ -n "$_utc_ph" ] && UI_TABLE_CELL="${_utc_ph} ${UI_TABLE_CELL}"
+            UI_TABLE_CELL_LEN=$(( _utc_phw + _utc_barw + _utc_num ))
             ;;
         waiting)
             UI_TABLE_CELL="${UI_DIM:-}waiting${UI_RESET:-}"; UI_TABLE_CELL_LEN=7 ;;
@@ -1087,6 +1645,14 @@ _ui_table_cell() {
         failed)
             UI_TABLE_CELL="${UI_ERR:-}${UI_CROSS:-[x]}${UI_RESET:-} $7"
             UI_TABLE_CELL_LEN=$(( ${#UI_CROSS} + 1 + ${#7} )) ;;
+        skipped)
+            # Settled, but nothing was done: no glyph, dim, and indented by the
+            # tick's width so the words still line up with the finished rows
+            # above and below ("skipped" when the caller has nothing to add).
+            _utc_sk="${7:-skipped}"
+            _utc_skpad=$(( ${#UI_TICK} + 1 ))
+            UI_TABLE_CELL="${_UI_TABLE_SP:0:$_utc_skpad}${UI_DIM:-}${_utc_sk}${UI_RESET:-}"
+            UI_TABLE_CELL_LEN=$(( _utc_skpad + ${#_utc_sk} )) ;;
         disabled)
             # No glyph: this is not an outcome of anything that ran, it is a
             # standing fact about the row. Dim, like the name beside it.
@@ -1102,6 +1668,24 @@ _ui_table_cell() {
             fi ;;
     esac
     return 0
+}
+
+# _ui_table_tree_conn <kind> — _utr_conn and _utr_spine for a row three or more
+# levels deep ("tee-corner-tee"): every level but the last draws its spine
+# ("│  ", or three spaces after a corner), the last its connector. Parameter
+# expansion only: it runs per row per frame.
+_ui_table_tree_conn() {
+    _uttc_k="$1-"; _utr_conn=""; _utr_spine=""
+    while [ -n "$_uttc_k" ]; do
+        _uttc_w="${_uttc_k%%-*}"; _uttc_k="${_uttc_k#*-}"
+        if [ -n "$_uttc_k" ]; then
+            if [ "$_uttc_w" = tee ]; then _utr_conn="$_utr_conn${UI_VB:-|}  "; else _utr_conn="$_utr_conn   "; fi
+        elif [ "$_uttc_w" = tee ]; then
+            _utr_spine="$_utr_conn${UI_VB:-|}"; _utr_conn="$_utr_conn${UI_TEE:-|-} "
+        else
+            _utr_spine="$_utr_conn"; _utr_conn="$_utr_conn${UI_CORNER:-\`-} "
+        fi
+    done
 }
 
 # ui_table_frame <state-file> <cursor> — the whole table, as a STRING in
@@ -1160,20 +1744,55 @@ ui_table_frame() {
     fi
     # Padded from the LENGTH COUNTED ABOVE, never from ${#_utr_head}: the rules
     # carry colour escapes, so the string is bytes longer than it reads.
-    _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_head}${_UI_TABLE_SP:0:$(( _utr_inner - _utr_headlen ))}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
+    # Clamped: a negative length is a bash error that ends the animator.
+    _utr_hpad=$(( _utr_inner - _utr_headlen )); [ "$_utr_hpad" -ge 0 ] || _utr_hpad=0
+    _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_head}${_UI_TABLE_SP:0:$_utr_hpad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
 "
     _utr_lines=2
+    # The line each row starts on, for a click (see ui_table_menu).
+    _UI_TABLE_AT=()
     _utr_now="$(date +%s 2>/dev/null || echo 0)"
+    # No activity lines in the table: each row's bar and status say enough. The
+    # side channel ("row|text" per add-on) is still written; the log keeps what
+    # each install did. UI_TABLE_ACTIVITY=1 draws a line above each such row.
+    _utr_acts=""
+    if [ "${UI_TABLE_ACTIVITY:-0}" = 1 ] && [ -s "$1.activity" ]; then
+        _utr_acts="
+$(cat "$1.activity" 2>/dev/null)
+"
+    fi
     _utr_i=0
     while IFS='|' read -r _utr_kind _utr_label _utr_tick _utr_state _utr_pct \
                           _utr_ceil _utr_secs _utr_t0 _utr_phase _utr_final \
                           _utr_c2 _utr_c3; do
         [ -n "$_utr_kind" ] || continue
         _utr_i=$(( _utr_i + 1 ))
+        # A row a closed "collapse" group hides (ui_table_menu): not drawn, and
+        # a click can never land on it (its line is the next row's).
+        case "${_UI_TREE_HIDDEN:- }" in *" $_utr_i "*) _UI_TABLE_AT[$_utr_i]="$_utr_lines"; continue ;; esac
+        # _utr_spine is what a wrapped description's continuation lines draw in
+        # the name cell: every spine that carries on PAST this row. A tee's
+        # spine goes on to its next sibling; a corner's ends with it. A row one
+        # level deeper draws its parent's spine (when that one goes on) and its
+        # own, three columns in.
         case "$_utr_kind" in
-            tee)    _utr_conn="${UI_TEE:-|-} "; _utr_spine=1 ;;
-            corner) _utr_conn="${UI_CORNER:-\`-} "; _utr_spine=0 ;;
-            *)      _utr_conn=""; _utr_spine=0 ;;
+            tee)           _utr_conn="${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}" ;;
+            corner)        _utr_conn="${UI_CORNER:-\`-} "; _utr_spine="" ;;
+            tee-tee)       _utr_conn="${UI_VB:-|}  ${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}  ${UI_VB:-|}" ;;
+            tee-corner)    _utr_conn="${UI_VB:-|}  ${UI_CORNER:-\`-} "; _utr_spine="${UI_VB:-|}" ;;
+            corner-tee)    _utr_conn="   ${UI_TEE:-|-} "; _utr_spine="   ${UI_VB:-|}" ;;
+            corner-corner) _utr_conn="   ${UI_CORNER:-\`-} "; _utr_spine="" ;;
+            *-*-*)         _ui_table_tree_conn "$_utr_kind" ;;
+            *)             _utr_conn=""; _utr_spine="" ;;
+        esac
+        # A row with children: its continuation lines also start the children's
+        # spine, three columns in, under the first letter of its name.
+        case "$_UI_TABLE_PARENTS" in
+            *" $_utr_i "*)
+                case "$_utr_kind" in
+                    tee) _utr_spine="${UI_VB:-|}  ${UI_VB:-|}" ;;
+                    corner) _utr_spine="   ${UI_VB:-|}" ;;
+                esac ;;
         esac
         # A row nobody can pick: no checkbox at all, because an empty one
         # invites the reader to try. It keeps its COLUMNS though. It used to
@@ -1183,10 +1802,22 @@ ui_table_frame() {
         # one row whose status was already known. The 5-space indent is the
         # width of the pointer and checkbox it replaces, so the tree connectors
         # still line up.
-        if [ "$_utr_state" = "disabled" ]; then
+        # UI_TABLE_NOBOX (" 1 ") names rows that are never a choice - the install's
+        # sample row, which loads whatever is picked below it: no checkbox in any
+        # state, while it loads and after.
+        if [ "$_utr_state" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utr_i "*) true ;; *) false ;; esac; then
             # Three spaces, the width of "[ ]": with two the tree connector
             # sat a column left of every pickable row above it.
             _utr_ptr=" "; _utr_box="   "; _utr_boxlen=3
+            # UI_TABLE_LOCKED (" 1 "), a NOBOX row that is always on: a ticked box,
+            # dimmed, that no key can untick - it says "this loads" without
+            # offering a choice. The sample datasets row.
+            case "${UI_TABLE_LOCKED:- }" in
+                *" $_utr_i "*)
+                    if [ "${UI_FANCY:-0}" = 1 ]; then _utr_mark="${UI_TICK:-x}"; else _utr_mark="x"; fi
+                    _utr_box="${UI_DIM:-}[${_utr_mark}]${UI_RESET:-}"
+                    _utr_boxlen=$(( 2 + ${#_utr_mark} )) ;;
+            esac
         elif [ "$_utr_tick" = "1" ]; then
             # A plain "x", not the palette tick, when there is no colour: the
             # plain-palette UI_TICK is the multi-character "[ok]", and a checkbox
@@ -1203,12 +1834,49 @@ ui_table_frame() {
         else
             _utr_ptr=" "
         fi
+        # A radio row (a "one" group): no checkbox; "(•)" or "( )" after its
+        # tree connector, in the row's own colour.
+        case "${_UI_TREE_RADIO:- }" in
+            *" $_utr_i "*)
+                _utr_box="   "; _utr_boxlen=3
+                if [ "$_utr_tick" = "1" ]; then
+                    if [ "${UI_FANCY:-0}" = 1 ]; then _utr_conn="$_utr_conn(${UI_BULLET:-*}) "; else _utr_conn="$_utr_conn(*) "; fi
+                else
+                    _utr_conn="$_utr_conn( ) "
+                fi ;;
+        esac
         # MEASURED plain, PRINTED possibly dim: a disabled row's name carries
         # colour escapes, and ${#...} would count those bytes as width and pad
         # the row short by exactly the length of the escape sequence.
         _utr_plain="$_utr_conn$_utr_label"
-        [ "${#_utr_plain}" -le "$UI_TABLE_NAME_W" ] || \
-            _utr_plain="${_utr_plain:0:$(( UI_TABLE_NAME_W - 1 ))}…"
+        # Too narrow for an add-on's "name (id)": the id the commands take,
+        # rather than a name cut short (twin of the Textual table's rule).
+        if [ "${#_utr_plain}" -gt "$UI_TABLE_NAME_W" ]; then
+            case "$_utr_label" in
+                *' ('*')')
+                    _utr_short="${_utr_label##* (}"; _utr_short="${_utr_short%)}"
+                    case "$_utr_short" in
+                        ''|*[!a-z0-9_-]*) ;;
+                        *) _utr_plain="$_utr_conn$_utr_short" ;;
+                    esac ;;
+            esac
+        fi
+        # A row that spans into an empty second column (UI_TABLE_SPAN_EMPTY).
+        _utr_room="$UI_TABLE_NAME_W"
+        _utr_span=0
+        if [ "${UI_TABLE_SPAN_EMPTY:-0}" = 1 ] && [ "$UI_TABLE_COL2_W" -gt 0 ] && \
+           [ "$UI_TABLE_COL3_W" -eq 0 ] && [ -z "${_utr_c2// /}" ]; then
+            _utr_span=1
+            _utr_room=$(( UI_TABLE_NAME_W + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
+        fi
+        # "..." without fancy output, never a byte an ASCII reader shows as junk.
+        if [ "${#_utr_plain}" -gt "$_utr_room" ]; then
+            if [ "${UI_FANCY:-0}" = 1 ]; then
+                _utr_plain="${_utr_plain:0:$(( _utr_room - 1 ))}…"
+            else
+                _utr_plain="${_utr_plain:0:$(( _utr_room > 3 ? _utr_room - 3 : 1 ))}..."
+            fi
+        fi
         _utr_namelen=${#_utr_plain}
         if [ "$_utr_state" = "disabled" ]; then
             _utr_name="${UI_DIM:-}${_utr_plain}${UI_RESET:-}"
@@ -1222,16 +1890,24 @@ ui_table_frame() {
         # expression < 0") printed straight into the frame, and the row then goes
         # out unpadded -- so a width miscalculation would show up as garbage on
         # screen instead of a border a column out of line.
-        _utr_npad=$(( UI_TABLE_NAME_W - _utr_namelen )); [ "$_utr_npad" -ge 0 ] || _utr_npad=0
+        _utr_npad=$(( _utr_room - _utr_namelen )); [ "$_utr_npad" -ge 0 ] || _utr_npad=0
         # The optional cells, dim so the eye still lands on the name and the
         # status. Truncated to their own column, never measured with
         # _ui_visible_len: every string here is one this file assembled, so its
         # width is arithmetic rather than a sed per cell per frame.
         _utr_mid=""
-        if [ "$UI_TABLE_COL2_W" -gt 0 ]; then
+        if [ "$_utr_span" = 1 ]; then
+            # Its name already filled the second column's room.
+            _utr_used=$(( _utr_used + UI_TABLE_COL2_W + _UI_TABLE_SEP_W ))
+        elif [ "$UI_TABLE_COL2_W" -gt 0 ]; then
             _utr_v2="$_utr_c2"
-            [ "${#_utr_v2}" -le "$UI_TABLE_COL2_W" ] || \
-                _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W - 1 ))}…"
+            if [ "${#_utr_v2}" -gt "$UI_TABLE_COL2_W" ]; then
+                if [ "${UI_FANCY:-0}" = 1 ]; then
+                    _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W - 1 ))}…"
+                else
+                    _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W > 3 ? UI_TABLE_COL2_W - 3 : 1 ))}..."
+                fi
+            fi
             _utr_mid="$_utr_mid${_UI_TABLE_SEP}${UI_DIM:-}${_utr_v2}${UI_RESET:-}${_UI_TABLE_SP:0:$(( UI_TABLE_COL2_W - ${#_utr_v2} ))}"
             _utr_used=$(( _utr_used + UI_TABLE_COL2_W + _UI_TABLE_SEP_W ))
         fi
@@ -1250,6 +1926,30 @@ ui_table_frame() {
             _utr_used=$(( _utr_used + UI_TABLE_COL3_W + _UI_TABLE_SEP_W ))
         fi
         _utr_rpad=$(( _utr_inner - _utr_used )); [ "$_utr_rpad" -ge 0 ] || _utr_rpad=0
+        _utr_activity=""
+        _utr_has_activity=0
+        case "$_utr_acts" in
+            *"
+$_utr_i|"*)
+                _utr_activity="${_utr_acts#*
+$_utr_i|}"
+                _utr_activity="${_utr_activity%%
+*}"
+                _utr_has_activity=1 ;;
+        esac
+        if [ "$_utr_has_activity" = 1 ]; then
+            _utr_activity_left=$(( 5 + UI_TABLE_NAME_W + _utr_statsep_w ))
+            [ "$UI_TABLE_COL2_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
+            [ "$UI_TABLE_COL3_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL3_W ))
+            _utr_activity_width=$(( _utr_inner - _utr_activity_left ))
+            [ "$_utr_activity_width" -ge 0 ] || _utr_activity_width=0
+            _utr_activity_text="${_utr_activity:0:$_utr_activity_width}"
+            _utr_activity_pad=$(( _utr_activity_width - ${#_utr_activity_text} ))
+            _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_UI_TABLE_SP:0:$_utr_activity_left}${UI_DIM:-}${_utr_activity_text}${UI_RESET:-}${_UI_TABLE_SP:0:$_utr_activity_pad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
+"
+            _utr_lines=$(( _utr_lines + 1 ))
+        fi
+        _UI_TABLE_AT[$_utr_i]="$_utr_lines"
         _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_ptr}${_utr_box} ${_utr_name}${_UI_TABLE_SP:0:$_utr_npad}${_utr_mid}${_utr_statsep}${UI_TABLE_CELL}${_UI_TABLE_SP:0:$_utr_rpad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
 "
         _utr_lines=$(( _utr_lines + 1 ))
@@ -1275,11 +1975,11 @@ ui_table_frame() {
             # after the corner the tree has ended and a spine below it would
             # point at nothing. Built cell by cell and MEASURED as it goes, so
             # the width is arithmetic rather than a count of escape bytes.
-            if [ "${_utr_spine:-0}" = 1 ]; then
-                _utr_wleft="     ${UI_VB:-|}${_UI_TABLE_SP:0:$(( UI_TABLE_NAME_W - 1 ))}"
-            else
-                _utr_wleft="${_UI_TABLE_SP:0:$(( 5 + UI_TABLE_NAME_W ))}"
-            fi
+            # Rows one level deeper carry their parent's spine as well as their
+            # own (see _utr_spine above); every glyph in it is one column.
+            _utr_wsp=$(( UI_TABLE_NAME_W - ${#_utr_spine} ))
+            [ "$_utr_wsp" -ge 0 ] || _utr_wsp=0
+            _utr_wleft="     ${_utr_spine}${_UI_TABLE_SP:0:$_utr_wsp}"
             _utr_wlen=$(( 5 + UI_TABLE_NAME_W ))
             if [ "$UI_TABLE_COL2_W" -gt 0 ]; then
                 _utr_wleft="${_utr_wleft}${_UI_TABLE_SEP}${_UI_TABLE_SP:0:$UI_TABLE_COL2_W}"
@@ -1293,10 +1993,11 @@ ui_table_frame() {
             _utr_lines=$(( _utr_lines + 1 ))
             _utr_wi=$(( _utr_wi + 1 ))
         done
-    done < "$1"
+    done <<< "$_UI_TABLE_ROWS"
+    _UI_TABLE_AT[$(( _utr_i + 1 ))]="$_utr_lines"
     # The frame is still ONE height in every state, and now structurally so
-    # rather than by arrangement: every row is exactly one line whatever it is
-    # doing, so there is nothing left to reserve. That property is what the
+    # rather than by arrangement: data rows stay one line, with one reserved
+    # activity line shared by the add-ons. That property is what the
     # redraw depends on -- a frame that grows by a line pushes the terminal to
     # scroll, and once the screen has scrolled a cursor-up by the frame height
     # no longer lands at the frame's top. Every redraw after that is off by one
@@ -1365,6 +2066,10 @@ ui_table_set() {
     _uts_phase="${7:-}"; _uts_final="${8:-}"
     _uts_t0=""
     [ "$_uts_state" = "running" ] && _uts_t0="$(date +%s 2>/dev/null || echo 0)"
+    case "$_uts_state" in
+        running) _ui_progress_log "$_uts_pct" "$_uts_phase" ;;
+        done) _ui_progress_log 100 "$_uts_final" ;;
+    esac
     _uts_tmp="$_uts_f.new"
     _uts_i=0
     while IFS='|' read -r _u1 _u2 _u3 _u4 _u5 _u6 _u7 _u8 _u9 _u10 _u11 _u12; do
@@ -1452,15 +2157,21 @@ ui_table_begin() {
         _ui_step_stop_spinner
     fi
     printf '\033[?25l'
+    # Keys typed while it animates are neither echoed nor kept (_ui_input_hold).
+    _ui_input_hold
     # How many lines are ALREADY on screen. The selection phase leaves its table
     # drawn, and the first frame has to overwrite it rather than print a second
     # one underneath.
     _utb_prev="${UI_TABLE_LINES:-0}"
     case "$_utb_prev" in ''|*[!0-9]*) _utb_prev=0 ;; esac
     rm -f "$1.stop"
+    _utb_parent=$$
     (
+        exec 2>/dev/null    # stopped by SIGTERM: see ui_spin_begin
         UI_TABLE_LINES="$_utb_prev"
         while :; do
+            # Gone with the shell that started it (see ui_spin_begin).
+            kill -0 "$_utb_parent" 2>/dev/null || exit 0
             # ONE frame, ONE write. Rendering straight to the terminal meant a
             # kill could land between two of a frame's rows: the cursor was then
             # part-way through a table nobody had finished, and the next thing to
@@ -1479,7 +2190,7 @@ ui_table_begin() {
         done
     ) &
     _UI_SPIN_PID=$!
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     # Who to stop if this shell goes down without calling ui_table_end. The CLI
     # sets no EXIT trap and die() exits where it stands, so without this the
     # animator outlives the command: an orphan whose next frame moves the cursor
@@ -1488,7 +2199,12 @@ ui_table_begin() {
     # no error shown" looks like from the outside.
     _UI_TABLE_ACTIVE="$1"
     _UI_LINE_BUSY=1
-    trap 'ui_table_abort; exit 130' INT TERM
+    # The traps that stood before run after the abort (_ui_interrupted), so
+    # their owner can say what was cancelled; ui_table_end puts them back.
+    _UI_TABLE_PREV_INT="$(trap -p INT)"; _UI_TABLE_PREV_TERM="$(trap -p TERM)"
+    trap 'ui_table_abort; _ui_interrupted INT _UI_TABLE_PREV' INT
+    trap 'ui_table_abort; _ui_interrupted TERM _UI_TABLE_PREV' TERM
+    _UI_TABLE_TRAPPED=1
     [ -n "$(trap -p EXIT)" ] || trap 'ui_table_abort' EXIT
     # Out of the job table right away, or bash ANNOUNCES the kill: killing a
     # tracked background job prints "line N: 12345 Terminated: 15 ( ... )" —
@@ -1507,12 +2223,17 @@ ui_table_begin() {
 ui_table_end() {
     _UI_TABLE_ACTIVE=''
     _UI_LINE_BUSY=''
+    if [ "${_UI_TABLE_TRAPPED:-0}" = 1 ]; then
+        _UI_TABLE_TRAPPED=0
+        if [ -n "${_UI_TABLE_PREV_INT:-}" ]; then eval "$_UI_TABLE_PREV_INT"; else trap - INT; fi
+        if [ -n "${_UI_TABLE_PREV_TERM:-}" ]; then eval "$_UI_TABLE_PREV_TERM"; else trap - TERM; fi
+    fi
 # Set while a table owns the terminal, and DELIBERATELY survives ui_table_detach:
 # it is the one signal a subshell can still read to know it must not start an
 # animation of its own. _UI_SPIN_PID cannot serve that purpose, because detach
 # has to clear it (see ui_table_detach).
 _UI_LINE_BUSY=''
-    [ -n "${_UI_SPIN_PID:-}" ] || return 0
+    [ -n "${_UI_SPIN_PID:-}" ] || { _ui_input_release; return 0; }
     # ASKED to stop, not shot. The animator finishes the frame it is drawing and
     # exits, which is the only way the cursor is guaranteed to be at a frame
     # boundary when this function starts counting lines. A kill is still the
@@ -1529,6 +2250,7 @@ _UI_LINE_BUSY=''
     _UI_SPIN_OWNER=''
     _UI_SPIN_NESTED=0
     printf '\033[?25h'
+    _ui_input_release
     _ute_lines="$(cat "$1.lines" 2>/dev/null || echo '')"
     case "$_ute_lines" in ''|*[!0-9]*) _ute_lines="${UI_TABLE_LINES:-0}" ;; esac
     case "$_ute_lines" in ''|*[!0-9]*) _ute_lines=0 ;; esac
@@ -1561,6 +2283,10 @@ ui_table_abort() {
 # through the state FILE, which is shared on purpose.
 ui_table_detach() {
     _UI_TABLE_ACTIVE=''
+    # The terminal's settings belong to the parent, which restores them when its
+    # table ends; a subshell restoring them on its way out would echo keys under
+    # the table that is still animating.
+    _UI_STTY_SAVED=''
     _UI_SPIN_PID=''
     _UI_SPIN_NESTED=0
     _UI_SPIN_OWNER=''
@@ -1597,9 +2323,42 @@ ui_animation_stop() {
 # table — frame plus anything printed under it — are ALREADY on screen, so a
 # re-ask overwrites them instead of drawing a second table below them. The MCP
 # step sets it when an unconfirmed "Skip" sends the reader back to the menu.
+#
+# UI_TABLE_MENU_START (optional, cleared on use): the row the cursor starts on.
+# Left unset it is row 2, past a "Select All" row; a table with no such row
+# (exakit connect's) starts on row 1. A row nobody can pick still moves it on.
+# ⇄ twin: Invoke-ExakitTableMenu -StartRow.
+# UI_TABLE_HELP (optional): a function the ? key calls with the cursor's row,
+# to show that row's guide (exakit connect: the connector's). The hint then
+# says "? guide". Unset, ? does nothing. ⇄ twin: Invoke-ExakitTableMenu -Help.
+# UI_TABLE_MENU_LIVE (optional): a function called before each frame, true
+# while something behind the menu still changes the table's rows (the
+# install's own add-ons installing while the rest are asked about). Then the
+# menu redraws every second while no key comes, so their bars move.
+# ⇄ twin: Invoke-ExakitTableMenu -Live.
+# UI_TABLE_AUTO=1: nobody is asked. The table is drawn once with its defaults
+# ticked, they are the answer, and it counts as confirmed - the caller was told
+# to do exactly this (`exakit persona add`). No key is read; ui_table_begin then
+# turns the same frame into the progress display.
 ui_table_menu() {
     _utm_f="$1"
     _utm_n=0
+    # A MENU REPLACES the narration above it, the same as ui_table_begin: a
+    # spinner still animating here prefixes every row of the menu with a frame
+    # and keeps going while it waits for a key (the install's add-on offer
+    # starts one for the seconds before its table is up, and on a re-run with
+    # nothing to auto-install nothing else stopped it). Stopped, nesting zeroed,
+    # before the first row is drawn. UI_TABLE_MENU_SPIN=1 (cleared on use): the
+    # caller's spinner runs on while the frame is built and stops right before
+    # it is drawn - exakit connect's wait, said until its menu is there.
+    # Twin of the same block in Invoke-ExakitTableMenu.
+    _utm_spin_off() {
+        [ -n "${_UI_SPIN_PID:-}" ] || return 0
+        _UI_SPIN_NESTED=0
+        _ui_step_stop_spinner
+    }
+    [ "${UI_TABLE_MENU_SPIN:-0}" = 1 ] || _utm_spin_off
+    UI_TABLE_MENU_SPIN=""
     # Which rows can be ticked at all. A disabled row is drawn but never
     # selectable: the cursor steps over it, Space ignores it, and Select All
     # leaves it alone — that last one through _UI_CHECKBOX_SELECTABLE, which the
@@ -1609,7 +2368,7 @@ ui_table_menu() {
     while IFS='|' read -r _u1 _u2 _u3 _u4 _urest; do
         [ -n "$_u1" ] || continue
         _utm_n=$(( _utm_n + 1 ))
-        if [ "$_u4" = "disabled" ]; then
+        if [ "$_u4" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utm_n "*) true ;; *) false ;; esac; then
             _utm_dis="$_utm_dis $_utm_n"
         else
             _UI_CHECKBOX_SELECTABLE="${_UI_CHECKBOX_SELECTABLE:+$_UI_CHECKBOX_SELECTABLE }$_utm_n"
@@ -1617,8 +2376,14 @@ ui_table_menu() {
     done < "$_utm_f"
     _utm_pickable() { # _utm_pickable <row>
         case " $_utm_dis " in *" $1 "*) return 1 ;; esac
+        # A row a closed "collapse" group hides cannot be reached either.
+        case "$_UI_TREE_HIDDEN" in *" $1 "*) return 1 ;; esac
         return 0
     }
+    # The tree modes (collapse, one): which rows are radio buttons, which a
+    # closed group hides. Empty sets for every other table.
+    _ui_checkbox_tree_begin "${EXAKIT_TABLE_GROUP:-}"
+    _ui_checkbox_tree_refresh "${EXAKIT_TABLE_DEFAULTS:-}"
     _utm_move() { # _utm_move <dir:+1|-1> — move the cursor, stepping over disabled rows
         _utm_tries=0
         while [ "$_utm_tries" -lt "$_utm_n" ]; do
@@ -1633,7 +2398,12 @@ ui_table_menu() {
     # Row 2 as before — past the group row — but never a row that cannot be
     # picked, or the first Space would land on one.
     _utm_cur=1
-    [ "$_utm_n" -ge 2 ] && _utm_move 1
+    _utm_start="${UI_TABLE_MENU_START:-}"
+    UI_TABLE_MENU_START=""
+    case "$_utm_start" in
+        ''|*[!0-9]*) [ "$_utm_n" -ge 2 ] && _utm_move 1 ;;
+        *) [ "$_utm_start" -ge 1 ] && [ "$_utm_start" -le "$_utm_n" ] && _utm_cur="$_utm_start" ;;
+    esac
     _utm_pickable "$_utm_cur" || _utm_move 1
     _utm_sel="$EXAKIT_TABLE_DEFAULTS"
     # CONFIRMED means a human pressed Enter on this table - nothing else. The
@@ -1643,42 +2413,112 @@ ui_table_menu() {
     # two apart, because "Enter alone installs what is on offer" is only a safe
     # posture while there is an Enter. See exakit_marketplace_menu.
     EXAKIT_TABLE_CONFIRMED=0
+    if [ "${UI_TABLE_AUTO:-0}" = 1 ]; then
+        _utm_spin_off
+        ui_table_tick "$_utm_f" "$_utm_sel"
+        ui_table_render "$_utm_f" 0
+        EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
+        EXAKIT_TABLE_CONFIRMED=1
+        _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
+        return 0
+    fi
     _utm_tty="$(_exakit_prompt_tty)"
     if [ -z "$_utm_tty" ] || [ "${UI_FANCY:-0}" != 1 ]; then
         # No terminal: the defaults stand, and the table is printed once so a
         # log still shows what was chosen.
+        _utm_spin_off
         ui_table_tick "$_utm_f" "$_utm_sel"
         ui_table_render "$_utm_f" 0
         EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
         _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
         return 0
     fi
     _utm_first=1
+    _utm_note=""
+    # Ctrl-C here gives the terminal back first (_ui_interrupted).
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    ui_mouse_on
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     _utm_drawn="${UI_TABLE_MENU_ONSCREEN:-0}"
     case "$_utm_drawn" in ''|*[!0-9]*) _utm_drawn=0 ;; esac
     UI_TABLE_MENU_ONSCREEN=""
+    _utm_live=0
     while :; do
+        if [ -n "${UI_TABLE_MENU_LIVE:-}" ]; then
+            if "$UI_TABLE_MENU_LIVE"; then _utm_live=1; else _utm_live=0; fi
+        fi
         ui_table_tick "$_utm_f" "$_utm_sel"
         # Built first, then clear and draw in ONE write. The old order — clear,
         # then spend a fifth of a second assembling — is what flickered: the
         # region was genuinely empty for that whole time.
         ui_table_frame "$_utm_f" "$_utm_cur"
-        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle · Enter to confirm${UI_RESET:-}"
+        _utm_open=""
+        [ "$_UI_TREE_ON" = 1 ] && _ui_checkbox_tree_collapse_on && _utm_open=" · → to open"
+        # A menu with a guide per row (UI_TABLE_HELP) says ? opens it.
+        _utm_help=""; [ -n "${UI_TABLE_HELP:-}" ] && _utm_help=" · ? guide"
+        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle$_utm_open · Enter to confirm$_utm_help${UI_RESET:-}"
+        # Enter refused for an open "one" group with nothing picked: said under
+        # the hint until the next key.
+        _utm_extra=0
+        # UI_TABLE_DESC_UNDER=1: the description of the row under the cursor
+        # (its field 12) on a line of its own under the hint, for a table too
+        # narrow to keep its Description column (the install's add-ons, where
+        # a newcomer was asked to pick from bare names). One line, cut to the
+        # screen, and drawn even when empty so the menu keeps one height.
+        # ⇄ twin: DescUnder in Invoke-ExakitTableMenu (ui.ps1).
+        if [ "${UI_TABLE_DESC_UNDER:-0}" = 1 ]; then
+            _utm_desc="$(sed -n "${_utm_cur}p" "$_utm_f" 2>/dev/null | cut -d'|' -f12)"
+            _utm_dw=$(( ${_UI_TABLE_COLS:-80} - 9 ))
+            [ "$_utm_dw" -ge 10 ] || _utm_dw=10
+            if [ "${#_utm_desc}" -gt "$_utm_dw" ]; then
+                if [ "${UI_FANCY:-0}" = 1 ]; then _utm_desc="${_utm_desc:0:$(( _utm_dw - 1 ))}…"; else _utm_desc="${_utm_desc:0:$(( _utm_dw - 3 ))}..."; fi
+            fi
+            _utm_hint="$_utm_hint
+      ${UI_DIM:-}${_utm_desc}${UI_RESET:-}"
+            _utm_extra=1
+        fi
+        if [ -n "$_utm_note" ]; then
+            _utm_hint="$_utm_hint
+    ${UI_WARN:-}!${UI_RESET:-} $_utm_note"
+            _utm_extra=$(( _utm_extra + 1 )); _utm_note=""
+        fi
+        _utm_spin_off
         if [ "$_utm_drawn" -gt 0 ]; then
             printf '\033[%dA\033[0J%s\n%s\n' "$_utm_drawn" "$UI_TABLE_FRAME" "$_utm_hint"
         else
             printf '%s\n%s\n' "$UI_TABLE_FRAME" "$_utm_hint"
         fi
-        _utm_drawn=$(( UI_TABLE_LINES + 1 ))
+        _utm_drawn=$(( UI_TABLE_LINES + 1 + _utm_extra ))
         _utm_first=0
-        if [ "$_utm_tty" = "/dev/tty" ]; then
-            IFS= read -rsn1 _utm_key < /dev/tty || break
-        else
-            IFS= read -rsn1 _utm_key || break
-        fi
+        _ui_cursor_ask
+        UI_MENU_KEY_TIMEOUT=""; [ "$_utm_live" = 1 ] && UI_MENU_KEY_TIMEOUT=1
+        _ui_menu_key "$_utm_tty"; _utm_krc=$?
+        UI_MENU_KEY_TIMEOUT=""
+        # No key in the second: redraw, the rows behind the menu have moved.
+        [ "$_utm_krc" = 2 ] && continue
+        [ "$_utm_krc" = 0 ] || break
+        _utm_key="$UI_KEY"
         case "$_utm_key" in
-            "") [ -n "$_utm_sel" ] && { EXAKIT_TABLE_CONFIRMED=1; break; } ;;
+            "")
+                # Enter on the exclusive row (Skip) answers Skip, whatever else
+                # is ticked: pending rows start ticked, so "move to Skip, press
+                # Enter" used to load them anyway.
+                if [ -n "${EXAKIT_TABLE_EXCLUSIVE:-}" ] && [ "$_utm_cur" = "$EXAKIT_TABLE_EXCLUSIVE" ]; then
+                    _utm_sel="$_utm_cur"
+                fi
+                if [ "$_UI_TREE_ON" = 1 ]; then
+                    _utm_miss="$(_ui_checkbox_tree_missing "$_utm_sel")"
+                    if [ -n "$_utm_miss" ]; then
+                        _utm_note="Pick one of the options under $(sed -n "${_utm_miss}p" "$_utm_f" | cut -d'|' -f2)."
+                        continue
+                    fi
+                fi
+                [ -n "$_utm_sel" ] && { EXAKIT_TABLE_CONFIRMED=1; break; } ;;
             " ")
                 # A row that cannot be picked cannot be toggled either. The
                 # cursor never rests on one, so this catches only the keypress
@@ -1689,20 +2529,52 @@ ui_table_menu() {
                 _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
                 ;;
             "$(printf '\033')")
-                if [ "$_utm_tty" = "/dev/tty" ]; then
-                    IFS= read -rsn2 -t 1 _utm_seq < /dev/tty || _utm_seq=""
-                else
-                    IFS= read -rsn2 -t 1 _utm_seq || _utm_seq=""
-                fi
-                case "$_utm_seq" in
+                case "$UI_KEY_SEQ" in
                     '[A') _utm_move -1 ;;
                     '[B') _utm_move 1 ;;
+                    '[C'|'[D')
+                        # → opens a collapse group or steps into it, ← steps
+                        # out or closes it; nothing in any other table.
+                        [ "$_UI_TREE_ON" = 1 ] || continue
+                        _utm_dir=right; [ "$UI_KEY_SEQ" = '[D' ] && _utm_dir=left
+                        _utm_act="$(_ui_checkbox_tree_arrow "$_utm_dir" "$_utm_cur" "$_utm_sel")"
+                        case "$_utm_act" in
+                            toggle)
+                                _utm_sel="$(_ui_checkbox_toggle "$_utm_sel" "$_utm_n" "$_utm_cur")"
+                                _utm_sel="$(_ui_checkbox_apply_group "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_GROUP")"
+                                _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
+                                ;;
+                            "move "*) _utm_cur="${_utm_act#move }" ;;
+                        esac
+                        ;;
+                    '[<')
+                        [ -n "$UI_CURSOR_ROW" ] || continue
+                        _utm_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _utm_drawn )) "$_utm_n" "${_UI_TABLE_AT[@]}")"
+                        [ -n "$_utm_hit" ] && _utm_pickable "$_utm_hit" || continue
+                        _utm_cur="$_utm_hit"
+                        _utm_sel="$(_ui_checkbox_toggle "$_utm_sel" "$_utm_n" "$_utm_cur")"
+                        _utm_sel="$(_ui_checkbox_apply_group "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_GROUP")"
+                        _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
+                        ;;
                 esac
                 ;;
             k|K) _utm_move -1 ;;
             j|J) _utm_move 1 ;;
+            "?")
+                # The highlighted row's guide (UI_TABLE_HELP <row>), drawn in
+                # the alternate screen: this table comes back as it was, the
+                # cursor and the ticks where they were.
+                [ -n "${UI_TABLE_HELP:-}" ] && "$UI_TABLE_HELP" "$_utm_cur" ;;
         esac
+        if [ "$_UI_TREE_ON" = 1 ]; then
+            _ui_checkbox_tree_refresh "$_utm_sel"
+            # The cursor's row closed under it: back up to the nearest row shown.
+            case "$_UI_TREE_HIDDEN" in *" $_utm_cur "*) _utm_move -1 ;; esac
+        fi
     done
+    ui_mouse_off
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
     # Redraw once without the pointer or the hint: the selection is made, and
     # the same table is about to become the progress display.
     ui_table_tick "$_utm_f" "$_utm_sel"
@@ -1710,6 +2582,310 @@ ui_table_menu() {
     ui_table_redraw "$_utm_f" 0
     EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
     _UI_CHECKBOX_SELECTABLE=""
+    _ui_checkbox_tree_end
+    return 0
+}
+
+# --- single-choice picker ---------------------------------------------------
+# ui_pick_menu <rows-file> [title] [head] — one choice by the arrows and Enter,
+# for a menu whose answer is an action, not a set of ticks (ui_table_menu,
+# ui_checkbox_menu). One row a line of the file, drawn as given (plain text; a
+# ✓ or ✗ in it is coloured) and cut to the terminal, so every row is one line
+# and the redraw is exact. With a title the rows sit in a box under it, the
+# head (when given) a dim first line nobody can pick; without one they are a
+# list under the question the caller printed. UI_PICK is the row chosen
+# (1-based), 0 for q, Esc or the end of the input; UI_PICK_START is the row the
+# cursor starts on (then cleared) and UI_PICK_HINT the Enter words ("Enter to
+# open"). Returns 1, with nothing drawn, without a fancy terminal to ask on:
+# the caller prints its plain answer instead. Ctrl-C gives the terminal back
+# first (_ui_interrupted). ⇄ twin: Read-ExakitPickMenu in ui.ps1.
+ui_pick_menu() {
+    _upm_f="$1"; _upm_title="${2:-}"; _upm_head="${3:-}"
+    UI_PICK=0
+    _upm_start="${UI_PICK_START:-1}"; UI_PICK_START=""
+    _upm_enter="${UI_PICK_HINT:-Enter to choose}"
+    _upm_tty="$(_exakit_prompt_tty)"
+    [ -n "$_upm_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 1
+    _upm_rows=()
+    while IFS= read -r _upm_l || [ -n "$_upm_l" ]; do _upm_rows[${#_upm_rows[@]}]="$_upm_l"; done < "$_upm_f"
+    _upm_n=${#_upm_rows[@]}
+    [ "$_upm_n" -gt 0 ] || return 1
+    case "$_upm_start" in ''|*[!0-9]*) _upm_start=1 ;; esac
+    { [ "$_upm_start" -ge 1 ] && [ "$_upm_start" -le "$_upm_n" ]; } || _upm_start=1
+    _upm_cur="$_upm_start"
+    # Chrome: "  │ ❯ " and " │" in a box, "    ❯ " in a list; one column spare.
+    _upm_cols="$(_ui_term_cols)"
+    if [ -n "$_upm_title" ]; then _upm_chrome=9; else _upm_chrome=7; fi
+    _upm_w=${#_upm_head}
+    _upm_i=0
+    while [ "$_upm_i" -lt "$_upm_n" ]; do
+        _upm_rows[$_upm_i]="$(_ui_fit_row "${_upm_rows[$_upm_i]}" "$_upm_chrome" "$_upm_cols")"
+        [ "${#_upm_rows[$_upm_i]}" -gt "$_upm_w" ] && _upm_w=${#_upm_rows[$_upm_i]}
+        _upm_i=$(( _upm_i + 1 ))
+    done
+    [ -n "$_upm_head" ] && _upm_head="$(_ui_fit_row "$_upm_head" "$_upm_chrome" "$_upm_cols")"
+    if [ -n "$_upm_title" ]; then
+        _upm_t=" $_upm_title "
+        _upm_tw=$(( _upm_w + 4 ))
+        [ $(( ${#_upm_t} + 1 )) -gt "$_upm_tw" ] && _upm_tw=$(( ${#_upm_t} + 1 ))
+        [ "$_upm_tw" -gt $(( _upm_cols - 5 )) ] && _upm_tw=$(( _upm_cols - 5 ))
+        _upm_w=$(( _upm_tw - 4 ))
+        _upm_fill=$(( _upm_tw - ${#_upm_t} - 1 )); [ "$_upm_fill" -ge 0 ] || _upm_fill=0
+        _upm_top="  ${UI_ACCENT}${UI_TL}${UI_HR}${UI_RESET}${UI_BOLD}$_upm_t${UI_RESET}${UI_ACCENT}$(ui_repeat "${UI_HR}" "$_upm_fill")${UI_TR}${UI_RESET}"
+        _upm_bot="  ${UI_ACCENT}${UI_BL}$(ui_repeat "${UI_HR}" "$_upm_tw")${UI_BR}${UI_RESET}"
+    fi
+    # Taller than the terminal, the rows scroll in a window that follows the
+    # cursor: a redraw cannot climb above the top of the screen.
+    set -- $(stty size < /dev/tty 2>/dev/null || true)
+    _upm_tall="${LINES:-${1:-24}}"; case "$_upm_tall" in ''|*[!0-9]*|0) _upm_tall=24 ;; esac
+    _upm_view=$(( _upm_tall - 8 )); [ "$_upm_view" -ge 5 ] || _upm_view=5
+    [ "$_upm_view" -gt "$_upm_n" ] && _upm_view="$_upm_n"
+    _upm_off=0
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
+    _upm_drawn=0
+    while :; do
+        _upm_frame=""; _upm_lines=0
+        if [ -n "$_upm_title" ]; then
+            _upm_frame="$_upm_top"$'\n'; _upm_lines=1
+            if [ -n "$_upm_head" ]; then
+                _upm_frame="$_upm_frame  ${UI_ACCENT}${UI_VB}${UI_RESET}   ${UI_DIM}$_upm_head$(ui_repeat ' ' $(( _upm_w - ${#_upm_head} )))${UI_RESET} ${UI_ACCENT}${UI_VB}${UI_RESET}"$'\n'
+                _upm_lines=$(( _upm_lines + 1 ))
+            fi
+        fi
+        [ "$_upm_cur" -le "$_upm_off" ] && _upm_off=$(( _upm_cur - 1 ))
+        [ "$_upm_cur" -gt $(( _upm_off + _upm_view )) ] && _upm_off=$(( _upm_cur - _upm_view ))
+        _upm_i="$_upm_off"
+        while [ "$_upm_i" -lt $(( _upm_off + _upm_view )) ]; do
+            _upm_r="${_upm_rows[$_upm_i]}"
+            _upm_pad="$(ui_repeat ' ' $(( _upm_w - ${#_upm_r} )))"
+            _upm_r="${_upm_r//✓/${UI_OK}✓${UI_RESET}}"; _upm_r="${_upm_r//✗/${UI_ERR}✗${UI_RESET}}"
+            if [ $(( _upm_i + 1 )) -eq "$_upm_cur" ]; then
+                _upm_r="${UI_ACCENT}❯${UI_RESET} ${UI_BOLD}$_upm_r${UI_RESET}"
+            else
+                _upm_r="  $_upm_r"
+            fi
+            if [ -n "$_upm_title" ]; then
+                _upm_frame="$_upm_frame  ${UI_ACCENT}${UI_VB}${UI_RESET} $_upm_r$_upm_pad ${UI_ACCENT}${UI_VB}${UI_RESET}"$'\n'
+            else
+                _upm_frame="$_upm_frame    $_upm_r"$'\n'
+            fi
+            _upm_lines=$(( _upm_lines + 1 ))
+            _upm_i=$(( _upm_i + 1 ))
+        done
+        [ -n "$_upm_title" ] && { _upm_frame="$_upm_frame$_upm_bot"$'\n'; _upm_lines=$(( _upm_lines + 1 )); }
+        _upm_more=""
+        [ "$_upm_view" -lt "$_upm_n" ] && _upm_more=" · $(( _upm_off + 1 ))-$(( _upm_off + _upm_view )) of $_upm_n"
+        _upm_hint="$(_ui_fit_row "↑/↓ to move · $_upm_enter · q to quit$_upm_more" 6 "$_upm_cols")"
+        _upm_frame="$_upm_frame      ${UI_DIM}$_upm_hint${UI_RESET}"$'\n'
+        _upm_lines=$(( _upm_lines + 1 ))
+        if [ "$_upm_drawn" -gt 0 ]; then
+            printf '\033[%dA\033[0J%s' "$_upm_drawn" "$_upm_frame"
+        else
+            printf '%s' "$_upm_frame"
+        fi
+        _upm_drawn="$_upm_lines"
+        _ui_menu_key "$_upm_tty" || { UI_PICK=0; break; }
+        case "${UI_KEY}" in
+            "") UI_PICK="$_upm_cur"; break ;;
+            q|Q) UI_PICK=0; break ;;
+            k|K) _upm_cur=$(( _upm_cur - 1 )) ;;
+            j|J) _upm_cur=$(( _upm_cur + 1 )) ;;
+            "$(printf '\033')")
+                case "${UI_KEY_SEQ}" in
+                    '[A') _upm_cur=$(( _upm_cur - 1 )) ;;
+                    '[B') _upm_cur=$(( _upm_cur + 1 )) ;;
+                    '') UI_PICK=0; break ;;
+                esac ;;
+        esac
+        [ "$_upm_cur" -lt 1 ] && _upm_cur="$_upm_n"
+        [ "$_upm_cur" -gt "$_upm_n" ] && _upm_cur=1
+    done
+    # The hint goes: the choice is made. The rows stay, as a record of it.
+    printf '\033[1A\033[0J'
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
+    return 0
+}
+
+# --- full-window reader -----------------------------------------------------
+# ui_open_path <path> — a local file opened in this computer's own viewer:
+# macOS open, Linux xdg-open (in the background: it can stay with the viewer).
+# Returns 1 when the file is not there, there is no opener, or it failed; the
+# caller then says the path. Never an error. ⇄ twin: Open-ExakitPath.
+ui_open_path() {
+    [ -n "${1:-}" ] && [ -e "$1" ] || return 1
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        command -v open >/dev/null 2>&1 || return 1
+        open "$1" >/dev/null 2>&1 < /dev/null && return 0
+        return 1
+    fi
+    command -v xdg-open >/dev/null 2>&1 || return 1
+    ( xdg-open "$1" >/dev/null 2>&1 < /dev/null & ) 2>/dev/null
+    return 0
+}
+
+# ui_open_url <url> — a web page in this computer's browser: open on macOS,
+# xdg-open on Linux (in the background, so the caller never waits). 1 when
+# there is no opener or it failed; the caller then says the address.
+# ⇄ twin: Open-ExakitUrl in ui.ps1.
+ui_open_url() {
+    case "${1:-}" in https://*) ;; *) return 1 ;; esac
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        command -v open >/dev/null 2>&1 || return 1
+        open "$1" >/dev/null 2>&1 < /dev/null && return 0
+        return 1
+    fi
+    command -v xdg-open >/dev/null 2>&1 || return 1
+    ( xdg-open "$1" >/dev/null 2>&1 < /dev/null & ) 2>/dev/null
+    return 0
+}
+
+# _ui_pager_leave — the reader's screen gone: the alternate screen left (the
+# screen before it comes back as it was), or, without one, the window cleared
+# for the caller to redraw; the cursor shown again.
+_ui_pager_leave() {
+    [ "${_UI_PAGER_ON:-0}" = 1 ] || return 0
+    if [ "${_UI_PAGER_ALT:-0}" = 1 ]; then printf '\033[?1049l'; else printf '\033[2J\033[H'; fi
+    printf '\033[?25h'
+    _UI_PAGER_ON=0
+}
+
+# _ui_pager_interrupted <INT|TERM> — Ctrl-C while the reader is up: its screen
+# left first, then _ui_interrupted (mouse off, echo back, the trap that stood
+# before runs, or exit 130). Never leaves anyone in the alternate screen.
+_ui_pager_interrupted() {
+    _ui_pager_leave
+    _ui_interrupted "$1" _UI_PAGER_PREV
+}
+
+# ui_pager <lines-file> <footer> [keys] — a full-window reader, for a guide:
+# the lines (one screen row each, colour included - the caller cuts them to
+# the width) in the terminal's alternate screen, so the screen under it comes
+# back exactly as it was. Longer than the window, ↑/↓ (j/k), PgUp/PgDn (b),
+# Space, Home and End scroll it; the footer, always on the last row, says the
+# keys and where in the text the window is. Enter, q and Esc return; so does
+# each letter in [keys] (lower case). With UI_PAGER_OPEN set to a file, o opens
+# it in place (ui_open_path) and the line above the footer says it was opened -
+# or where it is. With UI_PAGER_URL set to a web page, g opens it in the browser
+# (ui_open_url) the same way; without one, g goes to the top. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
+# the letter. EXAKIT_NO_ALTSCREEN=1 (or a terminal without one: TERM linux,
+# vt100...) clears the window instead, and clears it again on the way out for
+# the caller to redraw. Returns 1, with nothing drawn, without a fancy terminal.
+# Ctrl-C gives the terminal back first (_ui_pager_interrupted).
+# ⇄ twin: Show-ExakitPager in ui.ps1.
+ui_pager() {
+    _upg_f="$1"; _upg_foot="$2"; _upg_keys="${3:-}"
+    UI_PAGER_KEY=eof
+    _upg_tty="$(_exakit_prompt_tty)"
+    [ -n "$_upg_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 1
+    _upg_rows=()
+    while IFS= read -r _upg_l || [ -n "$_upg_l" ]; do _upg_rows[${#_upg_rows[@]}]="$_upg_l"; done < "$_upg_f"
+    _upg_n=${#_upg_rows[@]}
+    _UI_PAGER_ALT=1
+    [ "${EXAKIT_NO_ALTSCREEN:-0}" = 1 ] && _UI_PAGER_ALT=0
+    case "${TERM:-}" in linux|dumb|vt52|vt100|vt102|vt220|cons25) _UI_PAGER_ALT=0 ;; esac
+    _UI_PAGER_PREV_INT="$(trap -p INT)"; _UI_PAGER_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_pager_interrupted INT' INT
+    trap '_ui_pager_interrupted TERM' TERM
+    _UI_PAGER_ON=1
+    if [ "$_UI_PAGER_ALT" = 1 ]; then printf '\033[?1049h\033[2J\033[H\033[?25l'
+    else printf '\033[2J\033[H\033[?25l'; fi
+    _upg_top=0; _upg_note=""
+    while :; do
+        _upg_cols="$(_ui_term_cols)"
+        if [ -t 0 ]; then set -- $(stty size 2>/dev/null || true)
+        else set -- $( { stty size < /dev/tty; } 2>/dev/null || true); fi
+        _upg_tall="${1:-${LINES:-24}}"; case "$_upg_tall" in ''|*[!0-9]*|0) _upg_tall=24 ;; esac
+        [ "$_upg_tall" -ge 4 ] || _upg_tall=4
+        # Every row the footer needs is kept: the note above it (a path is
+        # said whole, over as many rows as it takes), the keys, and - when the
+        # text is longer than the window - where the window is, on the keys'
+        # row when it fits there, else on a row of its own.
+        _upg_w=$(( _upg_cols - 3 )); [ "$_upg_w" -ge 10 ] || _upg_w=10
+        _upg_nrows=0
+        [ -n "$_upg_note" ] && _upg_nrows=$(( (${#_upg_note} + _upg_w - 1) / _upg_w ))
+        _upg_view=$(( _upg_tall - 1 - _upg_nrows ))
+        _upg_hint="$_upg_foot"; _upg_hint2=""
+        if [ "$_upg_n" -gt "$_upg_view" ]; then
+            _upg_where="↑/↓ PgUp/PgDn scroll · $_upg_n-$_upg_n of $_upg_n"
+            if [ $(( ${#_upg_foot} + 3 + ${#_upg_where} )) -gt "$_upg_w" ]; then
+                _upg_view=$(( _upg_view - 1 )); _upg_hint2=1
+            fi
+        fi
+        [ "$_upg_view" -ge 1 ] || _upg_view=1
+        _upg_last=$(( _upg_n - _upg_view )); [ "$_upg_last" -ge 0 ] || _upg_last=0
+        [ "$_upg_top" -le "$_upg_last" ] || _upg_top="$_upg_last"
+        [ "$_upg_top" -ge 0 ] || _upg_top=0
+        if [ "$_upg_n" -gt "$_upg_view" ]; then
+            _upg_end=$(( _upg_top + _upg_view )); [ "$_upg_end" -le "$_upg_n" ] || _upg_end="$_upg_n"
+            _upg_where="↑/↓ PgUp/PgDn scroll · $(( _upg_top + 1 ))-$_upg_end of $_upg_n"
+            if [ -n "$_upg_hint2" ]; then _upg_hint2="$_upg_where"; else _upg_hint="$_upg_hint · $_upg_where"; fi
+        fi
+        _upg_frame=$'\033[H'
+        _upg_i=0
+        while [ "$_upg_i" -lt "$_upg_view" ]; do
+            _upg_frame="$_upg_frame${_upg_rows[$(( _upg_top + _upg_i ))]:-}${UI_RESET:-}"$'\033[K\n'
+            _upg_i=$(( _upg_i + 1 ))
+        done
+        _upg_i=0
+        while [ "$_upg_i" -lt "$_upg_nrows" ]; do
+            _upg_frame="$_upg_frame  ${_upg_note:$(( _upg_i * _upg_w )):$_upg_w}"$'\033[K\n'
+            _upg_i=$(( _upg_i + 1 ))
+        done
+        _upg_frame="$_upg_frame  ${UI_DIM:-}$(_ui_fit_row "$_upg_hint" 3 "$_upg_cols")${UI_RESET:-}"$'\033[K'
+        [ -n "$_upg_hint2" ] && _upg_frame="$_upg_frame"$'\n'"  ${UI_DIM:-}$(_ui_fit_row "$_upg_hint2" 3 "$_upg_cols")${UI_RESET:-}"$'\033[K'
+        printf '%s' "$_upg_frame"
+        _ui_menu_key "$_upg_tty" || { UI_PAGER_KEY=eof; break; }
+        _upg_was="$_upg_note"; _upg_note=""
+        case "$UI_KEY" in
+            "") UI_PAGER_KEY=enter; break ;;
+            q|Q) UI_PAGER_KEY=q; break ;;
+            " ") _upg_top=$(( _upg_top + _upg_view )) ;;
+            j|J) _upg_top=$(( _upg_top + 1 )) ;;
+            k|K) _upg_top=$(( _upg_top - 1 )) ;;
+            b|B) _upg_top=$(( _upg_top - _upg_view )) ;;
+            g)
+                if [ -n "${UI_PAGER_URL:-}" ]; then
+                    if ui_open_url "$UI_PAGER_URL"; then _upg_note="Opened $UI_PAGER_URL"
+                    else _upg_note="On GitHub: $UI_PAGER_URL"; fi
+                else
+                    _upg_top=0
+                fi ;;
+            G) _upg_top="$_upg_last" ;;
+            o|O)
+                if [ -n "${UI_PAGER_OPEN:-}" ]; then
+                    # Said as the guides say a path: ~ for the home folder.
+                    _upg_shown="$UI_PAGER_OPEN"
+                    case "$_upg_shown" in "$HOME"/*) _upg_shown="~${_upg_shown#"$HOME"}" ;; esac
+                    if ui_open_path "$UI_PAGER_OPEN"; then _upg_note="Opened $_upg_shown"
+                    else _upg_note="The full guide: $_upg_shown"; fi
+                else
+                    _upg_note="$_upg_was"
+                fi ;;
+            "$(printf '\033')")
+                case "$UI_KEY_SEQ" in
+                    '') UI_PAGER_KEY=esc; break ;;
+                    '[A'|'OA') _upg_top=$(( _upg_top - 1 )) ;;
+                    '[B'|'OB') _upg_top=$(( _upg_top + 1 )) ;;
+                    '[5') _upg_top=$(( _upg_top - _upg_view )) ;;
+                    '[6') _upg_top=$(( _upg_top + _upg_view )) ;;
+                    '[H'|'[1'|'OH') _upg_top=0 ;;
+                    '[F'|'[4'|'OF') _upg_top="$_upg_last" ;;
+                    *) _upg_note="$_upg_was" ;;
+                esac ;;
+            *)
+                _upg_lk="$(printf '%s' "$UI_KEY" | tr '[:upper:]' '[:lower:]')"
+                case "$_upg_lk" in
+                    [a-z]) case "$_upg_keys" in *"$_upg_lk"*) UI_PAGER_KEY="$_upg_lk"; break ;; esac ;;
+                esac
+                _upg_note="$_upg_was" ;;
+        esac
+    done
+    _ui_pager_leave
+    if [ -n "$_UI_PAGER_PREV_INT" ]; then eval "$_UI_PAGER_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_PAGER_PREV_TERM" ]; then eval "$_UI_PAGER_PREV_TERM"; else trap - TERM; fi
     return 0
 }
 

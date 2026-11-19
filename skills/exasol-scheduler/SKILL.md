@@ -1,7 +1,7 @@
 ---
 name: exasol-scheduler
 addon: exasol-scheduler
-description: Schedule SQL jobs on the local Exasol database with the Exasol Scheduler add-on — jobs are rows in SCHED.SCHED_TASKS, history is a table, and the whole surface is plain SQL. Covers installing it from the marketplace, the dedicated scheduler_svc user and why the MCP user cannot write tasks, cron schedules with timezones, task chains via AFTER, granting job privileges, and the laptop realities — missed runs are never replayed, one instance per task table, the engine restarts itself and says so when it gives up. Triggers — "schedule a SQL job", "run this query every night", "cron for Exasol", "install exasol-scheduler", "my scheduled job did not run", "SCHED_TASKS", "task history", "chain SQL jobs", "pause a scheduled job", "scheduler gave up", "insufficient privileges in a scheduled task".
+description: Schedule SQL jobs on the local Exasol database with the Exasol Scheduler add-on — jobs are rows in SCHED.SCHED_TASKS, history is a table, and the whole surface is plain SQL. Covers installing it from the marketplace, the dedicated scheduler_svc user and why the MCP user cannot write tasks, cron schedules with timezones, task chains via AFTER, granting job privileges, and the laptop realities — missed runs are never replayed, one instance per task table, the engine restarts itself until the database is back and says so while it waits. Triggers — "schedule a SQL job", "run this query every night", "cron for Exasol", "install exasol-scheduler", "my scheduled job did not run", "SCHED_TASKS", "task history", "chain SQL jobs", "pause a scheduled job", "scheduler gave up", "insufficient privileges in a scheduled task".
 ---
 
 # Exasol Scheduler — SQL jobs on a schedule
@@ -156,17 +156,21 @@ touching the scheduler at all.
   twice.
 - **The engine exits on fatal errors, and the kit supervises it.** The
   launcher waits (bounded, ~2 min) for the database at login, restarts the
-  engine with 5s backoff, and after five rapid failures **gives up loudly**:
-  `exakit status` then shows
-  `stopped (gave up after 5 rapid failures — diagnose: exakit logs exasol-scheduler, restart: exakit start)`
-  rather than a bare "stopped". A deliberate `exakit start` clears that
-  state — a fresh start is a fresh chance.
+  engine 5s apart five times, then backs off to one try a minute, and **never
+  gives up**: a database restart (Docker Desktop restarting or updating) brings
+  the scheduler back by itself. While the database does not answer it starts
+  no engine and waits for it. Meanwhile `exakit status` shows
+  `restarting (waiting for the database. Diagnose: exakit logs exasol-scheduler)`
+  or `restarting (N rapid failures, last exit X. Diagnose: ...)` rather than
+  "running". `exakit start exasol-scheduler` tries again at once.
 
 ## Diagnosing
 
 | You see | It means | Do |
 |---|---|---|
-| `stopped (gave up after N rapid failures ...)` in `exakit status` | the engine kept dying — bad credentials, unreachable DB, or a fatal task error | `exakit logs exasol-scheduler`, fix the cause, `exakit start` |
+| `restarting (N rapid failures ...)` in `exakit status` | the engine keeps dying — bad credentials or a fatal task error; it retries once a minute | `exakit logs exasol-scheduler`, fix the cause, `exakit start exasol-scheduler` |
+| `restarting (waiting for the database ...)` | the database is down or restarting; the scheduler comes back by itself once it answers | `exakit start` if the database stays down |
+| `stopped (gave up after N rapid failures ...)` | a kit before 0.3.0 stopped supervising | `exakit start exasol-scheduler` |
 | a `FAILED` row with `insufficient privileges` | the task touches a schema `scheduler_svc` has no grant for | `GRANT` what the job needs to `SCHEDULER_SVC`, it retries on the next occurrence |
 | `exasol-scheduler is already running (pid ...)` on start | the singleton guard — one poller per task table | that is the answer, not an error; `exakit stop exasol-scheduler` then `exakit start exasol-scheduler` if you truly mean to restart (bare `exakit stop` takes the database down too) |
 | a task ran twice per minute | a second scheduler outside the kit polls the same table | stop the copy the kit does not manage; the guard only covers kit-started ones |

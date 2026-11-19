@@ -1,9 +1,12 @@
 # Example questions for your AI assistant
 
 Copy any of these into your AI client (Claude, Cursor, Codex) once the kit
-is installed and the MCP server is connected. They all run against the bundled
-**TPC-H** sample data in the `TPCH` schema, using nothing but the read-only
-SELECT access the MCP server is given — so they are safe to ask verbatim.
+is installed and the MCP server is connected. Questions 1 to 14 run against the
+**TPC-H** sample data in the `TPCH` schema. Questions 15 to 21 run against
+**RETAIL_SALES** and **BANK_TRANSACTION**, the two datasets new installs load. They use
+nothing but the read-only SELECT access the MCP server is given, so they are safe to
+ask verbatim. TPC-H is no longer offered for new installs. A kit that already loaded it
+keeps it.
 
 Every question below has been validated end-to-end against the sample data as the
 dedicated `mcp_readonly` user. The **reference SQL** is included so you can practice
@@ -187,6 +190,78 @@ FROM TPCH.PARTSUPP ps
 GROUP BY ps.PS_PARTKEY
 ORDER BY SPREAD DESC
 LIMIT 10;
+```
+
+
+## Retail sales (`RETAIL_SALES`)
+
+**15. Which product category brings in the most revenue?**
+
+```sql
+SELECT PRODUCT_CATEGORY, COUNT(*) AS SALES, SUM(QUANTITY) AS UNITS, SUM(TOTAL_AMOUNT) AS REVENUE
+FROM RETAIL_SALES.RETAIL_SALES
+GROUP BY PRODUCT_CATEGORY
+ORDER BY REVENUE DESC;
+```
+
+**16. How does retail revenue change month by month?**
+
+```sql
+SELECT TRUNC(SALE_DATE, 'MM') AS SALE_MONTH, SUM(TOTAL_AMOUNT) AS REVENUE
+FROM RETAIL_SALES.RETAIL_SALES
+GROUP BY TRUNC(SALE_DATE, 'MM')
+ORDER BY SALE_MONTH;
+```
+
+**17. What is the average sale per age band and gender?**
+
+```sql
+SELECT CASE WHEN AGE < 30 THEN '18-29' WHEN AGE < 45 THEN '30-44' ELSE '45-64' END AS AGE_BAND,
+       GENDER, COUNT(*) AS SALES, ROUND(AVG(TOTAL_AMOUNT), 2) AS AVG_SALE
+FROM RETAIL_SALES.RETAIL_SALES
+GROUP BY CASE WHEN AGE < 30 THEN '18-29' WHEN AGE < 45 THEN '30-44' ELSE '45-64' END, GENDER
+ORDER BY AGE_BAND, GENDER;
+```
+
+## Bank transactions (`BANK_TRANSACTION`)
+
+**18. How many debits and credits go through each channel, and for how much?**
+
+```sql
+SELECT CHANNEL, TRANSACTION_TYPE, COUNT(*) AS TRANSACTIONS, SUM(TRANSACTION_AMOUNT) AS TOTAL_AMOUNT
+FROM BANK_TRANSACTION.BANK_TRANSACTIONS
+GROUP BY CHANNEL, TRANSACTION_TYPE
+ORDER BY CHANNEL, TRANSACTION_TYPE;
+```
+
+**19. Which 10 accounts have the most transactions?**
+
+```sql
+SELECT ACCOUNT_ID, COUNT(*) AS TRANSACTIONS, SUM(TRANSACTION_AMOUNT) AS TOTAL_AMOUNT
+FROM BANK_TRANSACTION.BANK_TRANSACTIONS
+GROUP BY ACCOUNT_ID
+ORDER BY TRANSACTIONS DESC, TOTAL_AMOUNT DESC
+LIMIT 10;
+```
+
+**20. Which transactions needed more than one login attempt?**
+
+```sql
+SELECT TRANSACTION_ID, ACCOUNT_ID, TRANSACTION_AMOUNT, LOCATION, CHANNEL, LOGIN_ATTEMPTS
+FROM BANK_TRANSACTION.BANK_TRANSACTIONS
+WHERE LOGIN_ATTEMPTS > 1
+ORDER BY LOGIN_ATTEMPTS DESC, TRANSACTION_AMOUNT DESC
+LIMIT 10;
+```
+
+**21. What is the average transaction and balance per customer occupation?**
+
+```sql
+SELECT CUSTOMER_OCCUPATION, COUNT(*) AS TRANSACTIONS, ROUND(AVG(TRANSACTION_AMOUNT), 2) AS AVG_AMOUNT,
+       ROUND(AVG(ACCOUNT_BALANCE), 2) AS AVG_BALANCE
+FROM BANK_TRANSACTION.BANK_TRANSACTIONS
+GROUP BY CUSTOMER_OCCUPATION
+ORDER BY AVG_AMOUNT DESC;
 ```
 
 ---

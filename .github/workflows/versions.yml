@@ -10,6 +10,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The versions-bump workflow starts this on its proposal branch: a push made
+  # with the workflow token starts no workflow, and GitHub Actions may not open
+  # the pull request that would.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,11 +23,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  marketplace-python-tests:
+    name: marketplace Python (${{ matrix.os }}, ${{ matrix.part }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # One discover over every file took fourteen minutes on either runner,
+        # most of it the black-box suite, which drives the real CLI. The files
+        # are split by the first letter of their name, the black-box suite by
+        # the first letter of its test classes, so every file and every class
+        # lands in exactly one part. A file outside these patterns runs nowhere,
+        # and tests/ci-wiring.sh fails on it.
+        part: [a, blackbox-1, blackbox-2, c-r, s-z]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the marketplace UI dependency from its single pin
+        shell: bash
+        run: |
+          version="$(python -c 'from pathlib import Path; print(next(line.split("=", 1)[1] for line in Path("marketplace/defaults.env").read_text().splitlines() if line.startswith("EXAKIT_TEXTUAL_VERSION=")))')"
+          python -m pip install "textual==$version" uv
+      - name: Persona and marketplace Python contracts (a)
+        if: matrix.part == 'a'
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_a*.py'
+      - name: Persona and marketplace Python contracts (black box, classes A-D)
+        if: matrix.part == 'blackbox-1'
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_blackbox.py' -k '*_blackbox.[A-D]*'
+      - name: Persona and marketplace Python contracts (black box, classes E-Z)
+        if: matrix.part == 'blackbox-2'
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_blackbox.py' -k '*_blackbox.[!A-D]*'
+      - name: Persona and marketplace Python contracts (c-r)
+        if: matrix.part == 'c-r'
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_[c-r]*.py'
+      - name: Persona and marketplace Python contracts (s-z)
+        if: matrix.part == 's-z'
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_[s-z]*.py'
+
   changes:
     name: detect versions.json changes
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.detect.outputs.versions }}
+      # The component keys whose versions.json block changed and that have
+      # something to run (tools/bump_checks.py), as a JSON list.
+      components: ${{ steps.detect.outputs.components }}
+      # A Federation pin file changed; base is what it changed from ('' = all).
+      vs: ${{ steps.detect.outputs.vs }}
+      base: ${{ steps.detect.outputs.base }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,11 +86,21 @@ jobs:
       - id: detect
         run: |
           set -u
+          base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+            base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # A dispatched branch (the version-bump proposal) is measured
+            # against the default branch it will be merged into.
+            base="$(git merge-base "origin/${{ github.event.repository.default_branch }}" HEAD 2>/dev/null || true)"
           elif [ -n "${{ github.event.before }}" ] && \
                git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
-            changed="$(git diff --name-only "${{ github.event.before }}" HEAD)"
+            base="${{ github.event.before }}"
+          fi
+          rm -f /tmp/base-versions.json
+          if [ -n "$base" ]; then
+            changed="$(git diff --name-only "$base" HEAD)"
+            git show "$base:versions.json" > /tmp/base-versions.json 2>/dev/null || rm -f /tmp/base-versions.json
           else
             # No usable base (first push, force push, rerun): verify rather than skip.
             changed="versions.json"
@@ -46,6 +111,76 @@ jobs:
             echo "versions=false" >> "$GITHUB_OUTPUT"
           fi
           printf 'versions.json changed: %s\n' "$(printf '%s\n' "$changed" | grep -cx 'versions.json')"
+          # Without a base versions.json every component counts as changed.
+          components="$(python3 tools/bump_checks.py changed --runnable /tmp/base-versions.json versions.json)"
+          echo "components=$components" >> "$GITHUB_OUTPUT"
+          echo "components with something to run: $components"
+          if [ -z "$base" ] || printf '%s\n' "$changed" | grep -Eq '^setup/virtual-schemas/(connectors|profiles)/[^/]+/[^/]+\.json$'; then
+            echo "vs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vs=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+  # A bump that only moves a number proves nothing. For each component whose
+  # block changed, every OS the kit supports does what an install does there:
+  # download the pinned asset, refuse it unless its SHA-256 is the pin, unpack
+  # it and run it (`--version`, `exasol version`, the scheduler's `--help`),
+  # check a Linux binary's glibc floor against the one versions.json records,
+  # and install each Python package into a clean Python 3.12 venv with the
+  # pinned uv and import it. Same-bytes checks (the VS Code vsix, the Semantic
+  # Views archive, the MCP image digest on Docker Hub) run on one runner.
+  # Only on change: a pull request that moves no version runs none of it.
+  component-smoke:
+    name: component smoke (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.components != '[]' && needs.changes.outputs.components != ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # linux x86_64 and arm64, macOS arm64 and x86_64, Windows x86_64.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: fetch, verify and run each changed component on this OS
+        shell: bash
+        env:
+          COMPONENTS: ${{ needs.changes.outputs.components }}
+        run: python tools/bump_checks.py smoke "$COMPONENTS"
+
+  # The Federation connectors pin every adapter, JDBC driver, language
+  # container and CA bundle by URL, size and SHA-256
+  # (setup/virtual-schemas/connectors/*/connector.json, profiles/*/profile.json)
+  # and the engine refuses anything else at connect time, so a typo or a
+  # re-uploaded asset is a first `exakit connect` that fails for everyone.
+  # Each pin that changed is downloaded and checked the way the engine checks
+  # it (size, digest, the bundle member it reads); every pin is checked for
+  # shape. Only when a pin file changes.
+  vs-artifacts-verify:
+    name: verify changed Federation artifact pins
+    needs: changes
+    if: needs.changes.outputs.vs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: download each changed pin and check its size and digest
+        env:
+          BASE: ${{ needs.changes.outputs.base }}
+        run: |
+          set -u
+          if [ -n "$BASE" ]; then
+            python3 tools/bump_checks.py vs-pins --base "$BASE"
+          else
+            python3 tools/bump_checks.py vs-pins --all
+          fi
 
   validate:
     name: validate versions.json
@@ -88,7 +223,7 @@ jobs:
 
           expected = {"personal", "exapump", "uv", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
-                      "exasol-scheduler", "dbt-exasol"}
+                      "exasol-scheduler", "dbt-exasol", "preprocessor", "semantic-views"}
           components = doc.get("components") or {}
           if set(components) != expected:
               problems.append("components must be exactly %s, found %s"
@@ -171,6 +306,25 @@ jobs:
           for platform, digest in digests.items():
               if not isinstance(digest, str) or not digest_re.match(digest):
                   problems.append("components.exasol-scheduler.sha256.%s is not a 64-character hex digest" % platform)
+
+          # The SQL preprocessor framework is a core component: the installer's
+          # database step downloads ONE release asset (release.sql) by exact URL
+          # and refuses it unless it matches "release-sql", then runs the
+          # core-only text derived from it (its PYTHON3 scripts left out) only
+          # if that matches "core-only". Keys are not file names: the kit's
+          # dot-path readers split on ".", so "release.sql" could never be read.
+          preprocessor = components.get("preprocessor") or {}
+          for key in ("repo", "release", "asset", "min_kit_version"):
+              if not preprocessor.get(key):
+                  problems.append("components.preprocessor.%s is missing" % key)
+          if preprocessor.get("release") and preprocessor.get("release") != "v%s" % preprocessor.get("version"):
+              problems.append("components.preprocessor.release must be v<version> (%s)" % preprocessor.get("version"))
+          pp_digests = preprocessor.get("sha256") or {}
+          if set(pp_digests) != {"release-sql", "core-only"}:
+              problems.append("components.preprocessor.sha256 must hold exactly release-sql and core-only")
+          for key, digest in pp_digests.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.preprocessor.sha256.%s is not a 64-character hex digest" % key)
 
           # uv installs from astral's own release archive, pinned by digest
           # like exapump, and is held to a FLOOR: the kit refuses to run a uv
@@ -305,6 +459,33 @@ jobs:
             fi
             printf '  verified %s\n' "$digest"
           done < /tmp/digests.txt
+      - name: download the pinned preprocessor framework package and check its digest
+        # The installer's database step executes this file as the database
+        # administrator, so the pin is the whole trust decision: hash the real
+        # release asset, not the digest the release page reports.
+        run: |
+          set -u
+          read -r repo release asset digest core < <(python3 -c 'import json; b = json.load(open("versions.json"))["components"]["preprocessor"]; print(b["repo"], b["release"], b["asset"], b["sha256"]["release-sql"], b["sha256"]["core-only"])')
+          url="https://github.com/${repo}/releases/download/${release}/${asset}"
+          printf '\n%s\n' "$url"
+          if ! curl -fL --proto '=https' --retry 3 -sS -o "/tmp/preprocessor-${asset}" "$url"; then
+            echo "  could not download $url" >&2
+            exit 1
+          fi
+          actual="$(sha256sum "/tmp/preprocessor-${asset}" | cut -d' ' -f1)"
+          derived="$(python3 setup/preprocessor/manage.py derive --package "/tmp/preprocessor-${asset}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256"])')"
+          rm -f "/tmp/preprocessor-${asset}"
+          if [ "$actual" != "$digest" ]; then
+            printf '  digest mismatch\n    advertised: %s\n    actual:     %s\n' "$digest" "$actual" >&2
+            exit 1
+          fi
+          printf '  verified %s\n' "$digest"
+          # The text the installer actually runs: derived the same way here.
+          if [ "$derived" != "$core" ]; then
+            printf '  core-only digest mismatch\n    pinned:  %s\n    derived: %s\n' "$core" "$derived" >&2
+            exit 1
+          fi
+          printf '  core-only verified %s\n' "$core"
       - name: download the advertised scheduler archives and check every digest
         # Same ground truth, same reason: exasol-scheduler installs upstream's
         # archive for the platform and refuses one whose digest differs from
@@ -748,9 +929,38 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
-  shell-tests:
-    name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/5)
+  linux-paths:
+    # LNX-09: the suites mock detect_os, so the paths only real Linux takes - the C library the exapump shim
+    # keys on, the CPU architecture, the container engine - were never run by anything. Here the installer's
+    # own preflight and dry run run from this checkout on an older glibc (Ubuntu 22.04) and on arm64; both
+    # check the machine and install nothing. The platform-specific suites run beside them.
+    name: linux paths (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - name: the machine as the kit sees it
+        run: |
+          uname -m
+          ldd --version 2>&1 | head -1
+          bash -c '. setup/lib/detect.sh; printf "os=%s arch=%s musl=%s docker=%s\n" "$(detect_os)" "$(detect_arch)" "$(detect_musl && echo yes || echo no)" "$(detect_docker)"'
+      - name: preflight, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_PREFLIGHT=1 sh install.sh </dev/null
+      - name: dry run, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_DRY_RUN=1 EXAKIT_PERSONA=general sh install.sh </dev/null
+      - run: bash tests/exapump-shim-wrapper.sh
+      - run: bash tests/personal-readiness.sh
+      - run: bash tests/podman-rootless-selfheal.sh
+
+  shell-tests:
+    name: shell tests (${{ matrix.os }}, ${{ matrix.group }})
+    runs-on: ${{ matrix.os }}
+    # The longest group runs about 11 minutes on macOS; a suite that hangs
+    # (a wait with no end) fails the job instead of holding the whole run.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -758,16 +968,18 @@ jobs:
         # installer with); the Linux runner ships pwsh, so the PowerShell
         # halves of the parity guards execute instead of being skipped.
         os: [ubuntu-latest, macos-latest]
-        # FIVE SHARDS, SAME SUITES. Run end to end on one macOS runner the
-        # suites took 29 minutes, and three quarters of that was five suites.
-        # Every suite below names the shard it runs in; the long ones are kept
-        # apart (the crossing resilience suite alone; bash32-guard with
-        # marketplace; versions-manifest with agent-audit; everything small in
-        # the fourth; the PowerShell crossing suite alone in the fifth - both
-        # runners ship pwsh now, so it is seven minutes on macOS as well). The
-        # wall time is the longest single suite. A suite with no `if:` would
-        # run five times - the balance only has to stay rough.
-        shard: [1, 2, 3, 4, 5]
+        # NAMED GROUPS, BALANCED BY MEASURED TIME. Five numbered shards ran a
+        # pull request for 45 minutes: one shard held most of the small suites,
+        # and versions-manifest (no `if:`) ran in all five. Every step below now
+        # names the one group it runs in; only job plumbing has no `if:`, since
+        # a step without one runs in every group. The four suites too long to
+        # share a job have a group each (versions-manifest, virtual-schemas, the
+        # crossing resilience suite), the PowerShell crossing suite runs as four
+        # ps-crossing-N slices of its numbered sections; the rest
+        # are packed into suites-N groups of about three minutes on the macOS
+        # runner, from the step times of a full run. A new suite joins the
+        # group with the most room; past about three minutes, add a suites-N.
+        group: [suites-1, suites-2, suites-3, suites-4, suites-5, suites-6, suites-7, suites-8, suites-9, suites-10, suites-11, suites-12, suites-13, suites-14, crossing-resilience, ps-crossing-1, ps-crossing-2, ps-crossing-3, ps-crossing-4, versions-manifest, virtual-schemas]
     steps:
       - uses: actions/checkout@v7
       - name: bash version
@@ -775,7 +987,7 @@ jobs:
       - name: PowerShell available
         run: command -v pwsh >/dev/null 2>&1 && pwsh --version || echo "pwsh not installed - PowerShell checks will report skipped"
       - run: bash tests/ps-encoding-guard.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-14'
       # PowerShell resolves command names at call time, so a script calling a
       # function that exists nowhere parses clean and dies only on a real
       # Windows machine - that is how the exasol-scheduler install shipped
@@ -783,42 +995,54 @@ jobs:
       # AST of every shipped .ps1 and fails on any static Verb-Noun call that
       # resolves to nothing.
       - run: bash tests/ps-undefined-functions.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-7'
       - run: bash tests/versions-manifest.sh
+        if: matrix.group == 'versions-manifest'
+      # The exapump wrapper for glibc < 2.38, rendered: no CI runner is old enough to generate it.
+      - run: bash tests/exapump-shim-wrapper.sh
+        if: matrix.group == 'suites-14'
+      # The read-only commands download nothing and write nothing to the home, on any Python 3.
+      - run: bash tests/readonly-queries.sh
+        if: matrix.group == 'suites-13'
+      - run: bash tests/ci-wiring.sh
+        if: matrix.group == 'suites-14'
       - run: bash tests/uv-bootstrap.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-13'
       - run: bash tests/personal-s3.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
       - run: bash tests/dry-run-matrix.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-11'
       - run: bash tests/noninteractive-answers.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
       - run: bash tests/marketplace.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-4'
+      # The no-Python reader of the catalog's GitHub block agrees with the Python one (QAT-12).
+      - run: bash tests/catalog-github-sed.sh
+        if: matrix.group == 'suites-14'
       # json-tables ships from one immutable release per build; the pin in
       # versions.json is the only authority. This guards both halves: the
       # module never reads a pin for a build it is not installing, and the
       # packaging workflow can never overwrite a published release.
       - run: bash tests/json-tables-release.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-14'
       # The twelve findings of the agent-operability audit, pinned: the state
       # queries' contract, the sql path, all-means-detected, installing state,
       # the port conflict, and what uninstall keeps.
       - run: bash tests/agent-audit.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-5'
       - run: bash tests/uninstall.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-14'
       # A full uninstall never reports success while the deployment is still
       # on the machine (directory, runner, container): exit 1 and the remedy.
       - run: bash tests/uninstall-leftovers.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-8'
       # An installation made by an older kit has a database this kit cannot
       # drive, and the crossing is the only code that touches one. What it
       # DECIDES and what it HANDS to the engine and to exapump are both
       # exactly checkable, and the invariant worth a CI job is that it never
       # deletes the old database on either answer.
       - run: bash tests/legacy-crossing.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-9'
       # The same crossing under every fault the road can throw: an engine that
       # hangs, refuses or loses the container; a database with no password,
       # no answer, a late answer, or nothing in it; copies and restores that
@@ -826,113 +1050,245 @@ jobs:
       # It ends by measuring how much of the module it walked, and that floor
       # is a gate.
       - run: bash tests/legacy-crossing-resilience.sh
-        if: matrix.shard == 1
+        if: matrix.group == 'crossing-resilience'
       - run: bash tests/podman-rootless-selfheal.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-13'
       - run: bash tests/windows-rootful-podman.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-14'
       - run: bash tests/skills.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-13'
       # AGENTS.md's hand-maintained rosters go stale silently: a registered
       # add-on with a skill and a help document was invisible to the runbook,
       # and a quickstart named a command form both CLIs reject.
       - run: bash tests/agents-rosters.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
       # bash 3.2 is /bin/bash on macOS. This guard proves its own premise on the
       # running shell and tests its detector against a fixture - and until now it
       # ran on no runner at all, so the defect it was written for could return
       # unnoticed. It is cheap; it runs on both.
       - run: bash tests/bash32-guard.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-12'
       # The only empirical proof the MCP database user is read-only. It skips
       # cleanly without credentials, so it is safe on a runner that has none.
       - run: bash tests/mcp-readonly-sql-matrix.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
       - run: bash tests/kit-upgrade.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-14'
+      # Core setup tasks: the task list against the laptop's record, the
+      # installer rerun `exakit update` starts for a pending task, the handover
+      # to a freshly downloaded kit, and the seventh installer step.
+      - run: bash tests/core-setup.sh
+        if: matrix.group == 'suites-13'
+      # The SQL preprocessor framework against a simulated database: install,
+      # session trial, activation, rollback, and everything the kit must leave
+      # alone. Both suites run their PowerShell twins under pwsh as well.
+      - run: bash tests/preprocessor-lifecycle.sh
+        if: matrix.group == 'suites-13'
+      - run: pwsh -NoProfile -File tests/core-setup.ps1
+        if: matrix.group == 'suites-12'
+      - run: pwsh -NoProfile -File tests/preprocessor-lifecycle.ps1
+        if: matrix.group == 'suites-14'
+      # Exasol Personal's language containers ship empty DNS files, so Java in
+      # the database resolves no hostname; the kit repairs them after every
+      # start, through the deployment's own engine (Docker or Podman). Both
+      # routes against a stand-in engine CLI: the Python helper (Linux, WSL,
+      # Windows) and the sh script for the macOS launcher VM; the PowerShell
+      # twin hands the helper the same engine and deployment id.
+      - run: bash tests/personal-slc-dns.sh
+        if: matrix.group == 'suites-10'
+      - run: pwsh -NoProfile -File tests/personal-slc-dns-ps.ps1
+        if: matrix.group == 'suites-14'
+      # The virtual schema engine against a simulated Exasol: secrets only in
+      # CONNECTION DDL, failed connects leave nothing, shared files counted,
+      # disconnect vs remove, and classified failures.
+      - run: bash tests/virtual-schemas.sh
+        if: matrix.group == 'virtual-schemas'
+      - run: pwsh -NoProfile -File tests/virtual-schemas.ps1
+        if: matrix.group == 'suites-6'
       - run: bash tests/agent-operability.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-7'
       # The MCP subsystem's own tests were never wired in, so nothing in CI
       # exercised mcp/ at all -- a NameError in that package would have shipped.
       - run: python3 -m unittest discover -s mcp/tests -t .
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
+      # The launcher's MCP sidecar as the kit's server: the shell side against a
+      # stub launcher, and the sidecars.yaml editor (skipped where the runner has no PyYAML).
+      - run: bash tests/mcp-sidecar.sh
+        if: matrix.group == 'suites-6'
+      - run: python3 -m unittest tests.test_sidecar_definition
+        if: matrix.group == 'suites-14'
       # Three more suites existed and were never run by CI either. This one had
       # rotted: it asserted a data-load prompt wording that the JSON support
       # changed on the bash side, and nothing noticed. (Not discoverable via
       # `unittest discover` -- tests/ is not an importable package.)
       - run: python3 tests/test_sample_data_schema.py
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
+      # tools/dataset_check.py: every file defect named before a load; the live
+      # half against a fake exapump (refuse an existing schema, drop its own).
+      - run: python3 tests/test_dataset_check.py
+        if: matrix.group == 'suites-14'
+      # The database's TLS pin (SEC-14): the fingerprint against a local TLS
+      # server, the pinned clients, status and `exakit tls-pin`.
+      - run: python3 -m unittest tests/test_tls_pin.py
+        if: matrix.group == 'suites-14'
+      # setup/lib/csv_guard.py: Windows line endings made LF, and the columns that would load as wrong numbers.
+      - run: python3 -m unittest tests/test_csv_guard.py
+        if: matrix.group == 'suites-14'
+      - run: bash tests/tls-pin.sh
+        if: matrix.group == 'suites-12'
+      # The semantic-views add-on: the pinned release, its digest, its installer and a removal that keeps models.
+      - run: python3 tests/test_marketplace_semantic_views.py
+        if: matrix.group == 'suites-13'
+      # How the source engine reads a database's error: never from the connection string it quotes.
+      - run: python3 tests/test_vs_error_class.py
+        if: matrix.group == 'suites-13'
+      # What CI runs when a version or a Federation pin changes, and the report a bump branch carries.
+      - run: python3 tests/test_bump_checks.py
+        if: matrix.group == 'suites-13'
+      # The same helpers with the real Langfuse SDK 5 installed (the add-on pins
+      # langfuse>=5,<6), so RealLangfuseTest runs instead of being skipped. A
+      # venv of its own: the runner's python3 is externally managed.
+      # Check the supported Python floor as well as the ordinary 3.12 checks.
+      - uses: actions/setup-python@v6
+        if: matrix.group == 'suites-10'
+        id: provider-python
+        with:
+          python-version: '3.11'
+          update-environment: false
+      # Each suite named, so none can sit in tests/ unrun (audit QAT-01); tests/ci-wiring.sh fails on one that does.
+      - name: persona, privacy, telemetry and version-pin suites
+        if: matrix.group == 'suites-13'
+        run: |
+          for suite in test_persona_membership test_privacy_watch test_telemetry_default test_version_pins; do
+            echo "== $suite"; python3 "tests/$suite.py" || exit 1
+          done
+      - run: python3 tests/test_addon_github.py
+        if: matrix.group == 'suites-14'
+      # The catalog's copy of each add-on's GitHub name, link and About is the
+      # kit's answer when GitHub cannot be reached. A repository that renamed
+      # itself or reworded its About is flagged here (refresh with
+      # tools/addon_github.py); a warning, so another project's edit does not
+      # fail an unrelated change.
+      - name: the add-ons' GitHub names, links and Abouts match the catalog
+        if: matrix.group == 'suites-14'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! python3 tools/addon_github.py --check; then
+            echo "::warning title=add-on catalog drift::marketplace/catalog.json no longer matches GitHub; run python3 tools/addon_github.py"
+          fi
+      - run: python3 tests/test_addon_help.py
+        if: matrix.group == 'suites-10'
+      # The reference datasets as checksummed release assets (DS-2): kit copy,
+      # cache, download through a mirror, tampered archives refused; the data
+      # question (source first, Enter on Skip skips, the For column).
+      - run: bash tests/dataset-asset.sh
+        if: matrix.group == 'suites-13'
+      - run: bash tests/data-question.sh
+        if: matrix.group == 'suites-7'
+      # An add-on's install question is asked before the progress table animates,
+      # never under it (a real pty: one table on screen, the answer reaches the
+      # install).
+      - run: bash tests/addon-questions.sh
+        if: matrix.group == 'suites-13'
+      # The add-ons table's activity line: off by default, and directly above
+      # the add-on it belongs to when UI_TABLE_ACTIVITY=1 asks for it.
+      - run: bash tests/addon-activity.sh
+        if: matrix.group == 'suites-14'
+      # Personas (PRD P-1): every file valid and read the same by the shell,
+      # an explicit answer wins per variable, an unknown persona is refused
+      # by the installer before anything is installed.
+      - run: bash tests/personas.sh
+        if: matrix.group == 'suites-12'
+      # The settings file (~/.exasol-starter-kit/exakit.env): read as written,
+      # the environment wins, and setup/exakit.env lists every setting.
+      - run: bash tests/env-file.sh
+        if: matrix.group == 'suites-14'
       - run: bash tests/reap-orphan-daemon.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-13'
       - run: bash tests/service-scope.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-9'
       # Readiness is a TLS handshake and adoption needs ownership proof: the
       # two facts the Windows install on a laptop with WSL got wrong.
       - run: bash tests/personal-readiness.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-3'
+      # A lock a crashed launcher left behind: released (diag unlock) and the
+      # destroy retried only when no launcher runs; the launcher's words quoted.
+      - run: bash tests/personal-destroy-lock.sh
+        if: matrix.group == 'suites-14'
       # Docker when usable, else Podman, and an existing deployment keeps the
       # engine its record names: the 2.4 engine choice against stub engines.
       - run: bash tests/personal-engine.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-12'
       # exapump's glibc shim runs on Docker as well as Podman: a Docker-only
       # box on glibc < 2.38 kept losing the data-loading CLI.
       - run: bash tests/exapump-glibc-shim.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-13'
       # Podman on a WSL kernel without nftables is refused before the download
       # or the launcher swap, and preflight counts Docker Engine 29+.
       - run: bash tests/personal-wsl-gate.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-1'
       # A replaced database is a new database: the exapump profile and the MCP
       # read-only user are rebuilt, never skipped as "already done".
       - run: bash tests/personal-fresh-password.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-14'
       # The agent contract: a kit self-update stops the run, a refused update
       # names its real remedy, a refused install keeps its reason, a Docker
       # deployment with Docker down is never sent to repair-runtime.
       - run: bash tests/personal-agent-contract.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-8'
       - run: bash tests/deploy-progress.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-12'
       - run: bash tests/bulk-folder-load.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-12'
       - run: bash tests/dataset-load-progress.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-4'
       - run: bash tests/install-output-brevity.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-13'
       # Resume-path safety: both bugs it guards only appear on a SECOND run
       # of the installer, which is the run nobody exercises by hand.
       - run: bash tests/install-resume-safety.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-14'
       # `exakit update <component>` still works and is deliberately not
       # advertised. The guard reads the surfaces a reader reads, and also
       # checks the capability was hidden rather than deleted.
       - run: bash tests/update-command-surface.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-12'
       # Needs a real pty: ui_spin_begin re-checks `-t 1` at call time, so the
       # spinner never starts in a captured pipeline and the collision this
       # guards against cannot be reproduced by running the command normally.
       - run: bash tests/spinner-line-safety.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-13'
       # The table component's PowerShell twin is asserted STATICALLY -- there is
       # no pwsh on the machine this kit is developed on, so CI is the only thing
       # that ever reads ui.ps1 at all. It was written and then never wired in
       # here, which is how the twin drifted while 119 checks sat unrun.
       - run: bash tests/ps-table-twin.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-6'
       - run: bash tests/checkbox-group.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-13'
+      - run: bash tests/lakehouse-picker.sh
+        if: matrix.group == 'suites-11'
       - run: bash tests/menu-hint.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-14'
       - run: bash tests/mcp-status-clients.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-4'
       - run: bash tests/status-soft-components.sh
-        if: matrix.shard == 4
+        if: matrix.group == 'suites-12'
+      - run: bash tests/db-clock-skew.sh
+        if: matrix.group == 'suites-11'
       - run: bash tests/install-payload.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-10'
       - run: bash tests/uninstall-addons-only.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-2'
+      - run: bash tests/component-ownership.sh
+        if: matrix.group == 'suites-3'
       - run: bash tests/whats-new.sh
-        if: matrix.shard == 3
+        if: matrix.group == 'suites-3'
+      # Nothing the kit makes in TMPDIR outlives its run: dry runs, the data and
+      # add-ons tables, the launcher download - on success, die(), and signals.
+      - run: bash tests/temp-cleanup.sh
+        if: matrix.group == 'suites-14'
       # The two PowerShell-native suites had NO caller anywhere -- not this
       # workflow, not their shell siblings, not a script. They document
       # themselves as `pwsh tests/<name>.ps1` and were simply never run by
@@ -942,7 +1298,7 @@ jobs:
       # exists, and finding its next unresolved call by pushing and waiting
       # costs a full CI round each time.
       - run: bash tests/lib/ps-uninstall-calls.sh
-        if: matrix.shard == 1
+        if: matrix.group == 'suites-5'
       # ONE LEG HAS TO INSIST. This used to skip on any runner without pwsh and
       # exit 0 either way, so macos-latest (which has none) reported success
       # having run nothing, and ubuntu-latest was the only thing covering these
@@ -957,21 +1313,50 @@ jobs:
       - name: PowerShell available (required on Linux)
         if: matrix.os == 'ubuntu-latest'
         run: pwsh --version
-      - name: PowerShell-native suites
-        if: matrix.shard == 4
+      - name: PowerShell-native suites (1 of 2)
+        if: matrix.group == 'suites-2'
+        env:
+          EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -File tests/shim-update-ps.ps1
+            pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/personal-s3-ps.ps1
+            pwsh -NoProfile -File tests/tls-pin-ps.ps1
+            pwsh -NoProfile -File tests/addon-help-ps.ps1
+            pwsh -NoProfile -File tests/sql-quoting-ps.ps1
+            pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
+          elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
+            echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
+            exit 1
+          else
+            echo "pwsh not installed on this runner - PowerShell suites skipped"
+          fi
+      - name: PowerShell-native suites (2 of 2)
+        if: matrix.group == 'suites-9'
         env:
           EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
         run: |
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
-            pwsh -NoProfile -File tests/shim-update-ps.ps1
-            pwsh -NoProfile -File tests/addon-launcher-ps.ps1
+            pwsh -NoProfile -File tests/component-ownership-ps.ps1
             pwsh -NoProfile -File tests/uninstall-leftovers-ps.ps1
-            pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/mcp-sidecar-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
-            pwsh -NoProfile -File tests/personal-s3-ps.ps1
-            pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
+            pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
+            pwsh -NoProfile -File tests/addon-activity-ps.ps1
+            pwsh -NoProfile -File tests/personas-ps.ps1
+            pwsh -NoProfile -File tests/env-file-ps.ps1
+            pwsh -NoProfile -File tests/menu-mouse-ps.ps1
+            pwsh -NoProfile -File tests/table-menu-ps.ps1
+            pwsh -NoProfile -File tests/lakehouse-picker-ps.ps1
+            pwsh -NoProfile -File tests/mcp-admin-sql-ps.ps1
+            pwsh -NoProfile -File tests/update-targets-ps.ps1
+            pwsh -NoProfile -File tests/dataset-asset-ps.ps1
+            pwsh -NoProfile -File tests/data-question-ps.ps1
+            pwsh -NoProfile -File tests/db-clock-skew-ps.ps1
+            pwsh -NoProfile -File tests/temp-cleanup-ps.ps1
             pwsh -NoProfile -File tests/exapump-stdin-bom-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
@@ -979,13 +1364,17 @@ jobs:
           else
             echo "pwsh not installed on this runner - PowerShell suites skipped"
           fi
-      # The crossing suite is the one long PowerShell run (seven minutes on
-      # either runner), so it has a shard to itself; beside its shell sibling
-      # the two ran back to back for fifteen.
-      - name: PowerShell crossing suite
-        if: matrix.shard == 5
+      # The crossing suite is the one long PowerShell run (eleven minutes on
+      # the macOS runner whole), so it runs as four ps-crossing-N slices of its
+      # numbered sections (EXAKIT_LC_SECTIONS, the same seams windows-ps51.yml
+      # cuts it along: its slices taken in pairs). Each slice hands in what it
+      # reached, and ps-crossing-coverage holds the coverage floor over all four.
+      - name: PowerShell crossing suite, slice
+        if: startsWith(matrix.group, 'ps-crossing-')
         env:
           EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          EXAKIT_LC_SECTIONS: ${{ fromJSON('{"ps-crossing-1":"1,2,3,4,5,6,7,8,9,10","ps-crossing-2":"11,12,13","ps-crossing-3":"14,15,16,18,20,21,22","ps-crossing-4":"17,19,23,24,25"}')[matrix.group] }}
+          EXAKIT_LC_COVERAGE_OUT: ${{ runner.temp }}/legacy-crossing-coverage-${{ matrix.group }}.txt
         run: |
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
@@ -995,6 +1384,38 @@ jobs:
           else
             echo "pwsh not installed on this runner - PowerShell suites skipped"
           fi
+      - uses: actions/upload-artifact@v4
+        if: startsWith(matrix.group, 'ps-crossing-')
+        with:
+          name: ps-crossing-coverage-${{ matrix.os }}-${{ matrix.group }}
+          path: ${{ runner.temp }}/legacy-crossing-coverage-${{ matrix.group }}.txt
+          if-no-files-found: error
+          retention-days: 1
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
-        if: matrix.shard == 2
+        if: matrix.group == 'suites-7'
+
+  # The PowerShell crossing suite's coverage floor over its four slices on
+  # each runner, and a refusal of any slice set that leaves a section out
+  # (tests/legacy-crossing-ps.ps1, "slices"). Reading which module lines are
+  # executable is text work, so it runs where a runner starts fastest.
+  ps-crossing-coverage:
+    name: PowerShell crossing coverage floor (${{ matrix.os }})
+    needs: shell-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ps-crossing-coverage-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/legacy-crossing-coverage
+          merge-multiple: true
+      - name: the crossing's coverage floor, over every slice
+        env:
+          EXAKIT_LC_COVERAGE_MERGE: ${{ runner.temp }}/legacy-crossing-coverage
+          EXAKIT_LC_COVERAGE_PARTS: "4"
+        run: pwsh -NoProfile -File tests/legacy-crossing-ps.ps1

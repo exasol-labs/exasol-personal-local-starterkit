@@ -29,3 +29,9 @@ versions.json text eol=lf
 # export-ignore keeps it in the repo (browsable, cloneable, linkable) while
 # dropping it from the archive GitHub builds with `git archive`.
 static/*.mp4 export-ignore
+
+# Not part of this release (hidden=yes in their dataset.conf: not offered, listed
+# or loaded): their data stays in the repo but not in the archive users install.
+data/datasets/tpch/data export-ignore
+data/datasets/energy/data export-ignore
+data/datasets/weather/data export-ignore

@@ -1,0 +1,47 @@
+# JSON Tables (wrap) as a module of the SQL preprocessor framework.
+# The framework's module manifest (docs/module-authoring.md, v0.9.1) plus the
+# kit's [kit] table; registered by setup/preprocessor/manage.py register-module.
+#
+# Generated, not pinned: what the module rewrites depends on the wrapper
+# surfaces installed in this database (`exasol-json-tables wrap install`,
+# `ingest-and-wrap`), so generate.py builds the artifact from them each time
+# they change, and the kit deploys it as the next _V<N>.
+name = "json_tables"
+description = "JSON Tables query syntax (dotted paths, array iteration, JSON helpers, TO_JSON) on every installed wrapper surface, for every user."
+phase = "TRANSLATE"
+script_name = "PREPROC_RT.JSON_TABLES_V{VERSION}"
+function = "json_tables"
+min_framework = "0.9.1"
+deploy_mode = "self-deployed"
+
+# Every user: the administrator, the MCP read-only login, Dash Server, and users
+# made later once the next `exakit update` refreshes the framework's rule
+# resolution - as upstream's per-session preprocessor reached any session that
+# switched to it, without a session having to switch.
+[suggested_scope]
+type = "ROLE"
+value = "PUBLIC"
+
+[source]
+repo = "exasol-labs/exasol-json-tables"
+ref = "v0.4.1"
+
+[[objects]]
+type = "LUA SCALAR SCRIPT"
+name = "PREPROC_RT.JSON_TABLES_REFUSE_V{VERSION}"
+
+[[objects]]
+type = "LUA SCRIPT"
+name = "PREPROC_RT.JSON_TABLES_LIB_V{VERSION}"
+
+[[objects]]
+type = "LUA SCRIPT"
+name = "PREPROC_RT.JSON_TABLES_V{VERSION}"
+
+[kit]
+addon = "json-tables"
+label = "JSON Tables"
+receipt = "components.json_tables"
+generated = true
+generator = ["{python}", "{kit_root}/setup/preprocessor/modules/json-tables/generate.py",
+             "--home", "{home}", "--exapump", "{exapump}", "--profile", "{profile}", "{out}"]

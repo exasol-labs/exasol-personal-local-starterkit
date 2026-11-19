@@ -29,6 +29,11 @@ _REAL_KIT_DIR="$HOME/.exasol-starter-kit"
 export HOME="$WORK/home" EXAKIT_HOME="$WORK/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$WORK/home/bin"
 mkdir -p "$HOME"
 unset XDG_CONFIG_HOME
+# Offline as well. `exakit version` and `exakit update` ask upstream for
+# versions.json, so those calls fetched it from raw.githubusercontent.com (one
+# with PATH reset to the system directories, past any stubbed curl). A non-https
+# URL is refused without a request, as in tests/versions-manifest.sh.
+export EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
 
 # The command surface now lives in setup/help/*.json (one document per
 # component plus one for the CLI), not in a TSV. This prints every command
@@ -172,6 +177,126 @@ print(d['model'],
 printf 'not json' > "$_alh/.claude/settings.json"
 check "a malformed file is left alone" "SKIP unreadable|not json" \
     "$(HOME="$_alh" exakit_apply_readonly_allowlist)|$(cat "$_alh/.claude/settings.json")"
+
+echo "the allowlist merge keeps the file private and approves only what is the kit's (MCP-04):"
+_m4="$WORK/allow-m4"; mkdir -p "$_m4/.claude"
+_m4_manifest="$WORK/allow-m4-manifest.json"
+# The kit recorded its Claude Code entry beside the user's own `exasol` server.
+cat > "$_m4_manifest" <<'JSON'
+{"manifest_version": 1, "components": {"mcp_server": {"managed_state": {"artifacts": [
+  {"client": "claude_code", "path": "/u/.claude.json", "metadata": {"entry_name": "exasol-starter-kit", "server": "exasol"}}]}}}}
+JSON
+printf '{\n    "env": {"API_TOKEN": "placeholder"},\n    "permissions": {"allow": ["Bash(exakit status:*)"]}\n}\n' > "$_m4/.claude/settings.json"
+chmod 600 "$_m4/.claude/settings.json"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_apply_readonly_allowlist >/dev/null
+check "an owner-only settings file stays owner-only" "600" \
+    "$(python3 -c "import os,stat; print(oct(stat.S_IMODE(os.stat('$_m4/.claude/settings.json').st_mode))[2:])")"
+check "the MCP tools are approved for the kit's entry, never the user's exasol" "mcp__exasol-starter-kit|no mcp__exasol" "$(python3 -c "
+import json; a=json.load(open('$_m4/.claude/settings.json'))['permissions']['allow']
+print('|'.join([r for r in a if r.startswith('mcp__')]) + ('|MCP__EXASOL' if 'mcp__exasol' in a else '|no mcp__exasol'))")"
+check "mcp-doctor: only the report form, never the repairing one" "3 0" "$(python3 -c "
+import json; a=json.load(open('$_m4/.claude/settings.json'))['permissions']['allow']
+print(len([r for r in a if r.endswith('mcp-doctor --json)')]), len([r for r in a if 'mcp-doctor:' in r]))")"
+check "the rules the kit added are recorded, and the user's own is not" "yes no" "$(python3 -c "
+import json; r=json.load(open('$_m4_manifest'))['components']['skills']['claude_rules']
+print('yes' if 'mcp__exasol-starter-kit' in r else 'no', 'yes' if 'Bash(exakit status:*)' in r else 'no')")"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_remove_readonly_allowlist >/dev/null
+check "uninstall keeps the rule the user had before the kit, and the file's mode" "Bash(exakit status:*)|600" "$(python3 -c "
+import json,os,stat; p='$_m4/.claude/settings.json'; a=json.load(open(p))['permissions']
+print('|'.join(a['allow'] + a['deny']) + '|' + oct(stat.S_IMODE(os.stat(p).st_mode))[2:])")"
+rm -f "$_m4/.claude/settings.json"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_apply_readonly_allowlist >/dev/null
+check "a settings file the kit creates is owner-only" "600" \
+    "$(python3 -c "import os,stat; print(oct(stat.S_IMODE(os.stat('$_m4/.claude/settings.json').st_mode))[2:])")"
+# An older kit (0.2.5) wrote mcp__exasol and mcp-doctor:* and recorded nothing:
+# those are retired on the next merge, its other rules taken as its own.
+printf '{"permissions": {"allow": ["mcp__exasol", "Bash(exakit mcp-doctor:*)", "Bash(git status:*)"]}}' > "$_m4/.claude/settings.json"
+printf '{"manifest_version": 1, "components": {"skills": {"installed": ["exakit"]}, "mcp_server": {"managed_state": {"artifacts": [{"client": "claude_code", "path": "/u/.claude.json", "metadata": {"entry_name": "exasol-starter-kit", "server": "exasol"}}]}}}}' > "$_m4_manifest"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_apply_readonly_allowlist >/dev/null
+check "an older kit's mcp__exasol and mcp-doctor:* are retired" "gone gone kept" "$(python3 -c "
+import json; a=json.load(open('$_m4/.claude/settings.json'))['permissions']['allow']
+print('KEPT' if 'mcp__exasol' in a else 'gone', 'KEPT' if 'Bash(exakit mcp-doctor:*)' in a else 'gone', 'kept' if 'Bash(git status:*)' in a else 'GONE')")"
+# No Claude Code entry recorded: no MCP rule at all.
+printf '{"manifest_version": 1, "components": {}}' > "$_m4_manifest"; rm -f "$_m4/.claude/settings.json"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_apply_readonly_allowlist >/dev/null
+check "no Claude Code entry of the kit's: no MCP tool is pre-approved" "0" "$(python3 -c "
+import json; a=json.load(open('$_m4/.claude/settings.json'))['permissions']['allow']
+print(len([r for r in a if r.startswith('mcp__')]))")"
+has "the doc no longer calls mcp-doctor read-only" 'exakit mcp-doctor --json` (the report only' "$(sed -n '1,25p' "$ROOT/skills/reducing-agent-prompts.md")"
+# The block the doc calls "the complete list" is exactly what the merge writes.
+printf '{"manifest_version": 1, "components": {"mcp_server": {"managed_state": {"artifacts": [{"client": "claude_code", "metadata": {"entry_name": "exasol", "server": "exasol"}}]}}}}' > "$_m4_manifest"
+rm -f "$_m4/.claude/settings.json"
+HOME="$_m4" EXAKIT_MANIFEST="$_m4_manifest" exakit_apply_readonly_allowlist >/dev/null
+_doc_py='import json, sys
+fence = chr(96) * 3
+written = json.load(open(sys.argv[1]))["permissions"]
+text = open(sys.argv[2], encoding="utf-8").read()
+start = text.index(fence + "json") + 7
+doc = json.loads(text[start:text.index(fence, start)])["permissions"]
+print(written["allow"] == doc["allow"], written["deny"] == doc["deny"])'
+check "the doc's Claude Code block is the list the merge writes" "True True" \
+    "$(python3 -c "$_doc_py" "$_m4/.claude/settings.json" "$ROOT/skills/reducing-agent-prompts.md")"
+
+# UGR-01: a 0.2.5 upgrader. Its update ends in 0.2.5's own skills install over
+# this kit copy, which writes 0.2.5's list (mcp-doctor:* in all three spellings)
+# and records this copy's skills version, so the next `exakit update` reads the
+# skills as current and never reached the merge: the repairing mcp-doctor stayed
+# pre-approved for good. The update applies this kit's list once, when no rule
+# record exists. 0.2.5's list as its _exakit_readonly_allowlist wrote it
+# (14df2ecb setup/lib/common.sh), beside a rule of the user's own.
+_ug="$WORK/ugr01"; mkdir -p "$_ug/.claude"
+python3 - "$_ug/.claude/settings.json" <<'PY'
+import json, sys
+READONLY = ["status", "info", "version", "mcp-doctor", "logs", "catalog", "preflight", "guide", "mcp-status", "help"]
+PREFIXES = ["exakit", "~/.local/bin/exakit", "$HOME/.local/bin/exakit"]
+allow = []
+for prefix in PREFIXES:
+    allow += ["Bash(%s %s:*)" % (prefix, c) for c in READONLY]
+    allow += ["Bash(%s skills)" % prefix, "Bash(%s skills --json)" % prefix]
+allow += ["mcp__exasol", "Bash(git status:*)"]
+deny = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
+json.dump({"permissions": {"allow": allow, "deny": deny}}, open(sys.argv[1], "w"), indent=2)
+PY
+printf '{"manifest_version": 1, "kit": {"version": "0.3.0"}, "components": {"skills": {"version": "1.0", "installed": ["exakit-lifecycle", "exasol-mcp"]}, "mcp_server": {"managed_state": {"artifacts": [{"client": "claude_code", "path": "/u/.claude.json", "metadata": {"entry_name": "exasol", "server": "exasol"}}]}}}}\n' > "$_ug/manifest.json"
+# _ug_update - `exakit update` with every row current (the skills among them).
+_ug_update() (
+    HOME="$_ug"; EXAKIT_MANIFEST="$_ug/manifest.json"
+    exakit_print_versions_source_line() { :; }
+    exakit_update_actual_target() { printf '%s\n' "$1"; }
+    exakit_component_current() { printf '1.0\n'; }
+    exakit_component_available() { printf '1.0\n'; }
+    exakit_component_supported() { return 0; }
+    exakit_component_is_ahead() { return 1; }
+    exakit_component_is_heavy() { return 1; }
+    exakit_component_min_kit() { return 1; }
+    exakit_component_is_managed() { return 0; }
+    exakit_core_update_check() { :; }
+    exakit_update_component() { echo "UPDATER-RAN $1"; }
+    exakit_autostart_refresh() { :; }
+    exakit_skills_unplaced() { return 1; }
+    _exakit_update_run all "skills" 2>&1
+)
+_ug_out="$(_ug_update)"
+lacks "the skills row stays current (nothing re-placed)" "UPDATER-RAN" "$_ug_out"
+check "the update retires 0.2.5's repairing mcp-doctor:* in every spelling" "0 3" "$(python3 -c "
+import json; a=json.load(open('$_ug/.claude/settings.json'))['permissions']['allow']
+print(len([r for r in a if 'mcp-doctor:' in r]), len([r for r in a if r.endswith('mcp-doctor --json)')]))")"
+check "...keeps the user's own rule" "kept" "$(python3 -c "
+import json; a=json.load(open('$_ug/.claude/settings.json'))['permissions']['allow']
+print('kept' if 'Bash(git status:*)' in a else 'GONE')")"
+check "...and records the kit's rules, so it runs once" "yes" "$(python3 -c "
+import json; s=json.load(open('$_ug/manifest.json'))['components']['skills']
+print('yes' if isinstance(s.get('claude_rules'), list) and s['claude_rules'] else 'no')")"
+python3 - "$_ug/.claude/settings.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["permissions"]["allow"] = [r for r in doc["permissions"]["allow"] if r != "Bash(exakit logs:*)"]
+json.dump(doc, open(sys.argv[1], "w"), indent=2)
+PY
+_ug_update >/dev/null
+check "a later update leaves a kit rule the user took out alone" "absent" "$(python3 -c "
+import json; a=json.load(open('$_ug/.claude/settings.json'))['permissions']['allow']
+print('READDED' if 'Bash(exakit logs:*)' in a else 'absent')")"
 
 echo "the database error translator:"
 has "connection refused names exakit start" "exakit start" \
@@ -402,7 +527,7 @@ has "and the suite asserts it left the real home clean" "no failure note in the 
 _cli_t="$(sed -n '/class StaleVersionPinCLITests/,$p' "$ROOT/mcp/tests/test_stale_version_pin.py")"
 has "the CLI stale-pin test binds its own listener" "socket.socket(socket.AF_INET" "$_cli_t"
 # The manifest must carry the port the test itself bound, not a fixed one.
-has "and writes that port into its manifest" '_write_manifest(self.dsn)' "$_cli_t"
+has "and writes that port into its manifest" '_write_manifest(self.dsn,' "$_cli_t"
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +725,18 @@ has "loaded datasets are verified against the database, not just read" \
     "exakit_verified_datasets" "$(sed -n '/^exakit_loaded_datasets()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "and the PowerShell twin verifies too" "Get-ExakitVerifiedDatasets" \
     "$(sed -n '/^function Get-ExakitLoadedDatasets/,/^}/p' "$ROOT/setup/exakit.ps1")"
+# THE 0.2.5 -> 0.3.0 UPGRADE: TPC-H is kit 0.2.5's sample and hidden=yes in this
+# release, and status said "none loaded" (datasets_loaded []) over its 173,745
+# rows. What an earlier kit loaded is still the kit's data. The database is a
+# stub that has TPC-H's marker tables. Twin: tests/data-load-shapes-ps.ps1.
+check "TPC-H is hidden in this release" "yes" \
+    "$(grep -qx 'hidden=yes' "$ROOT/data/datasets/tpch/dataset.conf" && echo yes || echo no)"
+check "...and loaded by an earlier kit, status lists it" "tpch" "$( (
+    . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/exapump.sh"
+    exakit_db_reachable() { return 0; }
+    _exakit_exapump_sql_within() { printf 'QUALIFIED\nTPCH.CUSTOMER\nTPCH.ORDERS\nTPCH.LINEITEM\n'; }
+    manifest_set_many() { cat >/dev/null; }
+    exakit_verified_datasets 5 | grep -x tpch ) 2>/dev/null )"
 # THE SECOND HALF: the self-heal wrote data.loaded (tpch's flag= override) while
 # status read data.datasets.tpch.loaded, so the heal fired and status kept lying.
 has "the self-heal writes the key status reads" "data.datasets.\${_dl_id}.loaded" \
@@ -731,6 +868,68 @@ has "with the target table" "EXAKIT_DATA_TABLE" \
     "$(sed -n '/^function Import-ExakitLocalFile/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
 has "the catalog documents EXAKIT_DATA_FILE" "EXAKIT_DATA_FILE" "$(cat "$ROOT/setup/help/exakit.json")"
 has "and EXAKIT_DATA_TABLE" "EXAKIT_DATA_TABLE" "$(cat "$ROOT/setup/help/exakit.json")"
+
+echo "connect's public IP lookup has a documented off switch and a fixed JSON key:"
+# exakit connect asks checkip.amazonaws.com for this computer's public IP when a
+# source is on the internet. An agent on a locked-down network must be able to
+# find the switch that stops it, and read the answer by one key.
+has "the engine reads EXAKIT_NO_IP_LOOKUP" "EXAKIT_NO_IP_LOOKUP" \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/publicip.py")"
+check "the catalog documents it (global list and connect's own)" "2" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum("EXAKIT_NO_IP_LOOKUP" in json.dumps(x) for x in [d["environment"], [c for c in d["commands"] if c["command"] == "connect"][0]]))' "$ROOT/setup/help/exakit.json")"
+has "connect's help names the --json key" "public_ip" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "plan and connect --json always carry it" 'payload.setdefault("public_ip"' \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/cli.py")"
+echo "exakit connect --json is one object on stdout, through the real entry point:"
+# Scripts and agents parse what `exakit connect ... --json` prints. It used to
+# be the rendered plan and event lines (a real connect never asked the engine
+# for JSON at all) - so json.load failed on every path, success included. A
+# hermetic kit: a manifest, the engine run by this python3 as the kit's
+# pyexasol, and the suite's simulated database; nothing is downloaded (a dry
+# run, and refusals that stop before anything is staged).
+_vk="$WORK/vskit"; mkdir -p "$_vk/home" "$_vk/venv/bin" "$_vk/deploy/local/runtime/exa/jdbc"
+printf '{"runtime": {"type": "personal", "deployment_dir": "%s", "dsn": "127.0.0.1:8563", "user": "sys", "password_file": "/nonexistent"}}\n' \
+    "$_vk/deploy" > "$_vk/home/manifest.json"
+printf '#!/bin/sh\nexec python3 "$@"\n' > "$_vk/venv/bin/python"; chmod +x "$_vk/venv/bin/python"
+printf '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}\n' > "$_vk/db.json"
+_vsconnect() { # stdout only; stdin closed
+    env EXAKIT_HOME="$_vk/home" EXAKIT_PYEXASOL_VENV="${_VK_VENV:-$_vk/venv}" PATH="$_HERMETIC_PATH" \
+        EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$_vk/db.json" \
+        FAKE_VS_EXA="$_vk/deploy/local/runtime/exa" EXAKIT_NO_IP_LOOKUP=1 EXAKIT_VS_SETTLE_SECONDS=0 \
+        bash "$ROOT/setup/exakit" connect "$@" < /dev/null 2>/dev/null
+}
+# _vsone <python over d> - the expression when stdout was exactly one JSON object.
+_vsone() { python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("NOT-ONE-OBJECT"); sys.exit()
+print(eval(sys.argv[1], {"d": d}) if isinstance(d, dict) else "NOT-ONE-OBJECT")' "$1"; }
+_vsshape='" ".join(str(x) for x in [d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d, "public_ip" in d])'
+_pg="--set host=pg.example.com --set database=sales --set user=reader"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentdry $_pg --dry-run --json)"; _rc=$?
+check "connect --dry-run --json: exit 0, one object (the plan, public_ip present)" "0 True agentdry True" \
+    "$_rc $(printf '%s' "$_o" | _vsone '" ".join(str(x) for x in [d["ok"], d["name"], "public_ip" in d])')"
+_o="$(_vsconnect nosuchdb --name x --json)"; _rc=$?
+check "an unknown connector: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+check "...and its command is runnable as written" "exakit source catalog" "$(printf '%s' "$_o" | _vsone 'd["command"]')"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentpw $_pg --json)"; _rc=$?
+check "no credential on stdin: exit 2, one failure object, nothing asked" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentbad $_pg --set port=70000 --json)"; _rc=$?
+check "a bad input: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+_o="$(_vsconnect pg --name x --no-such-option --json)"; _rc=$?
+check "an unknown option: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_VK_VENV="$WORK/no-such-venv" _vsconnect pg --name x $_pg --json)"; _rc=$?
+check "no pyexasol to run the engine: exit 2, one failure object" "2 False setup True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+has "connect's help says --json is one object, and its failure keys" '"ok": false, "error"' \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "AGENTS.md documents the connect --json failure shape" '`connect --json` and `source ... --json`' "$(cat "$ROOT/AGENTS.md")"
+
 # The runbook must stop steering agents away from data-load: that sentence
 # described the prompt-only behaviour this contract replaces.
 lacks "AGENTS.md no longer routes agents around data-load" \
@@ -782,16 +981,9 @@ has "with an opt-out for offline runs" "EXAKIT_MCP_SKIP_SERVER_PROBE" "$(cat "$R
 # spawn a subprocess or reach the network.
 lacks "it is not in the default stage list" '"server_launch",' \
     "$(sed -n '/    stages: tuple\[str, ...\] = (/,/    )/p' "$ROOT/mcp/core/models.py")"
-# communicate() closes stdin, and an MCP stdio server treats that EOF as "client
-# gone" and exits without answering -- measured against the real server, which
-# never replied to tools/list. The fix is to write the requests and leave the
-# pipe open, draining stdout on a thread until the answer lands.
-has "the handshake keeps stdin open while it waits" "process.stdin.flush()" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-lacks "and does not hand the requests to communicate()" "= process.communicate(" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-has "the server's stderr is never read into a finding" "stderr=subprocess.DEVNULL" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
+# The server is the launcher's sidecar, over HTTP: the doctor reaches it there
+# and never starts a stdio server of its own.
+lacks "the doctor starts no stdio server" "def _mcp_handshake" "$(cat "$ROOT/mcp/validator/service.py")"
 
 echo "the install record does not contradict itself:"
 # THE BUG: connection.schemas ["STARTER_KIT"] reads as "this user can only see
@@ -810,6 +1002,49 @@ echo "the small promises hold too:"
 # date off line 2, and install.sh's own fail() wrote only line 1.
 has "install.sh dates its failure note" "date '+%Y-%m-%d %H:%M:%S'" "$(cat "$ROOT/install.sh")"
 has "and install.ps1 writes one at all" ".last-failure" "$(cat "$ROOT/install.ps1")"
+# install.sh's own say() and fail() coloured every line, terminal or not:
+# a redirected install log read "[1;34m•[0m Using local kit checkout".
+# They follow ui_detect now - a terminal, no NO_COLOR, no EXAKIT_NO_FANCY=1.
+# A dry run of a local kit that is only install.sh: nothing is fetched, the
+# kit lands in a scratch folder, and the plan falls back to plain text.
+_ik="$WORK/install-kit"; mkdir -p "$_ik" "$WORK/install-tmp"
+cp "$ROOT/install.sh" "$_ik/"
+_inst() { env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+_esc="$(printf '\033')"
+_out="$(_inst)"
+has "install.sh says its steps when piped" "Using local kit checkout" "$_out"
+lacks "...with no escape sequence in a redirected log" "$_esc" "$_out"
+_out="$(env EXAKIT_HOME="$WORK/install-home" EXAKIT_LOCAL_KIT="$WORK/not-a-kit" TERM=xterm sh "$ROOT/install.sh" 2>&1)"
+has "install.sh's fail() says why when piped" "does not look like a kit checkout" "$_out"
+lacks "...with no escape sequence either" "$_esc" "$_out"
+# Under a terminal (script(1): BSD on macOS, util-linux elsewhere) colour
+# stays, and each opt-out turns it off.
+_pty() {
+    if [ "$(uname -s)" = Darwin ]; then
+        script -q /dev/null "$@" < /dev/null
+    else
+        script -qec "$(printf '%q ' "$@")" /dev/null < /dev/null
+    fi
+}
+if [ -n "$(_pty sh -c '[ -t 1 ] && echo tty' 2>/dev/null)" ]; then
+    _tty() { _pty env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+    has "on a terminal install.sh still colours its steps" "${_esc}[1;34m" "$(_tty)"
+    lacks "...not with NO_COLOR set" "${_esc}[1;34m" "$(_tty NO_COLOR=1)"
+    lacks "...not with EXAKIT_NO_FANCY=1" "${_esc}[1;34m" "$(_tty EXAKIT_NO_FANCY=1)"
+    lacks "...not on TERM=dumb" "${_esc}[1;34m" "$(_tty TERM=dumb)"
+else
+    check "no pseudo-terminal here: the terminal cases are skipped" "skip" "skip"
+fi
+# install.ps1: Write-Host writes no colour into a redirected stream, but
+# Windows PowerShell 5.1 coloured the console past NO_COLOR and
+# EXAKIT_NO_FANCY=1. Every coloured line goes through one helper that asks both.
+has "install.ps1 asks NO_COLOR and EXAKIT_NO_FANCY before colouring" \
+    '$InstallColour = (-not $env:NO_COLOR) -and ($env:EXAKIT_NO_FANCY -ne "1")' "$(cat "$ROOT/install.ps1")"
+check "...and colours nowhere else" "1" "$(grep -c -- '-ForegroundColor' "$ROOT/install.ps1")"
+# PowerShell hoists the trap, not functions: the helper the trap prints
+# through is defined before the first statement that can fail.
+check "...defined before \$ErrorActionPreference and the trap" "yes" \
+    "$(awk '/^function Write-InstallLine/ && !f {f=NR} /^\$ErrorActionPreference = "Stop"/ && !e {e=NR} /^trap \{/ && !t {t=NR} END {print (f && e && t && f < e && e < t) ? "yes" : "no"}' "$ROOT/install.ps1")"
 # The skill's closing step names this directory; nothing created it.
 has "the workflows directory is created with the home" "EXAKIT_WORKFLOWS_DIR" \
     "$(sed -n '/^manifest_init()/,/^}/p' "$ROOT/setup/lib/common.sh")"
@@ -1002,7 +1237,8 @@ check "no skill advertises 'exakit autostart on'" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/skills" 2>/dev/null | wc -l | tr -d ' ')"
 check "...and no help document either" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/setup/help" 2>/dev/null | wc -l | tr -d ' ')"
-has "dash-server declares its url hook" 'dash_server_url()' "$(cat "$ROOT/setup/lib/dash-server.sh")"
+has "dash-server declares its url hook" 'dash-server|url|url' \
+    "$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
 
 echo
 echo "the lifecycle keeps its promises on the unhappy paths:"
@@ -1030,22 +1266,26 @@ has "...and names the deliberate write path" "exakit sql --write" \
     "$(sed -n '/insufficient privileges/,+8p' "$ROOT/setup/lib/common.sh")"
 # SAY-08: the documented Personal major-upgrade route is accepted by the
 # option guard instead of being a phantom.
-_su="$WORK/say08"; mkdir -p "$_su"
-printf '{\n  "runtime": {\n    "type": "personal"\n  }\n}\n' > "$_su/manifest.json"
+_su="$WORK/say08"; mkdir -p "$_su/bin"
+# This is a kit-owned launcher deliberately behind the advertised version,
+# independent of the developer's real PATH and ownership receipts.
+printf '#!/bin/sh\nprintf "exasol 2.2.0\\n"\n' > "$_su/bin/exasol"
+chmod +x "$_su/bin/exasol"
+printf '{"runtime":{"type":"personal","version":"2.2.0","ownership":"kit"},"components":{"personal":{"ownership":"kit","ownership_path":"%s/bin/exasol"}}}\n' "$_su" > "$_su/manifest.json"
+_su_before="$(cat "$_su/bin/exasol")"
 # EXAKIT_BIN_DIR sandboxed too, and not only for tidiness: this fixture runs
 # the REAL update path, and that path deletes $EXAKIT_PERSONAL_BIN before
 # installing. Unscrubbed it inherits the developer's ~/.local/bin and takes
 # their launcher with it - which is exactly what happened, downgrading a
 # working machine mid-test-run.
-_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
+_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" EXAKIT_VERSION_POLICY=pinned EXAKIT_PERSONAL_VERSION=2.3.0 PATH="$_su/bin:$PATH" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
 lacks "update runtime --plan is not refused" "Unknown option" "$_su_out"
 # ...and --plan DESCRIBES. It used to describe only across a major gap and
 # install across every other one, so the flag that promises to touch nothing
 # replaced the launcher binary without asking.
 lacks "update runtime --plan installs nothing" "Installing launcher" "$_su_out"
 has "...and says how to apply it instead" "Apply it with: exakit update personal" "$_su_out"
-check "...leaving no launcher behind" "absent" \
-    "$([ -e "$_su/bin/exasol" ] && echo PRESENT || echo absent)"
+check "...leaving the existing launcher unchanged" "$_su_before" "$(cat "$_su/bin/exasol")"
 # AGK-02: a DEAD installer answers with installing:false, the step it died at,
 # and remedies.install naming the re-run - the exact shape AGENTS.md promises.
 printf '{\n  "runtime": {\n    "type": "personal"\n  },\n  "install": {\n    "current_step": "mcp"\n  }\n}\n' > "$_su/manifest.json"
@@ -1124,16 +1364,31 @@ for _rp_ln in $(grep -n 'destroy --remove' "$_rp_file" \
     _rp_gate="$(printf '%s\n' "$_rp_head" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
     _rp_fn="$(printf '%s\n' "$_rp_head" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
     if [ -z "$_rp_gate" ] || [ "${_rp_gate:-0}" -lt "${_rp_fn:-0}" ]; then
-        _rp_ungated="$_rp_ungated $_rp_ln"
+        # A destroy inside a helper is gated when EVERY call of that helper is:
+        # each caller line needs a gate above it in its own function. One level
+        # deep, on purpose - a helper of a helper would hide the gate too well.
+        _rp_name="$(printf '%s\n' "$_rp_head" | sed -n "${_rp_fn:-0}p" | sed 's/() {.*//')"
+        _rp_callers="$(grep -n "\b$_rp_name\b" "$_rp_file" | grep -v "^[0-9]*:$_rp_name() {" | grep -v '^[0-9]*:[[:space:]]*#' | cut -d: -f1)"
+        [ -n "$_rp_callers" ] || _rp_ungated="$_rp_ungated $_rp_ln"
+        for _rp_cl in $_rp_callers; do
+            _rp_chead="$(sed -n "1,${_rp_cl}p" "$_rp_file")"
+            _rp_cgate="$(printf '%s\n' "$_rp_chead" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
+            _rp_cfn="$(printf '%s\n' "$_rp_chead" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
+            if [ -z "$_rp_cgate" ] || [ "${_rp_cgate:-0}" -lt "${_rp_cfn:-0}" ]; then
+                _rp_ungated="$_rp_ungated $_rp_ln(via $_rp_cl)"
+            fi
+        done
     fi
 done
 check "no deploy path destroys without consent" "none" "${_rp_ungated:-none}"
 # ...and the enumeration is not vacuously empty: if the grep above stops
 # matching (the launcher subcommand gets renamed, say), the loop body never
 # runs and the check above passes having examined nothing.
+# Two today: the one destroy, in personal_destroy (its callers are the gated
+# sites, checked above), and the rollback registration.
 _rp_sites="$(grep -c 'destroy --remove' "$_rp_file")"
 check "...and the destroy sites were actually found" "yes" \
-    "$([ "${_rp_sites:-0}" -ge 3 ] && echo yes || echo no)"
+    "$([ "${_rp_sites:-0}" -ge 2 ] && grep -q '^personal_destroy() {' "$_rp_file" && echo yes || echo no)"
 # MAC-01: one PATH-persistence policy - the second writer delegates to the
 # Darwin-aware ensure_path_hint instead of preferring ~/.bashrc.
 has "the second PATH writer delegates to the one Darwin-aware policy" \
@@ -1372,6 +1627,7 @@ _p2gate_setup() { # _p2gate_setup <os> <with-podman:0|1> [installable] -> all ou
         confirm_env() { return 0; }
         . "$0/setup/lib/detect.sh" 2>/dev/null
         detect_os() { echo "'"$1"'"; }
+        detect_musl() { [ "${EXAKIT_TEST_MUSL:-0}" = 1 ]; }
         detect_arch() { echo arm64; }
         detect_ram_gb() { echo 16; }
         detect_free_disk_gb() { echo 100; }
@@ -1440,6 +1696,17 @@ check "gate(linux, no podman but installable) carries on" \
     "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 0 1)"
 check "gate(wsl, no podman but installable) carries on" \
     "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(_p2gate wsl 0 1)"
+# LNX-06: a musl Linux (Alpine) is refused before anything is installed.
+_p2musl="$(EXAKIT_TEST_MUSL=1 _p2gate_setup linux 1)"
+has "gate(linux) refuses a musl system" "DIED: Unsupported C library: musl" "$_p2musl"
+check "gate(linux) on glibc passes" \
+    "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 1)"
+# WSL-06: a kit home on a Windows drive is refused BEFORE any password is
+# written there - the preflight warned, the install itself wrote them first.
+_p2drvfs="$(EXAKIT_HOME=/mnt/c/Users/me/.exasol-starter-kit _p2gate_setup wsl 1)"
+has "gate(wsl) refuses a kit home on a Windows drive" "DIED: Kit home on a Windows drive" "$_p2drvfs"
+check "gate(wsl) takes a kit home on the Linux filesystem" \
+    "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(EXAKIT_HOME=/home/me/.exasol-starter-kit _p2gate wsl 1)"
 # ...and it is the DATABASE step that does it, not the gate: a package install
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
@@ -1556,8 +1823,13 @@ done
 _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
-check "...guarding all four of them" "4"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
-has "...and the exakit helper still runs" "begin_step exakit_helper" "$_p2kss"
+check "...guarding all three of them (Setup Utilities' database items, data, AI bridge)" "3"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
+# The helper runs inside the last item of Setup Utilities (kit_helper_step,
+# through _kss_helper, called from kit_shared_steps - 5d3c54bd): it still
+# installs without a database, outside that guard.
+has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+has "...as the last item of Setup Utilities" '_kss_helper' "$_p2kss"
+has "...which is kit_helper_step" 'kit_helper_step "" "" "$_script_dir" "$_kit_root"' "$(sed -n '/^_kss_helper()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
 # kit cannot retry it - but a machine whose winget refused must reach the end of
@@ -1569,7 +1841,8 @@ has "...leaving the same kind of reason"     'Set-ExakitFailureReason "Podman is
 has "...and the windows step records it"     'Register-ExakitSoftFailure -Component "runtime"' "$_p2winsu"
 check "...on both arms, like the sh side" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'Register-ExakitSoftFailure -Component "runtime"')"
 has "...and the db-dependent steps skip in one line"     "they all need the database, which is not installed" "$_p2winsu"
-check "...guarding all four of them too" "4"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
+check "...guarding the rest too: the AI bridge and its client offers" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
+check "...and Setup Utilities' database items as one block" "1"     "$(printf '%s' "$_p2winsu" | grep -c '^    if (\$dbReady) {$')"
 
 # THE REPAIR IS THE INSTALLER. `exakit update` only moves components with a
 # newer advertised version, so a deployment that never happened is "already
@@ -1608,7 +1881,8 @@ has "...and says what podman said" "What it said" "$_p2run"
 has "...leaving a reason for the summary" "exakit_note_failure" "$_p2run"
 has "...and it is a soft failure like the rest" "return 1" "$_p2run"
 _p2dep2="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
-has "the deployment asks before it deploys" "personal_podman_running || return 1" "$_p2dep2"
+has "the deployment asks its engine (Docker or Podman since 2.4) before it deploys" "personal_engine_running docker || return 1" "$_p2dep2"
+has "...and Podman, when that is the engine" "personal_podman_running || return 1" "$_p2dep2"
 
 _p2winrun="$(sed -n '/^function Test-PersonalPodmanRunning/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p2winrun"
@@ -1617,8 +1891,15 @@ has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p
 has "...and starts a machine that is merely stopped" '"machine" "start"' "$_p2winrun"
 has "...only when it really is stopped" 'machine", "list"' "$_p2winrun"
 has "...putting the whole error in the log" 'Invoke-ExakitLogged $podman.Source "info"' "$_p2winrun"
+has "...and its last line on screen, like the sh side" "What it said" "$_p2winrun"
 has "...and naming the command that finishes the job" "re-run the installer" "$_p2winrun"
-has "the windows deploy asks before it deploys"     "elseif (-not (Test-PersonalPodmanRunning))" "$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
+# ...and before ANY branch: the engine's own readiness check (Docker answering,
+# or Podman's machine up) heads the deployment and the start alike, so a broken
+# engine is named before anything waits on it or is replaced.
+has "the windows deploy asks its engine before it deploys"     'Test-PersonalEngineRunning "docker"' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and Podman, when that is the engine"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and so does the windows start"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and Docker, when the deployment runs on it"     'Test-PersonalDockerUsable' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 
 # ---------------------------------------------------------------------------
 # A START THE LAUNCHER ACCEPTED IS NOT A DATABASE
@@ -1707,8 +1988,10 @@ lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
 # existing deployment whose engine nothing can name, and an existing Docker
 # deployment whose daemon is down, stopped before its start and replace.
 # Sixteen with a replace refused because this run's start already failed on
-# the WSL kernel's nftables error (nothing is deleted).
-check "...set by each cause that leaves no database" "16" \
+# the WSL kernel's nftables error (nothing is deleted). Eighteen with a
+# deployment that never started: its replacement declined, or refused by the
+# WSL check before its destroy.
+check "...set by each cause that leaves no database" "18" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \
@@ -1808,6 +2091,145 @@ check "ExecStart quotes an argument with a space" '"/Volumes/Data Disk/exasol" s
     "$(bash -c '. "'"$ROOT"'/setup/lib/common.sh" >/dev/null 2>&1; _exakit_autostart_argv_line "/Volumes/Data Disk/exasol
 start"')"
 
+# OSX-03 / LIN-01. The database's boot entry ran the bare launcher
+# (`exasol start`), so the language-container DNS repair that only the kit's
+# own start performs never ran after a reboot, and every virtual schema on a
+# host name failed until someone ran exakit start by hand. The entry now runs
+# `exakit start database` by its absolute path, with a PATH a login-less job
+# can find the launcher, the engine and Python on; `exakit update` rewrites an
+# entry an earlier kit wrote, without loading (and so starting) it. Written
+# for real here, in a sandbox home with launchctl/systemctl/loginctl stubbed.
+_ase="$WORK/asentry"; rm -rf "$_ase"
+mkdir -p "$_ase/stub" "$_ase/home/.exasol-starter-kit/logs" "$_ase/home/.local/bin" "$_ase/la" "$_ase/units"
+printf '{"manifest_version": 1, "runtime": {"type": "personal"}}\n' > "$_ase/home/.exasol-starter-kit/manifest.json"
+for _ase_t in launchctl systemctl loginctl; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n[ "$1" = --version ] && echo "systemd 255 (x)"\n[ "$2" = is-enabled ] && echo "${ASE_ENABLED:-enabled}"\nexit 0\n' \
+        "$_ase_t" "$_ase" > "$_ase/stub/$_ase_t"
+    chmod +x "$_ase/stub/$_ase_t"
+done
+_ase_bin="$_ase/home/.local/bin"
+_ase_run() { # _ase_run <os> <shell code>
+    HOME="$_ase/home" EXAKIT_HOME="$_ase/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_ase_bin" \
+    EXAKIT_LAUNCHAGENT_DIR="$_ase/la" EXAKIT_SYSTEMD_USER_DIR="$_ase/units" \
+    PATH="$_ase/stub:$PATH" ASE_OS="$1" bash -c '
+        . "$1/setup/lib/common.sh" >/dev/null 2>&1
+        detect_os() { echo "$ASE_OS"; }
+        '"$2" _ "$ROOT" 2>&1
+}
+_ase_plist="$_ase/la/com.exasol.exakit.database.plist"
+_ase_unit="$_ase/units/com.exasol.exakit.database.service"
+_ase_argv() { sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/p' "$1" | sed -n 's/^ *<string>\(.*\)<\/string>$/\1/p' | paste -sd'|' -; }
+_ase_run macos '_exakit_autostart_register database' >/dev/null
+check "macOS: the login entry runs the kit's start" "$_ase_bin/exakit|start|database" "$(_ase_argv "$_ase_plist")"
+check "...with a PATH that starts at the kit's bin dir" "$_ase_bin" \
+    "$(sed -n 's/.*<key>PATH<\/key><string>\([^:]*\):.*/\1/p' "$_ase_plist")"
+# Each dir on its own: one the session's PATH already had keeps its place.
+_ase_path="$(sed -n 's/.*<key>PATH<\/key><string>\(.*\)<\/string>.*/:\1:/p' "$_ase_plist")"
+has "...and holds the system dirs a login-less job lacks" ":/usr/bin:" "$_ase_path"
+has "...all of them" ":/bin:" "$_ase_path"
+has "...still runs once at login" "<key>RunAtLoad</key><true/>" "$(cat "$_ase_plist")"
+has "...still logs" "autostart-database.log" "$(cat "$_ase_plist")"
+lacks "...and never loops" "KeepAlive" "$(cat "$_ase_plist")"
+has "...and is loaded when turned on" "launchctl load $_ase_plist" "$(cat "$_ase/calls" 2>/dev/null)"
+if command -v plutil >/dev/null 2>&1; then
+    check "...and launchd can parse it" "OK" "$(plutil -lint "$_ase_plist" 2>&1 | sed -n 's/.*: //p')"
+fi
+# The update path: an entry an earlier kit wrote is rewritten, not loaded.
+cat > "$_ase_plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.exasol.exakit.database</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$_ase_bin/exasol</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
+: > "$_ase/calls"
+_ase_run macos 'exakit_autostart_refresh' >/dev/null
+check "update: an old login entry now runs the kit's start" "$_ase_bin/exakit|start|database" "$(_ase_argv "$_ase_plist")"
+check "...without loading it (a load would start the database now)" "" "$(grep 'launchctl' "$_ase/calls")"
+_ase_sum="$(cksum < "$_ase_plist")"; sleep 1
+_ase_run macos 'exakit_autostart_refresh' >/dev/null
+check "update: a current entry is left as it is" "$_ase_sum" "$(cksum < "$_ase_plist")"
+# MCX-02: the add-on installer writes the same entry with Python's plistlib,
+# which indents with tabs. Same arguments, so it is current: not rewritten.
+_ase_run macos '_exakit_service_autostart_command database' > "$_ase/argv"
+python3 -c 'import plistlib, sys
+argv = [line for line in open(sys.argv[2]).read().splitlines() if line]
+open(sys.argv[1], "wb").write(plistlib.dumps({"Label": "com.exasol.exakit.database", "ProgramArguments": argv, "RunAtLoad": True}))' \
+    "$_ase_plist" "$_ase/argv"
+has "...a plistlib entry is tab-indented (the case this covers)" "$(printf '\t\t<string>')" "$(cat "$_ase_plist")"
+_ase_sum="$(cksum < "$_ase_plist")"
+check "update: an entry plistlib wrote with the same arguments reads as current" "current" \
+    "$(_ase_run macos '_exakit_autostart_current database && echo current || echo stale')"
+_ase_run macos 'exakit_autostart_refresh' >/dev/null
+check "...and is left as it is" "$_ase_sum" "$(cksum < "$_ase_plist")"
+rm -f "$_ase_plist"
+_ase_run macos 'exakit_autostart_refresh' >/dev/null
+check "update: no entry (autostart off) stays no entry" "no" "$([ -f "$_ase_plist" ] && echo yes || echo no)"
+# Linux: the same command as the systemd user unit's ExecStart.
+_ase_run linux '_exakit_autostart_register database' >/dev/null
+check "Linux: the unit runs the kit's start" "ExecStart=$_ase_bin/exakit start database" "$(grep '^ExecStart=' "$_ase_unit")"
+check "...with a PATH that starts at the kit's bin dir" "$_ase_bin" \
+    "$(sed -n 's/^Environment="PATH=\([^:]*\):.*/\1/p' "$_ase_unit")"
+has "...still a oneshot hand-off that retries" "Type=oneshot" "$(cat "$_ase_unit")"
+has "...on failure only" "Restart=on-failure" "$(cat "$_ase_unit")"
+printf '[Unit]\nDescription=Exasol Starter Kit: database\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=%s/exasol start\n\n[Install]\nWantedBy=default.target\n' "$_ase_bin" > "$_ase_unit"
+: > "$_ase/calls"
+_ase_run linux 'exakit_autostart_refresh' >/dev/null
+check "update: an old unit now runs the kit's start" "ExecStart=$_ase_bin/exakit start database" "$(grep '^ExecStart=' "$_ase_unit")"
+check "...and nothing is started" "" "$(grep -E 'systemctl .*(start|restart) ' "$_ase/calls")"
+printf '[Service]\nExecStart=%s/exasol start\n' "$_ase_bin" > "$_ase_unit"
+ASE_ENABLED=disabled _ase_run linux 'exakit_autostart_refresh' >/dev/null
+check "update: a unit the user disabled is not rewritten" "ExecStart=$_ase_bin/exasol start" "$(grep '^ExecStart=' "$_ase_unit")"
+# SCR-01. The boot entry's PATH was the whole PATH of the shell that wrote it,
+# so an agent's tool dir, a venv or a dir under /tmp was searched by a job that
+# runs at every login. Now: the kit's bin dir, the dirs of the tools the start
+# runs when they are trusted, and the system dirs - never a session-only dir.
+_ase_shared="$_ase/shared-tools"; mkdir -p "$_ase_shared"; chmod 777 "$_ase_shared"
+printf '#!/bin/sh\nexit 97\n' > "$_ase_shared/docker"; chmod +x "$_ase_shared/docker"
+_ase_ppath() { sed -n 's/.*<key>PATH<\/key><string>\(.*\)<\/string>.*/:\1:/p' "$_ase_plist"; }
+rm -f "$_ase_plist"
+PATH="$_ase_shared:/usr/share:/usr/bin:/bin:/usr/sbin:/sbin" _ase_run macos '_exakit_autostart_register database' >/dev/null
+lacks "a world-writable session dir (holding docker) is not on the boot PATH" ":$_ase_shared:" "$(_ase_ppath)"
+lacks "a session dir the start never needs is not on the boot PATH" ":/usr/share:" "$(_ase_ppath)"
+lacks "a session dir under the temp dir is not on the boot PATH" ":$_ase/stub:" "$(_ase_ppath)"
+# As a set: where docker or uv lives in a system dir (/usr/bin on a Linux
+# runner) that dir comes earlier, which is the same PATH in another order.
+check "...and the PATH is the kit's bin dir and the system dirs" \
+    "$(printf '%s\n' "$_ase_bin" /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin | sort | paste -sd: -)" \
+    "$(_ase_ppath | tr ':' '\n' | sed '/^$/d' | sort | paste -sd: -)"
+check "...the kit's bin dir first" "$_ase_bin" "$(_ase_ppath | cut -d: -f2)"
+check "a trusted dir passes the boot PATH check" "yes" "$(_ase_run macos '_exakit_autostart_dir_ok /usr/bin && echo yes || echo no')"
+check "...a dir under /tmp does not" "no" "$(_ase_run macos '_exakit_autostart_dir_ok /tmp/x-tools && echo yes || echo no')"
+check "...nor one others can write" "no" "$(TMPDIR=/nonexistent-tmp _ase_run macos "_exakit_autostart_dir_ok '$_ase_shared' && echo yes || echo no")"
+_ase_safe="$_ase/engine-bin"; mkdir -p "$_ase_safe"; chmod 755 "$_ase_safe"
+printf '#!/bin/sh\nexit 97\n' > "$_ase_safe/podman"; chmod +x "$_ase_safe/podman"
+case "$_ase_safe" in
+    /tmp/*|/private/tmp/*|/var/tmp/*) ;;  # the sandbox itself is a temp dir here
+    *)
+        rm -f "$_ase_plist"
+        PATH="$_ase_safe:$PATH" TMPDIR=/nonexistent-tmp _ase_run macos '_exakit_autostart_register database' >/dev/null
+        has "the container engine's own dir is on the boot PATH" ":$_ase_safe:" "$(_ase_ppath)" ;;
+esac
+# exakit update rewrites an entry an earlier build wrote with the session's PATH.
+rm -f "$_ase_plist"
+PATH="$_ase_shared:$PATH" _ase_run macos '_exakit_autostart_register database' >/dev/null
+sed -e "s#<string>$_ase_bin:#<string>$_ase_bin:$_ase_shared:#" "$_ase_plist" > "$_ase_plist.x" && mv "$_ase_plist.x" "$_ase_plist"
+_ase_run macos 'exakit_autostart_refresh' >/dev/null
+lacks "update: a frozen session PATH is rewritten" ":$_ase_shared:" "$(_ase_ppath)"
+_ase_run linux '_exakit_autostart_register database' >/dev/null
+sed -e "s#PATH=$_ase_bin:#PATH=$_ase_bin:$_ase_shared:#" "$_ase_unit" > "$_ase_unit.x" && mv "$_ase_unit.x" "$_ase_unit"
+_ase_run linux 'exakit_autostart_refresh' >/dev/null
+lacks "update: a frozen session PATH in a unit is rewritten" "$_ase_shared" "$(grep '^Environment=' "$_ase_unit")"
+has "exakit update rewrites the entries" "exakit_autostart_refresh" \
+    "$(sed -n '/^_exakit_update_run()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+
 echo
 echo "the machine contract holds on the paths that REFUSE, not only those that answer:"
 # AGK-03. AGENTS.md: "Where a command takes --json ... the answer is one object
@@ -1852,10 +2274,12 @@ check "every catalog row carries a hidden key" "yes" \
     "$(printf '%s' "$_cat" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 print("yes" if d["commands"] and all("hidden" in r for r in d["commands"]) else "no")' 2>/dev/null)"
-check "the repair commands are present and marked" "exakit rollback-kit2,exakit skills-install,exakit upgrade-kit2" \
+# Among the hidden rows (the parts this release hides are hidden too).
+check "the repair commands are present and marked" "yes" \
     "$(printf '%s' "$_cat" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
-print(",".join(sorted(r["invocation"] for r in d["commands"] if r.get("hidden"))))' 2>/dev/null)"
+hidden = {r["invocation"] for r in d["commands"] if r.get("hidden")}
+print("yes" if {"exakit rollback-kit2", "exakit skills-install", "exakit upgrade-kit2"} <= hidden else "no")' 2>/dev/null)"
 # ...and the command the kit tells a machine to run is one the catalog admits exists.
 has "skills --json still names skills-install as a next" 'exakit skills-install' \
     "$(cat "$ROOT/setup/lib/common.sh")"
@@ -1957,11 +2381,15 @@ _wsl_pf() { # _wsl_pf <version> -> the preflight lines that mention WSL 1 or Pod
     # detect_docker stubbed: a Docker on the machine running this test (the CI
     # runner has Engine 29+) answered for the distro under test, and the
     # preflight named Docker where this expects Podman.
+    # curl stubbed, as tests/personal-wsl-gate.sh does for the same function:
+    # the reachability lines otherwise probe github.com,
+    # objects.githubusercontent.com and pypi.org on every call.
     ROOT="$ROOT" V="$1" bash -c '
         . "$ROOT/setup/lib/detect.sh" >/dev/null 2>&1
         detect_os() { echo wsl; }
         detect_wsl_version() { printf "%s\n" "$V"; }
         detect_docker() { echo none; }
+        curl() { return 0; }
         preflight_report 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 }
 has "WSL 1 is refused, and told how to convert" 'wsl --set-version' "$(_wsl_pf 1)"
@@ -2014,6 +2442,20 @@ has "the PowerShell refusal goes through Deny-ExakitInput" 'Deny-ExakitInput "au
     "$(cat "$ROOT/setup/exakit.ps1")"
 has "the home notice is kept off a machine's stdout" '[Console]::Error.WriteLine' \
     "$(sed -n '/^function Show-ExakitHomeNotice/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
+
+echo
+echo "QUICKSTART's first check quotes what exakit status prints:"
+# NEW-11 (round 3). QUICKSTART's "is it alive?" line promised "Status: running",
+# a label no twin of exakit status prints; the reader scanned the Kit panel for
+# it. The comment now names the panel's real rows, and both twins print them.
+_qs_line="$(grep -E '^exakit status ' "$ROOT/QUICKSTART.md")"
+lacks "QUICKSTART no longer promises a Status: label" 'Status: running' "$_qs_line"
+has "...it names the Runtime row's running" 'Runtime … · running' "$_qs_line"
+has "...and the Database row's reachable" 'Database 127.0.0.1:8563 · reachable' "$_qs_line"
+has "the bash status prints the Runtime row" "_cs_pad 'Runtime'" "$(cat "$ROOT/setup/exakit")"
+has "...and the Database row, reachable" "printf ' · reachable'" "$(cat "$ROOT/setup/exakit")"
+has "the PowerShell status prints the Runtime row" 'Write-StatusPanelRow "Runtime"' "$(cat "$ROOT/setup/exakit.ps1")"
+has "...and the Database row, reachable" '$reach = "reachable"' "$(cat "$ROOT/setup/exakit.ps1")"
 
 echo
 echo "an error message that ends the run says what to do next:"
@@ -2115,7 +2557,9 @@ echo "destructive commands say what they destroy, and declining is not success:"
 # add-on without a terminal - so confirm() takes its default of no - was told
 # the removal succeeded while the add-on was still there.
 _dc_w="$WORK/destructive"; rm -rf "$_dc_w"; mkdir -p "$_dc_w/kit/dash-server-venv/bin" "$_dc_w/bin"
-printf '{"components":{"dash_server":{"version":"0.1.0","validated":true}},"runtime":{"type":"personal"}}\n' \
+# The kit's own add-on (ownership kit): one the kit did not install is kept
+# without asking and answers 1, nothing removed (component-ownership.sh).
+printf '{"components":{"dash_server":{"version":"0.1.0","validated":true,"ownership":"kit"}},"runtime":{"type":"personal"}}\n' \
     > "$_dc_w/kit/manifest.json"
 # dash_server_installed_version wants the manifest record AND a venv that
 # answers, so the record alone cannot fake an install - which is deliberate.
@@ -2129,10 +2573,12 @@ check "...an unknown target still exits 2"         "2" "$(_dc_run not-a-thing)"
 
 # LIF-05: --yes is what AGENTS.md documents for automation, so it is the path
 # an agent takes when a user says "uninstall the kit" - and it printed one warn
-# line and destroyed, leaving no record of WHAT went.
+# line and destroyed, leaving no record of WHAT went. The record is now the
+# run's own per-area lines (ok_step, checked in status-soft-components.sh); the
+# itemised plan moved to --dry-run, which this path names.
 _dc_yes="$(sed -n '/if \[ "\$_uni_yes" = 1 \]; then/,/^    fi/p' "$ROOT/setup/exakit")"
-has "a --yes uninstall prints the plan first" 'exakit_uninstall_run 1' "$_dc_yes"
-has "...and says there is no export step"     'no export step' "$_dc_yes"
+has "a --yes uninstall warns that the database data goes" 'including all database data' "$_dc_yes"
+has "...says nothing is exported, and names the full list" 'not exported. To see every item first: exakit uninstall --dry-run' "$_dc_yes"
 has "...and still performs the removal"       'exakit_uninstall_run 0' "$_dc_yes"
 
 # LIF-12: the rescue line printed before repair-runtime named `exakit sql
@@ -2172,7 +2618,11 @@ _hd_missing() { # _hd_missing <file> <header-last-line> -> names not in the head
 import io, os, re, sys
 path = os.path.join(os.environ["ROOT"], os.environ["F"])
 src = io.open(path, encoding="utf-8").read()
-hdr = "\n".join(src.split("\n")[:int(os.environ["N"])])
+# The header is the leading comment block of the file, however long it grows (the
+# line count passed in is a floor, kept for the call sites).
+lines = src.split("\n")
+end = next((i for i, line in enumerate(lines) if i > 0 and not line.startswith("#")), len(lines))
+hdr = "\n".join(lines[:max(end, int(os.environ["N"]))])
 if path.endswith(".ps1"):
     body = re.search(r"switch \(\$Command\) \{(.*?)\n    \}\n", src, re.S).group(1)
     names = {m.group(1) for m in re.finditer(r"^\s{8}\"([a-z0-9-]+)\"", body, re.M)}
@@ -2184,9 +2634,10 @@ else:
     names = {n for n in names if n and n != "*"}
 print(" ".join(sorted(n for n in names if not n.startswith("-") and n not in hdr)))'
 }
-check "every command the Windows CLI dispatches is in its header" "" "$(_hd_missing setup/exakit.ps1 75)"
-check "...and the same holds for the shell CLI"                   "" "$(_hd_missing setup/exakit 84)"
-_hd_ps="$(sed -n '4,75p' "$ROOT/setup/exakit.ps1")"
+check "every command the Windows CLI dispatches is in its header" "" "$(_hd_missing setup/exakit.ps1 79)"
+check "...and the same holds for the shell CLI"                   "" "$(_hd_missing setup/exakit 88)"
+# The whole leading comment block, however long the command list grows.
+_hd_ps="$(awk 'NR > 1 && !/^#/ { exit } { print }' "$ROOT/setup/exakit.ps1")"
 has "the Windows header documents the add-on uninstall" 'uninstall [<addon-id>]' "$_hd_ps"
 
 # DOC-03: the shell header advertised the staged major-upgrade route with no
@@ -2389,9 +2840,9 @@ check "no remote fetch follows redirects without pinning https" "" "${_pg_bad# }
 _pg_guarded="$(grep -rc -- "--proto '=https'" "$ROOT"/setup/lib/*.sh "$ROOT"/install.sh 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
 check "...and it saw the guarded calls" "yes" \
     "$([ "${_pg_guarded:-0}" -ge 8 ] && echo yes || echo no)"
-# The one that carries a credential is the one that must never be unguarded.
-has "the token-bearing lookup pins https" "--proto '=https' --proto-redir '=https'" \
-    "$(sed -n '/_esd_json="\$(curl/,+3p' "$ROOT/setup/lib/exasol-scheduler.sh")"
+# The scheduler release lookup rejects non-HTTPS responses.
+has "the scheduler lookup pins https" 'if not response.url.startswith("https://")' \
+    "$(cat "$ROOT/marketplace/addons/exasol_scheduler.py")"
 
 echo
 echo "a booting database is not a port conflict:"
@@ -2480,11 +2931,109 @@ for _rp_half in setup/lib/common.sh setup/lib/mcp.ps1; do
     _rp_src="$(cat "$ROOT/$_rp_half")"
     has "$_rp_half asks EXA_DBA_ROLE_PRIVS"    'EXA_DBA_ROLE_PRIVS' "$_rp_src"
     has "...and refuses a user holding a role" 'EXAKIT_ROLE_SCOPE_OK' "$_rp_src"
-    has "...while excluding PUBLIC"            "GRANTED_ROLE NOT IN ('PUBLIC')" "$_rp_src"
+    has "...while excluding PUBLIC"            "GRANTED_ROLE NOT IN ('PUBLIC', 'SEMANTIC_USER')" "$_rp_src"
 done
+
+echo
+echo "the read-only posture accepts SEMANTIC_USER exactly as Semantic Views grants it, and nothing more:"
+# PRE-01. The Semantic Views add-on grants the kit's MCP login SEMANTIC_USER
+# so an AI client can run Semantic SQL. The role check above now lets that one
+# role through, so a second query must prove what it carries: held without
+# ADMIN OPTION, no system privilege, no nested role, and no object privilege
+# beyond SELECT, EXECUTE on SEMANTIC_ADMIN and the compiler's own rows in
+# SYS_SEMANTIC (the cache and its two logs). The two twins' SQL is run against
+# a tiny dictionary in SQLite, one grant set at a time.
+_sem_sql_sh="$(grep -o "SELECT CASE WHEN (SELECT COUNT(\*) FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '\$_user_lit' AND GRANTED_ROLE = 'SEMANTIC_USER')[^\"]*" "$ROOT/setup/lib/common.sh")"
+_sem_sql_ps="$(grep -o "SELECT CASE WHEN (SELECT COUNT(\*) FROM EXA_DBA_ROLE_PRIVS WHERE GRANTEE = '\$identifierLit' AND GRANTED_ROLE = 'SEMANTIC_USER')[^\"]*" "$ROOT/setup/lib/mcp.ps1")"
+_role_sql_sh="$(grep -o "SELECT CASE WHEN COUNT(\*) = 0 THEN 'EXAKIT_ROLE_SCOPE_OK'[^\"]*" "$ROOT/setup/lib/common.sh")"
+check "the twins ask the same SEMANTIC_USER question" "$_sem_sql_sh" "$(printf '%s' "$_sem_sql_ps" | sed 's/\$identifierLit/$_user_lit/g')"
+_posture() {
+    python3 - "$1" "$2" <<'PYSQL'
+import json, sqlite3, sys
+sql, case = sys.argv[1].replace("$_user_lit", "MCP_READONLY"), sys.argv[2]
+db = sqlite3.connect(":memory:")
+db.execute("CREATE TABLE EXA_DBA_ROLE_PRIVS (GRANTEE, GRANTED_ROLE, ADMIN_OPTION)")
+db.execute("CREATE TABLE EXA_DBA_SYS_PRIVS (GRANTEE, PRIVILEGE, ADMIN_OPTION)")
+db.execute("CREATE TABLE EXA_DBA_OBJ_PRIVS (OBJECT_SCHEMA, OBJECT_NAME, OBJECT_TYPE, PRIVILEGE, GRANTEE)")
+# Upstream v0.6.1, 001b_create_semantic_source_views.sql: the caller baseline.
+baseline = [(None, "SEMANTIC_SOURCE", "SCHEMA", "SELECT"), (None, "SEMANTIC_CATALOG", "SCHEMA", "SELECT"),
+            (None, "SEMANTIC_AGENT", "SCHEMA", "SELECT"), (None, "SEMANTIC_ADMIN", "SCHEMA", "EXECUTE")]
+baseline += [("SYS_SEMANTIC", "COMPILE_CACHE", "TABLE", p) for p in ("SELECT", "INSERT", "UPDATE", "DELETE")]
+baseline += [("SYS_SEMANTIC", "AGENT_REQUEST_LOG", "TABLE", "INSERT"), ("SYS_SEMANTIC", "QUERY_LOG", "TABLE", "INSERT")]
+role = [("MCP_READONLY", "SEMANTIC_USER", False)]
+objs, sys_privs, roles = list(baseline), [], list(role)
+if case == "no-role":
+    roles = []
+elif case == "schema-as-owner":
+    objs = [("SEMANTIC_ADMIN" if o == "SEMANTIC_ADMIN" else s, o, t, p) for s, o, t, p in baseline]
+elif case == "write-elsewhere":
+    objs.append(("RETAIL", "SALES", "TABLE", "INSERT"))
+elif case == "execute-elsewhere":
+    objs.append((None, "OTHER", "SCHEMA", "EXECUTE"))
+elif case == "dictionary":
+    sys_privs.append(("SEMANTIC_USER", "SELECT ANY DICTIONARY", False))
+elif case == "nested-role":
+    roles.append(("SEMANTIC_USER", "DBA", False))
+elif case == "admin-option":
+    roles = [("MCP_READONLY", "SEMANTIC_USER", True)]
+elif case == "dba":
+    roles.append(("MCP_READONLY", "DBA", False))
+db.executemany("INSERT INTO EXA_DBA_ROLE_PRIVS VALUES (?, ?, ?)", roles)
+db.executemany("INSERT INTO EXA_DBA_SYS_PRIVS VALUES (?, ?, ?)", sys_privs)
+db.executemany("INSERT INTO EXA_DBA_OBJ_PRIVS VALUES (?, ?, ?, ?, 'SEMANTIC_USER')", objs)
+print(db.execute(sql).fetchone()[0])
+PYSQL
+}
+check "no role at all: fine"                                    EXAKIT_SEMANTIC_ROLE_OK      "$(_posture "$_sem_sql_sh" no-role)"
+check "SEMANTIC_USER with exactly the upstream baseline: fine"   EXAKIT_SEMANTIC_ROLE_OK      "$(_posture "$_sem_sql_sh" baseline)"
+check "...whichever way the dictionary names a schema grant"    EXAKIT_SEMANTIC_ROLE_OK      "$(_posture "$_sem_sql_sh" schema-as-owner)"
+check "...and it passes the role-scope query"                   EXAKIT_ROLE_SCOPE_OK         "$(_posture "$_role_sql_sh" baseline)"
+check "the role can write one of your tables: refused"          EXAKIT_SEMANTIC_ROLE_TOO_WIDE "$(_posture "$_sem_sql_sh" write-elsewhere)"
+check "the role can EXECUTE another schema: refused"            EXAKIT_SEMANTIC_ROLE_TOO_WIDE "$(_posture "$_sem_sql_sh" execute-elsewhere)"
+check "the role carries SELECT ANY DICTIONARY: refused"         EXAKIT_SEMANTIC_ROLE_TOO_WIDE "$(_posture "$_sem_sql_sh" dictionary)"
+check "the role holds another role: refused"                    EXAKIT_SEMANTIC_ROLE_TOO_WIDE "$(_posture "$_sem_sql_sh" nested-role)"
+check "held WITH ADMIN OPTION: refused"                         EXAKIT_SEMANTIC_ROLE_TOO_WIDE "$(_posture "$_sem_sql_sh" admin-option)"
+check "any other role is still refused by the role-scope query" EXAKIT_ROLE_SCOPE_TOO_WIDE   "$(_posture "$_role_sql_sh" dba)"
 # The header no longer claims more than the queries prove.
 lacks "the header no longer overclaims" 'user has no write/DDL/admin privilege (no INSERT ANY TABLE, CREATE USER,' \
     "$(sed -n '/^_exakit_assert_mcp_readonly_posture()/,/_probe_schema=/p' "$ROOT/setup/lib/common.sh" | grep '^[[:space:]]*#')"
+
+echo
+echo "the PUBLIC-scope log line does not count the preprocessor framework's own grant:"
+# M2. Every read-only check logged "the database grants PUBLIC more than read
+# access" on every kit, because the SQL preprocessor framework's release.sql
+# (0.9.1) grants EXECUTE ON SCHEMA PREPROC_RT TO PUBLIC - every user needs it so
+# their statements run through PREPROC_RT.MASTER - and the query counted every
+# non-SELECT PUBLIC object privilege. Only that exact row is excused.
+_pub_sql_sh="$(grep -o "SELECT CASE WHEN (SELECT COUNT(\*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC'[^\"]*" "$ROOT/setup/lib/common.sh")"
+_pub_sql_ps="$(grep -o "SELECT CASE WHEN (SELECT COUNT(\*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC'[^\"]*" "$ROOT/setup/lib/mcp.ps1")"
+check "the twins ask the same PUBLIC question" "$_pub_sql_sh" "$_pub_sql_ps"
+_public_scope() {
+    python3 - "$1" "$2" <<'PYSQL'
+import sqlite3, sys
+sql, case = sys.argv[1], sys.argv[2]
+db = sqlite3.connect(":memory:")
+db.execute("CREATE TABLE EXA_DBA_SYS_PRIVS (GRANTEE, PRIVILEGE, ADMIN_OPTION)")
+db.execute("CREATE TABLE EXA_DBA_OBJ_PRIVS (OBJECT_SCHEMA, OBJECT_NAME, OBJECT_TYPE, PRIVILEGE, GRANTEE)")
+# release.sql v0.9.1: GRANT EXECUTE / GRANT SELECT ON SCHEMA PREPROC_RT TO PUBLIC.
+objs = [(None, "PREPROC_RT", "SCHEMA", "EXECUTE"), (None, "PREPROC_RT", "SCHEMA", "SELECT")]
+if case == "framework-and-write":
+    objs.append(("RETAIL", "SALES", "TABLE", "INSERT"))
+elif case == "framework-and-execute-elsewhere":
+    objs.append((None, "OTHER", "SCHEMA", "EXECUTE"))
+elif case == "framework-and-preproc-script":
+    objs.append(("PREPROC_RT", "PREPROC_RT", "SCRIPT", "EXECUTE"))
+elif case == "framework-and-alter":
+    objs.append((None, "PREPROC_RT", "SCHEMA", "ALTER"))
+db.executemany("INSERT INTO EXA_DBA_OBJ_PRIVS VALUES (?, ?, ?, ?, 'PUBLIC')", objs)
+print(db.execute(sql).fetchone()[0])
+PYSQL
+}
+check "only the framework's PREPROC_RT grants: no warning"     EXAKIT_PUBLIC_SCOPE_OK       "$(_public_scope "$_pub_sql_sh" framework-only)"
+check "...plus a write on one of your tables: still warned"   EXAKIT_PUBLIC_SCOPE_TOO_WIDE "$(_public_scope "$_pub_sql_sh" framework-and-write)"
+check "...plus EXECUTE on another schema: still warned"       EXAKIT_PUBLIC_SCOPE_TOO_WIDE "$(_public_scope "$_pub_sql_sh" framework-and-execute-elsewhere)"
+check "...plus EXECUTE on a script, not the schema: warned"   EXAKIT_PUBLIC_SCOPE_TOO_WIDE "$(_public_scope "$_pub_sql_sh" framework-and-preproc-script)"
+check "...plus ALTER on the PREPROC_RT schema: still warned"  EXAKIT_PUBLIC_SCOPE_TOO_WIDE "$(_public_scope "$_pub_sql_sh" framework-and-alter)"
 
 echo
 echo "a skipped suite can be made to fail, so CI cannot mistake one for a pass:"
@@ -2674,6 +3223,67 @@ done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
 
+echo "a hidden prompt hides from the first keystroke:"
+# Measured: printing the prompt and only then turning echo off echoed whatever
+# arrived the moment the prompt appeared (a paste, a password manager). There
+# is no terminal in CI, so the order is what is pinned.
+HIDDEN="$(sed -n '/^exakit_read_hidden() {/,/^}/p' "$ROOT/setup/lib/common.sh")"
+check "echo goes off before the prompt is printed" "yes" \
+    "$(printf '%s\n' "$HIDDEN" | awk '/stty -echo/{e=NR} /input hidden/{p=NR} END{print (e && p && e < p) ? "yes" : "no"}')"
+has "...and a terminal that cannot hide input is refused" "stty -echo < /dev/tty 2>/dev/null || return 1" "$HIDDEN"
+PROFILE_FN="$(sed -n '/^exapump_create_profile() {/,/^}/p' "$ROOT/setup/lib/exapump.sh")"
+has "the database-password prompt uses it" "exakit_read_hidden" "$PROFILE_FN"
+lacks "...and keeps no prompt-then-stty of its own" "stty -echo" "$PROFILE_FN"
+
+echo "a full uninstall names what it leaves for you to remove (audit DAY-09):"
+_ul_dir="$(mktemp -d)"; mkdir -p "$_ul_dir/bin" "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+printf '#!/bin/sh\n[ "$1 $2" = "python dir" ] && echo "%s/python"\n' "$_ul_dir" > "$_ul_dir/bin/uv"; chmod +x "$_ul_dir/bin/uv"
+_ul_out="$( (PATH="$_ul_dir/bin:$PATH"; EXAKIT_MANAGED_PYTHON_VERSION=3.12; exakit_uninstall_leftovers) 2>&1)"
+has "the PATH line" "PATH entry for" "$_ul_out"
+has "the Python uv downloaded, with the command that removes it" "uv python uninstall 3.12" "$_ul_out"
+rm -rf "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+lacks "...and nothing about it when there is none" "uv python uninstall" "$( (PATH="$_ul_dir/bin:$PATH"; exakit_uninstall_leftovers) 2>&1)"
+rm -rf "$_ul_dir"
+has "both full-uninstall endings say it" "2" "$(cat "$ROOT/setup/exakit" "$ROOT/setup/lib/common.sh" | grep -c '^[[:space:]]*exakit_uninstall_leftovers$')"
+
+echo "GITHUB_TOKEN never reaches a command line (audit SEC-05/06):"
+_tk_dir="$(mktemp -d)"; mkdir -p "$_tk_dir/bin" "$_tk_dir/home"
+cat > "$_tk_dir/bin/curl" <<'CURL'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TK_DIR/argv"
+case " $* " in *" -K - "*) cat >> "$TK_DIR/stdin" ;; esac
+exit 22
+CURL
+chmod +x "$_tk_dir/bin/curl"
+( TK_DIR="$_tk_dir" HOME="$_tk_dir/home" PATH="$_tk_dir/bin:$PATH" GITHUB_TOKEN=tk-not-a-real-token \
+    EXAKIT_DRY_RUN=1 sh "$ROOT/install.sh" </dev/null >/dev/null 2>&1 )
+lacks "install.sh: the token is not in curl's arguments" "tk-not-a-real-token" "$(cat "$_tk_dir/argv" 2>/dev/null)"
+has "...it reaches curl on stdin, as a header" "Authorization: Bearer tk-not-a-real-token" "$(cat "$_tk_dir/stdin" 2>/dev/null)"
+rm -rf "$_tk_dir"
+has "install.ps1 sends the token it names as the remedy" 'Authorization = "Bearer $($env:GITHUB_TOKEN)"' "$(cat "$ROOT/install.ps1")"
+
+echo "the PATH line runs in a non-interactive ssh shell too (audit LNX-14):"
+_lp_home="$(mktemp -d)"
+printf '# ~/.bashrc\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "Ubuntu's early return: the export goes above it" "export case" \
+    "$(awk '/^export PATH=/ && !e { printf "export "; e=1 } /^case / && !c { printf "case"; c=1 }' "$_lp_home/.bashrc")"
+has "...and the user's own lines are kept" "alias ll=ls" "$(cat "$_lp_home/.bashrc")"
+check "a non-interactive shell now has it" "yes" \
+    "$(env -i HOME="$_lp_home" PATH=/usr/bin:/bin bash -c ". '$_lp_home/.bashrc'; case :\$PATH: in *':$_lp_home/.local/bin:'*) echo yes ;; *) echo no ;; esac")"
+printf 'alias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "no early return: appended at the end, as before" "export" "$(tail -1 "$_lp_home/.bashrc" | cut -d' ' -f1)"
+rm -rf "$_lp_home"
+
+echo "the install's last line works in the terminal that ran it (audit MAC-04):"
+_ch_bare="$( (EXAKIT_PATH_AT_START=/usr/bin:/bin; exakit_closing_hint) 2>&1)"
+has "bin folder not on the starting PATH: the full path is given" "/exakit help" "$_ch_bare"
+_ch_on="$( (EXAKIT_PATH_AT_START="$EXAKIT_BIN_DIR:/usr/bin"; exakit_closing_hint) 2>&1)"
+lacks "already on PATH: the short form only" "in this one" "$_ch_on"
+for _ch_os in macos linux; do
+    has "setup-$_ch_os.sh ends with that line" "exakit_closing_hint" "$(tail -20 "$ROOT/setup/setup-$_ch_os.sh")"
+done
 echo "the suite stayed out of the real home:"
 check "the real kit home was not touched" "untouched" \
     "$([ "$(ls -A "$_REAL_KIT_DIR" 2>/dev/null || echo absent)" = "$_REAL_KIT_SNAPSHOT" ] && echo untouched || echo CHANGED)"

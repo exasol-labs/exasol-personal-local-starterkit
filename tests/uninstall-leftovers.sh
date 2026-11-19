@@ -184,7 +184,7 @@ seed_deploy
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_DOCKER_FAIL="permission denied while trying to connect to the Docker daemon socket")"
 contains "g2: an engine that refuses is not a leftover" "RC=0" "$out"
 contains "g2: nothing is counted left over" "LEFT=;" "$out"
-contains "g2: but it is a warning with the check command" "WARNINGS=Could not ask docker whether the database's container is gone (docker said: permission denied while trying to connect to the Docker daemon socket). Check by hand once docker answers: docker ps -a --filter name=exa-test1 (if docker needs sudo here: sudo docker ps -a --filter name=exa-test1)" "$out"
+contains "g2: but it is a warning with the check command" "WARNINGS=Could not confirm the database container is gone (docker said: permission denied while trying to connect to the Docker daemon socket). Check: docker ps -a (or sudo docker ps -a)" "$out"
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
 contains "g2: an engine that answers gives no warning" "WARNINGS=" "$out"
 lacks    "g2: none at all" "Could not ask" "$out"
@@ -236,9 +236,13 @@ PATH="\${STUB_ENG_DIR:-$TMP/eng}:$TMP/sysbin"; export PATH
 detect_os(){ printf '%s' "\${STUB_OS:-macos}"; }
 exakit_run_bounded(){ shift; "\$@"; }
 $(grep '^EXAKIT_KIT_IMAGE_REPOS=' "$ROOT/setup/lib/common.sh")
-manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; *) echo "" ;; esac; }
+manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; runtime.engine) echo "\${STUB_ENGINE:-docker}" ;; *) echo "" ;; esac; }
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
+# Component ownership: everything here is the kit's own.
+exakit_component_is_managed(){ return 0; }
+exakit_preserved_component_paths(){ :; }
+exakit_preserve_component(){ info "Keeping \$1"; }
 personal_teardown(){
     EXAKIT_TEARDOWN_WARNINGS="\${STUB_TW:-}"
     if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "\$EXAKIT_PERSONAL_DEPLOY_DIR"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
@@ -250,7 +254,7 @@ for _fn in personal_launcher_cache_dir personal_other_deployments personal_pruna
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
 done
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
-for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_recorded_db_port _exakit_uninstall_teardown_warnings _exakit_uninstall_component _exakit_uninstall_orphan_autostart _exakit_uninstall_kit_images exakit_uninstall_run; do
+for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_recorded_db_port _exakit_uninstall_teardown_warnings _exakit_uninstall_component _exakit_uninstall_orphan_autostart _exakit_kit_image_label _exakit_uninstall_kit_image_ids _exakit_uninstall_kit_images exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
@@ -404,6 +408,9 @@ echo
 echo "exakit_uninstall_run removes the kit's container images, and only those:"
 # Stub engines: `images` prints STUB_<ENGINE>_IMAGES (repo|tag|id|size rows),
 # `rmi` records its arguments and fails for a ref named in STUB_RMI_FAIL.
+# What the deployment ran from (audit LNX-01): `ps -a` prints
+# STUB_<ENGINE>_CTRS, and `inspect <container>` / `image inspect <ref>` answer
+# the id STUB_<ENGINE>_OBJ_IDS maps it to ("name=id" words).
 mkdir -p "$TMP/eng" "$TMP/noeng"
 for _e in docker podman; do
     _uc="$(printf '%s' "$_e" | tr a-z A-Z)"
@@ -413,13 +420,26 @@ printf '$_e %s\n' "\$*" >> "$TMP/engcalls"
 case "\$1" in
     images) printf '%s\n' "\${STUB_${_uc}_IMAGES:-}"; exit "\${STUB_${_uc}_RC:-0}" ;;
     rmi) case " \${STUB_RMI_FAIL:-} " in *" \$2 "*) echo "conflict: image is being used by running container abc" >&2; exit 1 ;; esac ;;
+    ps) printf '%s\n' "\${STUB_${_uc}_CTRS:-}" ;;
+    inspect) for _p in \${STUB_${_uc}_OBJ_IDS:-}; do [ "\${_p%%=*}" = "\$4" ] && printf 'sha256:%s\n' "\${_p#*=}"; done ;;
+    image) for _p in \${STUB_${_uc}_OBJ_IDS:-}; do [ "\${_p%%=*}" = "\$5" ] && printf 'sha256:%s\n' "\${_p#*=}"; done ;;
 esac
 exit 0
 STUB
     chmod +x "$TMP/eng/$_e"
 done
-DOCKER_IMGS="$(printf '%s\n' 'exasol/nano|2026.2.0-nano.8|aaa111|812MB' 'exasol/nano|<none>|ggg777|800MB' 'exasol/mcp-server|<none>|bbb222|426MB' 'exasol/nanoX|1|ccc333|1MB' 'library/postgres|16|ddd444|400MB' 'someone/exasol/nano|1|eee555|1MB')"
+DOCKER_IMGS="$(printf '%s\n' 'exasol/nano|2026.2.0-nano.8|aaa111|812MB' 'exasol/nano|<none>|ggg777|800MB' 'exasol/mcp-server|<none>|bbb222|426MB' 'exasol/script-language-container|standard-EXASOL-all-java-17-release_abc|hhh888|1.01GB' 'exasol/nanoX|1|ccc333|1MB' 'library/postgres|16|ddd444|400MB' 'someone/exasol/nano|1|eee555|1MB')"
 PODMAN_IMGS='docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
+# The deployment (exa-test1, on Docker) ran from aaa111 (its database
+# container), bbb222 (its MCP sidecar) and the Java language container its
+# launcher state lists. exasol-db-exa-test10 is ANOTHER deployment on the same
+# engine: its image ggg777 is not this kit's.
+export STUB_DOCKER_CTRS="$(printf '%s\n' exasol-db-exa-test1 exasol-db-exa-test1-sidecar-mcp exasol-db-exa-test10)"
+export STUB_DOCKER_OBJ_IDS="exasol-db-exa-test1=aaa111 exasol-db-exa-test1-sidecar-mcp=bbb222 exasol-db-exa-test10=ggg777 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc=hhh888"
+seed_img_deploy() {
+    seed_deploy
+    printf '{"deploymentId": "exa-test1", "installedSlcs": [{"flavor": "java", "image": "exasol/script-language-container:standard-EXASOL-all-java-17-release_abc", "installed": true}]}\n' > "$DEPLOY/.exasolLauncherState.json"
+}
 # Every image case runs the code with PATH="<dir>:$TMP/sysbin". Before any of
 # them, each engine must resolve inside <dir> or not at all; anything else
 # FAILS the suite and the cases do not run, so no real engine is ever called.
@@ -434,12 +454,15 @@ engines_sealed() { # engines_sealed <stub dir> <label>
 }
 if engines_sealed "$TMP/eng" "image cases"; then
 # (i1) dry run: the kit's images listed with engine and size, nothing removed.
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
 contains "i1: dry run lists exasol/nano" "will remove: docker image exasol/nano:2026.2.0-nano.8 (812MB)" "$out"
-contains "i1: dry run lists the untagged nano" "will remove: docker image exasol/nano:<none> (800MB)" "$out"
-lacks    "i1: exasol/mcp-server is not the kit's (MCP runs through uvx)" "exasol/mcp-server" "$out"
-contains "i1: dry run lists podman's copy" "will remove: podman image exasol/nano:2026.2.0-nano.8 (812MB)" "$out"
+contains "i1: another deployment's image on the same engine is kept, and said so" "Kept image exasol/nano:<none>: the kit has no record that its database used it, so it may be another installation's. If nothing uses it, remove it with: docker rmi ggg777" "$out"
+lacks    "i1: ...never listed for removal" "will remove: docker image exasol/nano:<none>" "$out"
+contains "i1: dry run lists the MCP server image the sidecar ran from" "will remove: docker image exasol/mcp-server:<none> (426MB)" "$out"
+contains "i1: dry run lists the language container a connect installed" "will remove: docker image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc (1.01GB)" "$out"
+lacks    "i1: the engine the deployment did not run on is not swept" "podman image" "$out"
+lacks    "i1: ...nor asked at all" "podman" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i1: a foreign image is not listed" "postgres" "$out"
 lacks    "i1: nor a near-miss repository" "nanoX" "$out"
 lacks    "i1: nor one that only ends in exasol/nano" "someone/" "$out"
@@ -455,43 +478,44 @@ rm -f "$TMP/engcalls"; rm -rf "$DEPLOY"; mkdir -p "$DEPLOY"; printf '{"deploymen
 out="$(STUB_OS=linux STUB_MCP_REC=1 bash "$TMP/run.sh" 2>&1)"
 contains "m2: deployment.json's dbPort is handed on" "MCPSTOP dry=0 port=[18563]" "$out"
 # (i2) real run: rmi without -f for each kit image, never for a foreign one.
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
 calls="$(cat "$TMP/engcalls" 2>/dev/null)"
 contains "i2: exasol/nano removed by name" "docker rmi exasol/nano:2026.2.0-nano.8" "$calls"
-contains "i2: the untagged image removed by id" "docker rmi ggg777" "$calls"
-contains "i2: podman's copy removed by the exact listed reference" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" "$calls"
-lacks    "i2: exasol/mcp-server is untouched" "bbb222" "$calls"
+lacks    "i2: another deployment's image on the same engine is not removed" "docker rmi ggg777" "$calls"
+lacks    "i2: the other engine is never swept" "podman" "$calls"
+contains "i2: the MCP server image (pulled by digest, <none>) removed by id" "docker rmi bbb222" "$calls"
+contains "i2: the language container removed by name" "docker rmi exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" "$calls"
 lacks    "i2: never with -f" "rmi -f" "$calls"
 lacks    "i2: never --force" "--force" "$calls"
 lacks    "i2: a foreign image is untouched" "ddd444" "$calls"
 lacks    "i2: by name either" "postgres" "$calls"
 lacks    "i2: a near-miss repository is untouched" "ccc333" "$calls"
 lacks    "i2: an image ending in exasol/nano is untouched" "eee555" "$calls"
-contains "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/nano:<none>" "$out"
+contains "i2: the removal is recorded, one name per repository" "Container images removed (docker): exasol/nano, exasol/mcp-server, script-language-container" "$out"
 contains "i2: and the run answers 0" "RC=0" "$out"
 # (i2b) podman lists one image as a tag row AND a <none> row: one rmi, no "kept".
-rm -f "$TMP/engcalls"; seed_deploy
-out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB' 'docker.io/exasol/nano|<none>|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_ENGINE=podman STUB_PODMAN_CTRS=exasol-db-exa-test1 STUB_PODMAN_OBJ_IDS=exasol-db-exa-test1=fff666 STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB' 'docker.io/exasol/nano|<none>|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2b: one rmi for one image id" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b: the duplicate row is not reported kept" "Kept image" "$out"
 # (i2b') the same, with the <none> row listed FIRST: tagged rows still go
 # first, so the tag is removed by name and the <none> twin is skipped.
-rm -f "$TMP/engcalls"; seed_deploy
-out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|fff666|812MB' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_ENGINE=podman STUB_PODMAN_CTRS=exasol-db-exa-test1 STUB_PODMAN_OBJ_IDS=exasol-db-exa-test1=fff666 STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|fff666|812MB' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2b': <none> listed first: one rmi" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
 contains "i2b': and it is the tag, by name" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b': no rmi by id" "podman rmi fff666" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b': nothing reported kept" "Kept image" "$out"
 # (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
-rm -f "$TMP/engcalls"; seed_deploy
-out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_DOCKER_OBJ_IDS=exasol-db-exa-test1=abc123 STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2c: both tags of one image are removed" "2" "$(grep -c '^docker rmi exasol/nano:' "$TMP/engcalls" 2>/dev/null)"
 contains "i2c: the second tag by its name" "docker rmi exasol/nano:latest" "$(cat "$TMP/engcalls" 2>/dev/null)"
 # (i2d) a <none> exasol/nano row whose id also carries a user's tag from
 # another repository: podman would delete that tag with an rmi by id. Kept.
-rm -f "$TMP/engcalls"; seed_deploy
-out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|aaa999|812MB' 'localhost/myorg/foo|1|aaa999|812MB' 'docker.io/exasol/nano|<none>|bbb888|800MB')" bash "$TMP/run.sh" 2>&1)"
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_ENGINE=podman STUB_PODMAN_CTRS="$(printf '%s\n' exasol-db-exa-test1 exasol-db-exa-test1-sidecar-mcp)" STUB_PODMAN_OBJ_IDS="exasol-db-exa-test1=aaa999 exasol-db-exa-test1-sidecar-mcp=bbb888" STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|aaa999|812MB' 'localhost/myorg/foo|1|aaa999|812MB' 'docker.io/exasol/nano|<none>|bbb888|800MB')" bash "$TMP/run.sh" 2>&1)"
 lacks    "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999" "$(cat "$TMP/engcalls" 2>/dev/null)"
 contains "i2d: it is reported kept" "Kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag." "$out"
 contains "i2d: a <none> row with no other name still goes" "podman rmi bbb888" "$(cat "$TMP/engcalls" 2>/dev/null)"
@@ -499,28 +523,70 @@ lacks    "i2d: the user's tag is never named" "myorg" "$(grep rmi "$TMP/engcalls
 # (i2f) no container query decides an image's fate: a dry run, where the
 # deployment's own container still exists, lists the image as "will remove",
 # and an image a container does use is kept by the engine's refusal (i3).
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
 contains "i2f: dry run lists the image as will remove" "will remove: docker image exasol/nano:2026.2.0-nano.8" "$out"
 lacks    "i2f: no engine is asked which containers use it" "ancestor=" "$(cat "$TMP/engcalls" 2>/dev/null)"
 # (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
 contains "i3: a refused rmi is kept with its remedy" "Kept image exasol/nano:2026.2.0-nano.8: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
-contains "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" "$out"
+contains "i3: the other images still go" "Container images removed (docker): exasol/mcp-server, script-language-container" "$out"
 contains "i3: and the run still answers 0" "RC=0" "$out"
+# (i3b) the language container still in use by another container: the engine
+# refuses, it is kept with its remedy, and the rest still goes.
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" bash "$TMP/run.sh" 2>&1)"
+contains "i3b: an in-use language container is kept with its remedy" "Kept image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" "$out"
+contains "i3b: the others still go" "Container images removed (docker): exasol/nano, exasol/mcp-server" "$out"
+lacks    "i3b: the kept one is not called removed" "mcp-server, script-language-container" "$out"
+# (L1) ANOTHER INSTALLATION ON THE SAME ENGINE (audit LNX-01): a WSL kit on
+# Podman and a Windows kit on Docker Desktop, or the reverse. The engine this
+# deployment did not run on is never asked, and an image of the kit's
+# repositories this deployment did not run from is kept, and said so.
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_ENGINE=podman STUB_PODMAN_CTRS=exasol-db-exa-test1 STUB_PODMAN_OBJ_IDS=exasol-db-exa-test1=fff666 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
+calls="$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "L1: a Podman deployment's own image goes" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" "$calls"
+lacks    "L1: Docker, which it did not run on, is never asked" "docker " "$calls"
+contains "L1: the removal names its engine" "Container images removed (podman): exasol/nano" "$out"
+# (L2) the deployment's containers are gone and its state names no image: the
+# kit cannot tell which images were its own, so it keeps every one, and says so.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_CTRS= STUB_DOCKER_OBJ_IDS= STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
+lacks    "L2: nothing it cannot prove is its own is removed" "rmi" "$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "L2: each kept image is said, with the command to remove it" "Kept image exasol/nano:2026.2.0-nano.8: the kit has no record that its database used it, so it may be another installation's. If nothing uses it, remove it with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+lacks    "L2: no removal is claimed" "Container images removed" "$out"
+# (L4) a stopped deployment whose containers are gone: the images its launcher
+# state names (the language container, the MCP sidecar in sidecars.yaml) are
+# still its own and go; the database image nothing names is kept.
+rm -f "$TMP/engcalls"; seed_img_deploy
+printf 'sidecars:\n  - name: mcp\n    image: docker.io/exasol/mcp-server:2.4.0@sha256:ae13\n    imagePullPolicy: IfNotPresent\n' > "$DEPLOY/sidecars.yaml"
+out="$(STUB_OS=linux STUB_DOCKER_CTRS= STUB_DOCKER_OBJ_IDS="docker.io/exasol/mcp-server:2.4.0@sha256:ae13=bbb222 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc=hhh888" STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
+calls="$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "L4: the language container its state names goes" "docker rmi exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" "$calls"
+contains "L4: the MCP image its sidecars.yaml names goes" "docker rmi bbb222" "$calls"
+lacks    "L4: the database image nothing names is kept" "docker rmi exasol/nano" "$calls"
+# (L3) the recorded engine is not on this machine, the other one is: not swept.
+mkdir -p "$TMP/eng-docker-only"; cp "$TMP/eng/docker" "$TMP/eng-docker-only/docker"
+if engines_sealed "$TMP/eng-docker-only" "L3"; then
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_ENG_DIR="$TMP/eng-docker-only" STUB_ENGINE=podman STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
+check    "L3: the other engine is never asked" "" "$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "L3: it says the engine was not found" "podman, the engine the database ran on, was not found, so the kit's container images were not checked." "$out"
+fi
 # (i4) the engine does not answer: one hint, exit unchanged.
-seed_deploy
+seed_img_deploy
 out="$(STUB_OS=linux STUB_DOCKER_RC=1 bash "$TMP/run.sh" 2>&1)"
 contains "i4: an engine that does not answer gets a hint" "Could not ask docker for the kit's container images" "$out"
 contains "i4: and the run still answers 0" "RC=0" "$out"
 # (i7) another deployment still runs from the image: no engine is asked.
-rm -f "$TMP/engcalls"; seed_deploy; mkdir -p "$SBHOME/.exasol/personal/deployments/other"
+rm -f "$TMP/engcalls"; seed_img_deploy; mkdir -p "$SBHOME/.exasol/personal/deployments/other"
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
 lacks    "i7: another deployment keeps exasol/nano" "rmi" "$(cat "$TMP/engcalls" 2>/dev/null)"
 rm -rf "$SBHOME/.exasol/personal/deployments/other"
 # (i8) the database was left behind: no engine is asked either.
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=linux STUB_TD_RC=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
 lacks    "i8: a database left behind keeps its image" "rmi" "$(cat "$TMP/engcalls" 2>/dev/null)"
 rm -rf "$DEPLOY"
@@ -532,13 +598,13 @@ check    "i9: no deployment dir, no engine call" "" "$(cat "$TMP/engcalls" 2>/de
 fi
 # (i5) no engine at all: one hint, exit unchanged.
 if engines_sealed "$TMP/noeng" "i5 (no engine)"; then
-seed_deploy
+seed_img_deploy
 out="$(STUB_OS=linux STUB_ENG_DIR="$TMP/noeng" bash "$TMP/run.sh" 2>&1)"
 contains "i5: no engine gets a hint" "Neither Docker nor Podman was found" "$out"
 contains "i5: and the run still answers 0" "RC=0" "$out"
 fi
 # (i6) macOS: the database lives in the launcher's VM; the host engine is left alone.
-rm -f "$TMP/engcalls"; seed_deploy
+rm -f "$TMP/engcalls"; seed_img_deploy
 out="$(STUB_OS=macos STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
 check    "i6: macOS asks no engine" "" "$(cat "$TMP/engcalls" 2>/dev/null)"
 rm -rf "$SBHOME/.exasol"

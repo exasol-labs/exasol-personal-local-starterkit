@@ -1,0 +1,90 @@
+{
+  "id": "mongodb",
+  "name": "MongoDB",
+  "profile": "rust-native",
+  "upstream": "exasol-labs/exasol-mongodb-vs",
+  "adapter": {
+    "version": "0.1.3",
+    "license": "MIT",
+    "arch": {
+      "aarch64": {
+        "asset": "exasol-mongodb-vs-0.1.3-linux-aarch64.so",
+        "url": "https://github.com/exasol-labs/exasol-mongodb-vs/releases/download/v0.1.3/exasol-mongodb-vs-0.1.3-linux-aarch64.so",
+        "size": 12710160,
+        "sha256": "fc42e8f6ea490429409b09d8b203db9a7446b0c7a69b03c03c85ef30dcc1da37"
+      },
+      "x86_64": {
+        "asset": "exasol-mongodb-vs-0.1.3-linux-x86_64.so",
+        "url": "https://github.com/exasol-labs/exasol-mongodb-vs/releases/download/v0.1.3/exasol-mongodb-vs-0.1.3-linux-x86_64.so",
+        "size": 13701728,
+        "sha256": "d619dcc5b4b35fc1520af8922eea07ba2ec504c70d5c4ee7142ce22289420827"
+      }
+    }
+  },
+  "driver": null,
+  "etl": null,
+  "shared_adapter": "MONGODB_ADAPTER",
+  "import_script": "MONGODB_SCAN",
+  "inputs": [
+    {
+      "name": "uri",
+      "label": "MongoDB URI (without password)",
+      "kind": "mongodb-uri",
+      "required": true
+    },
+    {
+      "name": "database",
+      "label": "Database",
+      "kind": "mongo-name",
+      "required": true
+    },
+    {
+      "name": "collection",
+      "label": "Collection",
+      "kind": "mongo-name",
+      "required": true
+    },
+    {
+      "name": "user",
+      "label": "Username",
+      "kind": "text",
+      "required": true
+    },
+    {
+      "name": "password",
+      "label": "Password",
+      "kind": "secret",
+      "required": true
+    }
+  ],
+  "paste": {
+    "credential": ["userinfo"],
+    "style": "mongodb",
+    "schemes": ["mongodb", "mongodb+srv"],
+    "secret": ["authmechanismproperties"],
+    "forms": ["mongodb+srv://user@cluster.example.net/database?options", "mongodb://user@host:27017/database?options"]
+  },
+  "auth": "password",
+  "host": "",
+  "url": "{uri}",
+  "connection_property": "MONGODB_CONNECTION",
+  "access": "role read on the database (find on the collection), for a user of the admin database",
+  "vs_properties": {
+    "DATABASE": "{database}",
+    "COLLECTION": "{collection}"
+  },
+  "error_hint": "MongoDB's adapter reports a wrong password, an address the server does not accept (Atlas: this computer's public IP must be in the project's IP access list) and an unreachable server all as 'error while reading collection metadata', and a database the account may not read as a collection that 'does not exist' - check the user and password, the access list and the database's role",
+  "tips": [
+    "The collection is the upper-case root table (MOVIES); its fields and the child tables keep MongoDB's spelling, so quote them: \"MOVIES_writers_arr\".\"_value\".",
+    "A child table joins its root on \"_parent\" = root.\"_id\"; mongo_id is the document's ObjectId.",
+    "Columns come from a sample of the documents: after the collection's shape changes, run exakit source refresh <name>."
+  ],
+  "notes": [
+    "One virtual schema per collection: its root table, plus a child table for each nested object and array (measured on sample_mflix.movies: 12 tables). The schema is inferred from a bounded sample.",
+    "The URI is stored without credentials: the user (a user in a pasted URI moves to the Username field) and the password go into the CONNECTION, where the database keeps them hidden. A URI given with user:password@ (--url, --set uri=, or pasted at the prompt) is read: the user and the password are taken out of it and used, the password never stored, logged or shown; given on the command line it is in the shell history, and a warning says so. Atlas mongodb+srv:// addresses resolve from inside the database (measured).",
+    "Needs the Rust language container (exasol-labs/language-container-rs 0.33.0, pinned per CPU architecture): exakit connect installs it with your consent and restarts the database once.",
+    "The adapter needs only MongoDB's find permission on the collection (read on the database).",
+    "The adapter always signs in against the admin database: it gives the CONNECTION's user and password as the credential, which replaces any authSource in the URI, so a URI or connection string with another authSource is refused. Keep authSource=admin (or leave it out) so the URI says the same, and make the reader a user of admin (an Atlas database user always is).",
+    "Atlas answers only addresses in the project's IP access list: add this computer's public IP as a permanent entry. A temporary entry stops the source when it expires."
+  ]
+}

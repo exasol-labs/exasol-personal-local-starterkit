@@ -63,6 +63,16 @@ class ClaudeDesktopAdapter(ClientAdapter):
             )
         if environment.os_name == "win32":
             return self._locate_windows(environment)
+        if environment.env.get("WSL_DISTRO_NAME") or environment.env.get("WSL_INTEROP"):
+            # Claude Desktop is a Windows app: from a WSL distro it is neither
+            # "not installed" nor unsupported, it is on the other side (WSL-02).
+            return LocationResult(
+                available=False,
+                path=None,
+                evidence=["Claude Desktop runs on Windows, outside this WSL distro, and reads its config there."],
+                remedy=("Connect it from Windows: in PowerShell, install the starter kit there and run "
+                        "exakit mcp-setup, or add the Exasol MCP server in Claude Desktop's own settings."),
+            )
         return LocationResult(
             available=False,
             path=None,
@@ -230,7 +240,7 @@ class ClaudeDesktopAdapter(ClientAdapter):
         if server_definition.env:
             entry["env"] = dict(server_definition.env)
         mcp_servers[server_definition.name] = entry
-        content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -246,7 +256,7 @@ class ClaudeDesktopAdapter(ClientAdapter):
             if not mcp_servers:
                 document.pop("mcpServers", None)
         remove_file = not document
-        content = None if remove_file else json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = None if remove_file else json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

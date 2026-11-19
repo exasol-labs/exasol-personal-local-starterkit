@@ -89,6 +89,15 @@ detect_wsl_drvfs_path() {
     return 1
 }
 
+# detect_musl — true on a Linux built on the musl C library (Alpine and the
+# like), where the glibc binaries the kit downloads cannot run.
+detect_musl() {
+    for _dm in /lib/ld-musl-*; do
+        [ -e "$_dm" ] && return 0
+    done
+    [ -f /etc/alpine-release ]
+}
+
 # detect_arch — prints: arm64 | x86_64 | unsupported
 detect_arch() {
     _da_m="$(uname -m)"
@@ -614,8 +623,7 @@ port_listener_pids() {
 # "Stop it or set EXAKIT_DB_PORT" is unactionable when "it" is never named, and
 # the holder is often not what the user expects: on a Windows machine with WSL,
 # a failed WSL install leaves wslrelay holding the port after its container is
-# long gone. dash-server has named its port's holder this way for a while
-# (_dash_server_port_foreign_desc); the database port deserves the same.
+# long gone. Naming the holder makes the remedy actionable.
 #
 # Inside a WSL distro this can still come back empty while the port really is
 # taken: Windows and WSL share localhost, and no tool in the distro can see a
@@ -665,14 +673,40 @@ port_in_use() {
 #   - cgroups v2. The container is started with --pids-limit and --shm-size,
 #     and rootless Podman refuses resource limits on a cgroups-v1 host.
 # Neither applies to root, or to macOS (where Podman runs in its own VM).
+# _detect_podman_pids_missing — does rootless Podman report cgroup controllers
+# WITHOUT pids? The database container runs with a pids limit, and crun refuses
+# it ("controller 'pids' is not available") when the user's cgroup has no pids
+# controller delegated: a systemd that delegates none, or WSL 2.9+, which puts
+# the distribution under a non-systemd cgroup subtree. The one check here that
+# asks the engine, bounded: only a real list that lacks pids is a gap - a
+# podman that cannot answer, or one too old for the field, is not evidence.
+_detect_podman_pids_missing() {
+    command -v podman >/dev/null 2>&1 || return 1
+    if command -v exakit_run_bounded >/dev/null 2>&1; then
+        _dppm_ctl="$(exakit_run_bounded 20 podman info --format '{{.Host.CgroupControllers}}' 2>/dev/null)" || return 1
+    else
+        _dppm_ctl="$(podman info --format '{{.Host.CgroupControllers}}' 2>/dev/null)" || return 1
+    fi
+    case "$_dppm_ctl" in
+        "["*) : ;;
+        *) return 1 ;;
+    esac
+    case " $(printf '%s' "$_dppm_ctl" | tr '[]' '  ') " in
+        *" pids "*) return 1 ;;
+    esac
+    return 0
+}
+
 # detect_rootless_podman_gap_kind — the SAME finding as the sentence below, as
-# one word a caller can branch on: subid | uidmap | cgroups | (empty).
+# one word a caller can branch on: subid | uidmap | cgroups | pids | (empty).
 #
 # Two functions rather than one because the two callers want different things.
 # The preflight wants a sentence to show a reader. The installer wants to know
-# whether it can fix the thing itself, and only two of the three are fixable at
+# whether it can fix the thing itself, and only two of the four are fixable at
 # all: a missing sub-id range and a missing uidmap package are both one command,
-# while cgroups v2 needs a reboot or a boot flag and no process can grant it.
+# while cgroups v2 needs a reboot or a boot flag, and a pids controller needs a
+# systemd delegation (or, under WSL 2.9+, an upstream fix) - no process here
+# can grant either.
 detect_rootless_podman_gap_kind() {
     [ "$(detect_os)" != "macos" ] || return 1
     [ "$(id -u 2>/dev/null || echo 0)" != "0" ] || return 1
@@ -693,6 +727,10 @@ detect_rootless_podman_gap_kind() {
     fi
     if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
         printf 'cgroups\n'
+        return 0
+    fi
+    if _detect_podman_pids_missing; then
+        printf 'pids\n'
         return 0
     fi
     return 1
@@ -731,6 +769,17 @@ detect_rootless_podman_gap() {
             return 0
         fi
         printf 'cgroups v2 is not active, so rootless Podman cannot apply the resource limits the kit sets — boot with systemd.unified_cgroup_hierarchy=1'
+        return 0
+    fi
+    if _detect_podman_pids_missing; then
+        if [ "$(detect_os)" = "wsl" ]; then
+            # Not this distro's settings: WSL 2.9+ places it under a cgroup
+            # subtree that delegates nothing, and only WSL or Podman can change
+            # that. Named, with the issue, so nobody hunts for a local fix.
+            printf "rootless Podman gets no 'pids' cgroup controller here, so the database container cannot start — a known WSL 2.9+ problem (podman-container-tools/podman#29909); 'podman info --format {{.Host.CgroupControllers}}' must list pids"
+            return 0
+        fi
+        printf "rootless Podman gets no 'pids' cgroup controller, so the database container cannot start — delegate it to your user: put '[Service]' and 'Delegate=cpu cpuset io memory pids' in /etc/systemd/system/user@.service.d/delegate.conf, run 'sudo systemctl daemon-reload', then log in again"
         return 0
     fi
     return 1

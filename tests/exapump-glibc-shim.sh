@@ -126,7 +126,7 @@ contains "  as the user's uid:gid"            '-u "$(id -u):$(id -g)"' "$(runlin
 contains "  host network, as Podman's"        "--network host" "$(runline)"
 contains "  the kit's config is visible"      '-v "$HOME:$HOME"' "$(wrapper)"
 contains "  HOME passed in"                   '-e HOME="$HOME"' "$(wrapper)"
-contains "  pulled with docker"               "docker pull ubuntu:24.04" "$(cat "$TMP/log")"
+contains "  pulled with docker"               "docker pull docker.io/library/ubuntu:24.04" "$(cat "$TMP/log")"
 check    "  no placeholder left"              0 "$(grep -c '@[A-Z]*@' "$TMP/home/bin/exapump")"
 out="$(shim docker STUB_DOCKER_SECOPTS="[name=seccomp name=rootless name=cgroupns]")"
 contains "rootless Docker runs as its root (the user)" "-u 0:0" "$(runline)"

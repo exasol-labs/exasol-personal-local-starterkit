@@ -4,22 +4,44 @@ name: windows-ps51
 # powershell.exe - and 5.1 serializes differently from pwsh 7: ConvertFrom-Json
 # hands an array back as one object, a one-element array becomes a bare string,
 # Set-Content -Encoding UTF8 writes a BOM. Every --json shape bug of the fourth
-# agent-operability audit passed the pwsh-only suites. This job runs the contract
-# test under both engines on a real Windows runner.
+# agent-operability audit passed the pwsh-only suites. This workflow runs the
+# contract test under both engines on a real Windows runner.
+#
+# EVERY JOB HERE IS SIZED TO FINISH IN ABOUT THREE MINUTES, so a pull request
+# waits on the slowest one, not on the sum. The long suites are cut into
+# slices along seams they declare themselves (EXAKIT_JC_PART for the
+# contracts, EXAKIT_LC_SECTIONS for the crossing), and the shards are balanced
+# by the step times of real runs. A suite added here goes to the shard with
+# the most room, or to a new shard of its own if it runs for minutes.
 on:
   push:
     branches: [main]
   pull_request:
+  # Started by versions-bump and pkg-json-tables on their proposal branches
+  # (a push made with the workflow token starts no workflow).
+  workflow_dispatch:
 
 jobs:
+  # Two halves under each engine: the not-installed answers are nearly two
+  # minutes of CLI starts on their own.
   json-contracts:
+    name: json-contracts (${{ matrix.engine }}, ${{ matrix.part }}/2)
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [powershell, pwsh]
+        part: [1, 2]
+    env:
+      EXAKIT_JC_PART: ${{ matrix.part }}
     steps:
       - uses: actions/checkout@v4
       - name: contracts under Windows PowerShell 5.1
+        if: matrix.engine == 'powershell'
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps51-json-contracts.ps1
       - name: contracts under PowerShell 7
+        if: matrix.engine == 'pwsh'
         shell: pwsh
         run: pwsh -NoProfile -File tests/ps51-json-contracts.ps1
 
@@ -32,54 +54,55 @@ jobs:
   # trusted, and the suites execute under the engine exakit.cmd actually
   # invokes.
   powershell-suites:
-    name: powershell-suites (${{ matrix.shard }}/2)
+    name: powershell-suites (${{ matrix.shard }}/5)
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        # Two shards: the crossing suite is eight minutes on its own and every
-        # other step here is seconds, so it gets a runner to itself.
-        shard: [1, 2]
+        # Five shards of about the same length. The virtual schema bridge runs
+        # the real engine and is two minutes even on Linux, so it has a runner
+        # to itself; the crossing suite is its own job below.
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - name: undefined-function sweep under Windows PowerShell 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: bash
         run: EXAKIT_PS_BIN=powershell bash tests/ps-undefined-functions.sh
       - name: encoding guard
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: bash
         run: bash tests/ps-encoding-guard.sh
       # First, because a file that does not parse makes every other suite here
       # meaningless: they Invoke-Expression what they can and skip the rest.
       - name: every .ps1 parses under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps-parse.ps1
       # Parsing is not enough: a param() block below a statement parses fine and
       # silently stops being a parameter block. See the file's header.
       - name: every param() block is declared first
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps-param-placement.ps1
       - name: uninstall suite under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-ps.ps1
       - name: exakit.cmd is never rewritten in place under itself, under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/shim-update-ps.ps1
-      - name: add-on launchers clean themselves up and are never rewritten under themselves, under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-launcher-ps.ps1
       - name: uninstall never claims success over a leftover database, under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-leftovers-ps.ps1
+      - name: ownership receipts, including installs from before receipts, under 5.1
+        if: matrix.shard == 1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/component-ownership-ps.ps1
       - name: non-interactive answers under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/noninteractive-answers.ps1
       # The Windows Personal runtime module, executed against a sandboxed kit
@@ -87,13 +110,32 @@ jobs:
       # wedge probe, the guest-rebuild recognition, the manifest keys, and the
       # per-subcommand --auto-approve probe against a stub launcher.
       - name: personal runtime module under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # The launcher's MCP sidecar as the kit's server: the read-only user, never
+      # SYS; the stdio server whenever the sidecar cannot serve.
+      - name: MCP sidecar backend under 5.1
+        if: matrix.shard == 1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-sidecar-ps.ps1
+      # install.ps1's dry run, run as users run it (a string through iex):
+      # nothing left in %TEMP% after success or a failure, and a local-kit
+      # copy without the checkout's .git, .claude worktrees and caches.
+      - name: dry run leaves nothing in TEMP under 5.1
+        if: matrix.shard == 1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/temp-cleanup-ps.ps1
       - name: container engine choice under 5.1
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-engine-ps.ps1
+      # The language container DNS repair asks the deployment's engine (Docker
+      # or Podman) and passes the deployment id, never an empty argument.
+      - name: language container DNS repair under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-slc-dns-ps.ps1
       # The WSL 2.7 check against a .cmd stub wsl.exe: the one place the raw
       # argument wsl.exe receives is visible (a Unix pwsh re-parses it).
       - name: WSL 2.7 check for Podman under 5.1
@@ -116,30 +158,217 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
-      # The crossing from a container database, executed on the engine that
-      # exakit.cmd really runs under: the fault-injection engine and exapump
-      # behind .cmd wrappers, every gate, both halves, and the coverage floor.
-      - name: legacy crossing under 5.1
-        if: matrix.shard == 1
+      # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
+      # launcher and a real process holding the launcher's image name.
+      - name: personas under 5.1
+        if: matrix.shard == 2
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/legacy-crossing-ps.ps1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personas-ps.ps1
+      - name: the settings file under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/env-file-ps.ps1
+      - name: menu clicks under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/menu-mouse-ps.ps1
+      - name: exakit sql keeps double quotes under 5.1 (WIN-05)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/sql-quoting-ps.ps1
+      - name: the table menu, driven with keys (QAT-08)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/table-menu-ps.ps1
+      - name: the Lakehouse subtree in the connect menu, driven with keys
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/lakehouse-picker-ps.ps1
+      - name: MCP admin SQL reaches exapump without a byte order mark under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-admin-sql-ps.ps1
+      - name: exakit update takes several component ids under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/update-targets-ps.ps1
+      - name: the database's TLS pin under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/tls-pin-ps.ps1
+      - name: the reference dataset assets under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/dataset-asset-ps.ps1
+      - name: the data question under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-question-ps.ps1
+      - name: destroy through a stale lock under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-destroy-lock-ps.ps1
       # The local data loader on the files people actually have - BOM, CRLF,
       # ';', GTFS .txt, header-only, .geojson - against a .cmd stub exapump
       # that keeps the bytes it was handed: the kit passes them on untouched.
       - name: data-load shapes under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 3
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-load-shapes-ps.ps1
       # No BOM ahead of the SQL piped into exapump's stdin, with the console
       # at code page 65001 (chcp 65001) as agent harnesses set it.
       - name: exapump stdin carries no BOM under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 3
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/exapump-stdin-bom-ps.ps1
+      # The database clock check: its measurement, words and limit under 5.1.
+      - name: database clock check under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/db-clock-skew-ps.ps1
       # The skill layer, executed rather than grepped. tests/skills.sh asserts
       # this half with awk against exakit-common.ps1, which catches a deleted
       # line and nothing else.
       - name: skills under 5.1
-        if: matrix.shard == 2
+        if: matrix.shard == 4
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/skills.ps1
+      # Core setup tasks and the preprocessor bridge, executed: the real
+      # Python coordinators behind core-setup.ps1, a .cmd stand-in for
+      # exapump, and the installer rerun through powershell.exe itself.
+      - name: core setup tasks under 5.1
+        if: matrix.shard == 4
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/core-setup.ps1
+      - name: preprocessor bridge under 5.1
+        if: matrix.shard == 4
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/preprocessor-lifecycle.ps1
+      # The virtual schema bridge under the engine that pipes to native
+      # programs in ASCII by default: a non-ASCII credential must still reach
+      # the CONNECTION byte for byte.
+      - name: virtual schema bridge under 5.1
+        if: matrix.shard == 5
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/virtual-schemas.ps1
+      - name: add-on parameter help under 5.1
+        if: matrix.shard == 4
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-help-ps.ps1
+      # The add-ons table on the engine the Windows installer runs under: its
+      # activity line, the offer's spinner handed to it, and the table drawn
+      # with no console (no Select All, Continue last).
+      - name: the add-ons table under 5.1
+        if: matrix.shard == 4
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-activity-ps.ps1
+
+  # The crossing from a container database, executed on the engine that
+  # exakit.cmd really runs under: the fault-injection engine and exapump
+  # behind .cmd wrappers, every gate, both halves, and the coverage floor.
+  # Whole, it is 25 minutes on this runner - nearly all of it powershell.exe
+  # starting behind the stubs - so it runs as eight slices of its numbered
+  # sections, balanced by measured time, and one more job holds the coverage
+  # floor over all of them (tests/legacy-crossing-ps.ps1, "slices").
+  legacy-crossing:
+    name: legacy crossing (${{ matrix.slice }}/8)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { slice: 1, sections: "1,2,3,4,5,6,7,8" }
+          - { slice: 2, sections: "9,10" }
+          - { slice: 3, sections: "11" }
+          - { slice: 4, sections: "12,13" }
+          - { slice: 5, sections: "14,15" }
+          - { slice: 6, sections: "16,18,20,21,22" }
+          - { slice: 7, sections: "17,23" }
+          - { slice: 8, sections: "19,24,25" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: legacy crossing under 5.1, sections ${{ matrix.sections }}
+        shell: powershell
+        env:
+          EXAKIT_LC_SECTIONS: ${{ matrix.sections }}
+          EXAKIT_LC_COVERAGE_OUT: ${{ runner.temp }}\legacy-crossing-coverage-${{ matrix.slice }}.txt
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/legacy-crossing-ps.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy-crossing-coverage-${{ matrix.slice }}
+          path: ${{ runner.temp }}/legacy-crossing-coverage-${{ matrix.slice }}.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # The floor over the union of the slices, and a refusal of any slice set
+  # that leaves a section out. Reading which module lines are executable is
+  # text work, so this runs where a runner starts fastest.
+  legacy-crossing-coverage:
+    name: legacy crossing coverage floor
+    needs: legacy-crossing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: legacy-crossing-coverage-*
+          path: ${{ runner.temp }}/legacy-crossing-coverage
+          merge-multiple: true
+      - name: the crossing's coverage floor, over every slice
+        env:
+          EXAKIT_LC_COVERAGE_MERGE: ${{ runner.temp }}/legacy-crossing-coverage
+          EXAKIT_LC_COVERAGE_PARTS: "8"
+        run: pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
+
+  # Four groups of about two minutes each, by the suites' measured times.
+  marketplace-python:
+    name: marketplace-python (${{ matrix.group }}/3)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: uv for the add-ons the suites install
+        shell: powershell
+        run: |
+          python -m pip install uv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: install, service and runtime, the scheduler
+        if: matrix.group == 1
+        shell: powershell
+        run: |
+          python -m unittest discover -s tests -p 'test_marketplace_installer_flow.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_service.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_runtime.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_live_fixture.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_scheduler.py' -k bootstrap -k uninstall -k administrator -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: persona apply and the selection
+        if: matrix.group == 2
+        shell: powershell
+        run: |
+          python -m unittest discover -s tests -p 'test_marketplace_persona_apply.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_selection.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: the adapters and the public PowerShell entry points
+        if: matrix.group == 3
+        shell: powershell
+        run: |
+          python -m unittest discover -s tests -p 'test_marketplace_adapters.py' -k failed_public_uninstall -k without_uv -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # QAT-11: the suites with no shell, signal or file-mode dependency, never run on Windows before.
+          foreach ($suite in @('addons', 'apply', 'pinned_digests', 'process', 'redirect_auth',
+                               'wsl_ports', 'ui', 'rules', 'blackbox')) {
+            python -m unittest discover -s tests -p "test_marketplace_$suite.py" -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

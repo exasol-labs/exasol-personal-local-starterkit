@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from pathlib import Path
 from typing import Iterable
 
-from mcp.adapters.base import ClientAdapter, RenderResult
+from mcp.adapters.base import AdapterInspection, ClientAdapter, RenderResult
 from mcp.adapters.registry import AdapterRegistry
 from mcp.core.errors import BlockingOperationError, MCPSubsystemError
 from mcp.core.models import (
@@ -21,6 +23,7 @@ from mcp.core.models import (
     OperationResult,
     OperationStatus,
     OwnershipState,
+    ServerDefinition,
     Severity,
     VerificationEvidence,
 )
@@ -184,8 +187,9 @@ class MCPAccessSubsystem:
         # or unsupported config says nothing about the others.
         status_findings: list[Finding] = list(findings)
 
+        kit_records = self._active_artifacts(manifest_repository)
         for adapter in adapters:
-            rendered, config_path, client_findings = self._render_for_client(adapter, request)
+            rendered, config_path, client_findings = self._render_for_client(adapter, request, kit_records)
             findings.extend(client_findings)
             if rendered is None or config_path is None:
                 skipped_clients.append(self._skip_record(adapter, client_findings))
@@ -262,10 +266,69 @@ class MCPAccessSubsystem:
             )
             snapshot_reference = snapshot_record["snapshot_id"]
 
-        for adapter, rendered, artifact, _ in rendered_items:
-            del adapter
-            self._apply_render(rendered)
-            artifact.permissions = self._security.apply_managed_permissions(rendered.path)
+        # Each client's file is written by a worker of its own, at the same time; two clients that share a file are
+        # written one after the other by the same worker. The manifest is then updated in order, on this thread.
+        by_path: dict[str, list[tuple[RenderResult, ArtifactReference]]] = {}
+        for _adapter, rendered, artifact, _ in rendered_items:
+            by_path.setdefault(str(rendered.path), []).append((rendered, artifact))
+
+        # A client whose file cannot be written (a read-only or company-managed
+        # folder) is skipped on its own: the others are still written, recorded
+        # and reported, and the skip names the file.
+        unwritable: dict[int, OSError] = {}
+
+        def write(items: list[tuple[RenderResult, ArtifactReference]]) -> None:
+            for rendered, artifact in items:
+                try:
+                    self._apply_render(rendered)
+                    artifact.permissions = self._security.apply_managed_permissions(rendered.path)
+                except OSError as exc:
+                    unwritable[id(artifact)] = exc
+
+        if len(by_path) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(8, len(by_path)), thread_name_prefix="exakit-mcp-write") as pool:
+                for done in [pool.submit(write, items) for items in by_path.values()]:
+                    done.result()           # any other failure still raises here, as it did one at a time
+        else:
+            for items in by_path.values():
+                write(items)
+        if unwritable:
+            kept = [
+                (item, artifact, change)
+                for item, artifact, change in zip(list(rendered_items), list(artifacts), list(changes))
+                if id(item[2]) not in unwritable
+            ]
+            for adapter, rendered, artifact, _ in rendered_items:
+                if id(artifact) in unwritable:
+                    skipped_clients.append(self._not_writable_record(adapter, rendered.path))
+            rendered_items[:] = [item for item, _, _ in kept]
+            artifacts[:] = [artifact for _, artifact, _ in kept]
+            changes[:] = [change for _, _, change in kept]
+            configured_adapters = [adapter for adapter, _, _, _ in rendered_items]
+            details["configured_clients"] = [adapter.adapter_id() for adapter in configured_adapters]
+            next_actions = [
+                action
+                for adapter in configured_adapters
+                for action in adapter.activation_instructions()
+            ]
+            if not rendered_items:
+                # Not one client could be written: the run did nothing.
+                return OperationResult(
+                    request_id=request.request_id,
+                    operation=request.operation,
+                    status=OperationStatus.BLOCKED,
+                    summary=self._configure_summary(
+                        "Configuration was blocked by existing client state.", skipped_clients
+                    ),
+                    findings=findings,
+                    changes=changes,
+                    artifacts=artifacts,
+                    backup_reference=snapshot_reference,
+                    details=details,
+                )
+        for _adapter, _rendered, artifact, _ in rendered_items:
             stored_artifact = manifest_repository.upsert_artifact(artifact)
             artifacts[artifacts.index(artifact)] = stored_artifact
 
@@ -640,13 +703,38 @@ class MCPAccessSubsystem:
         else:
             backup_reference = None
         changes: list[ChangeRecord] = []
+        findings: list[Finding] = []
+        skipped_clients: list[dict[str, str]] = []
+        removed = 0
         for artifact in target_artifacts:
             adapter = self._registry.get(artifact.client)
             entry_name = str(artifact.metadata.get("entry_name", "exasol"))
-            inspection = adapter.inspect(Path(artifact.path), entry_name)
+            try:
+                inspection = adapter.inspect(Path(artifact.path), entry_name)
+            except (OSError, ValueError) as exc:     # unreadable, or not UTF-8: as unparseable as a syntax error
+                inspection = AdapterInspection(path=Path(artifact.path), exists=True, document=None,
+                                               file_valid=False, findings=[])
+                inspection.findings.append(Finding(code="invalid_client_config", severity=Severity.ERROR,
+                                                   message="The file could not be read.", evidence=[str(exc)]))
+            if not inspection.exists:
+                # The file is gone, and the kit's entry with it. Writing a removal would CREATE the file (Claude Code
+                # and VS Code wrote "{}" where nothing had been).
+                manifest_repository.mark_removed(artifact.artifact_id)
+                removed += 1
+                continue
+            if not inspection.file_valid or inspection.document is None:
+                # A file the kit cannot parse (a // comment, a UTF-8 BOM, one bad TOML line) is never rewritten: the
+                # removal is rendered from the parsed document, and with none it deleted the file or wrote "{}" over
+                # it -- the user's other servers and, for ~/.claude.json, all of Claude Code's own state. The bytes
+                # stay, the record stays, and the user is told which entry to take out by hand.
+                finding = self._untouched_on_removal(adapter, artifact, entry_name, inspection)
+                findings.append(finding)
+                skipped_clients.append(self._skip_record(adapter, [finding]))
+                continue
             rendered = adapter.render_removal(inspection, entry_name)
             self._apply_render(rendered)
             manifest_repository.mark_removed(artifact.artifact_id)
+            removed += 1
             changes.append(
                 ChangeRecord(
                     kind=ChangeKind.REMOVE,
@@ -658,13 +746,45 @@ class MCPAccessSubsystem:
             )
         if request.remove_runtime_cache:
             self._filesystem.prune_empty_parents(runtime_paths.manifest_path.parent, runtime_paths.runtime_root)
+        if not skipped_clients:
+            status = OperationStatus.SUCCESS
+        elif removed:
+            status = OperationStatus.SUCCESS_WITH_WARNINGS
+        else:
+            status = OperationStatus.BLOCKED        # as configure: nothing the request asked for was done
         return OperationResult(
             request_id=request.request_id,
             operation=request.operation,
-            status=OperationStatus.SUCCESS,
-            summary=f"Removed managed configuration from {len(target_artifacts)} client artifact(s).",
+            status=status,
+            summary=self._configure_summary(
+                f"Removed managed configuration from {removed} client artifact(s).", skipped_clients
+            ),
+            findings=findings,
             changes=changes,
             backup_reference=backup_reference,
+            details={"skipped_clients": skipped_clients} if skipped_clients else {},
+        )
+
+    @staticmethod
+    def _untouched_on_removal(
+        adapter: ClientAdapter, artifact: ArtifactReference, entry_name: str, inspection: AdapterInspection
+    ) -> Finding:
+        """The warning for a client file removal left alone: where, why, and what to delete by hand."""
+
+        problem = next((finding for finding in inspection.findings if finding.blocking or finding.evidence),
+                       inspection.findings[0] if inspection.findings else None)
+        why = problem.message if problem else f"{adapter.display_name()} configuration could not be parsed."
+        detail = (problem.evidence[0] if problem and problem.evidence else "").strip()
+        return Finding(
+            code="client_config_left_untouched",
+            severity=Severity.WARNING,
+            message=(f"{adapter.display_name()}: the kit left {artifact.path} untouched, because it could not parse "
+                     f"it ({why.rstrip('.')}{': ' + detail if detail else ''}). The kit's MCP entry "
+                     f"'{entry_name}' is still in it."),
+            scope={"client": adapter.adapter_id(), "path": artifact.path, "entry": entry_name},
+            evidence=[detail] if detail else [],
+            recommended_action=(f"Delete the MCP server entry '{entry_name}' from {artifact.path} by hand, or fix "
+                                f"the file and run: exakit mcp-remove {adapter.adapter_id()}"),
         )
 
     def _status(
@@ -764,7 +884,8 @@ class MCPAccessSubsystem:
         return named or request.target_clients
 
     def _render_for_client(
-        self, adapter: ClientAdapter, request: OperationRequest
+        self, adapter: ClientAdapter, request: OperationRequest,
+        kit_records: list[ArtifactReference] | None = None,
     ) -> tuple[RenderResult | None, Path | None, list[Finding]]:
         """Locate, inspect and render ONE client.
 
@@ -787,6 +908,11 @@ class MCPAccessSubsystem:
             )
         server_definition = request.server_definition
         capabilities = adapter.describe_capabilities()
+        bridged = server_definition.for_client(capabilities.supports_http)
+        if bridged is not None:
+            # This client is given the definition it can express: the HTTP one
+            # itself, or the local bridge to it (Claude Desktop, for the exasol server).
+            server_definition = bridged
         if server_definition.transport is DeploymentMode.HTTP and not capabilities.supports_http:
             # Not every client can express a remote server, and the ones that
             # cannot are skipped rather than half-configured: an entry this
@@ -828,14 +954,39 @@ class MCPAccessSubsystem:
                 Finding(
                     code="client_not_supported",
                     severity=Severity.WARNING,
-                    message=f"{adapter.display_name()} is not supported on this platform (skipped).",
+                    message=(f"{adapter.display_name()} is not supported on this platform (skipped)."
+                             if location.remedy is None else
+                             f"{adapter.display_name()} cannot be configured from here (skipped)."),
                     scope={"client": adapter.adapter_id()},
                     evidence=location.evidence,
-                    recommended_action="Choose a supported client or use a supported platform.",
+                    recommended_action=location.remedy or "Choose a supported client or use a supported platform.",
                 )
             )
             return None, None, findings
         inspection = adapter.inspect(location.path, server_definition.name)
+        # An entry of this name the kit did not write is the user's own (their own Exasol MCP server, their own
+        # Dash Server): it is never replaced, and so never removed by an uninstall either. The kit's entry goes
+        # beside it under its own name, "<name>-starter-kit", and that name is recorded with it.
+        own_name = self._kit_entry_name(adapter, location.path, server_definition, inspection, kit_records or [])
+        if own_name != server_definition.name:
+            kept = server_definition.name
+            server_definition = dataclasses.replace(server_definition, name=own_name)
+            location = adapter.locate_for_server(self._environment, own_name)
+            if not location.available or location.path is None:  # pragma: no cover - same client, another name
+                return None, None, findings
+            inspection = adapter.inspect(location.path, own_name)
+            findings.append(
+                Finding(
+                    code="user_entry_kept",
+                    severity=Severity.INFO,
+                    message=(f"{adapter.display_name()} already has an MCP entry named '{kept}' that the kit did not "
+                             f"write: it is kept as it is, and the kit's is added as '{own_name}'."),
+                    scope={"client": adapter.adapter_id(), "server": kept, "entry": own_name},
+                    evidence=[f"Config: {location.path}"],
+                    recommended_action=(f"Nothing to do. Both entries work; '{kept}' stays yours and "
+                                        "exakit uninstall leaves it alone."),
+                )
+            )
         findings.extend(inspection.findings)
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
@@ -844,6 +995,46 @@ class MCPAccessSubsystem:
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
         return rendered, location.path, findings
+
+    KIT_SUFFIX = "-starter-kit"
+
+    def _kit_entry_name(
+        self,
+        adapter: ClientAdapter,
+        path: Path,
+        server_definition: ServerDefinition,
+        inspection: AdapterInspection,
+        kit_records: list[ArtifactReference],
+    ) -> str:
+        """The entry name the kit writes this server under in this client's file.
+
+        The server's own name, unless an entry of that name is there that the kit did not write. The kit's records
+        say what it wrote: an artifact for this client and file whose entry is the server's own name means the entry
+        is the kit's (written by this or an earlier run); one recorded under another name for the same server means
+        the kit already moved aside, and keeps using that name. An entry identical to what the kit would write is
+        taken as the kit's too (a re-install after the records were lost)."""
+        name = server_definition.name
+        mine = [
+            record for record in kit_records
+            if record.client == adapter.adapter_id() and Path(record.path) == Path(path)
+            and str(record.metadata.get("server", record.metadata.get("entry_name", "exasol"))) == name
+        ]
+        for record in mine:
+            recorded = str(record.metadata.get("entry_name", "exasol"))
+            if recorded != name:
+                return recorded                     # moved aside on an earlier run
+        if inspection.managed_entry is None or mine:
+            return name
+        try:
+            if adapter.render(server_definition, inspection).managed_hash == inspection.managed_hash:
+                return name                         # exactly what the kit would write: the kit's
+        except (ValueError, NotImplementedError):
+            pass
+        taken = set(inspection.other_server_names or [])
+        candidate, n = f"{name}{self.KIT_SUFFIX}", 2
+        while candidate in taken:
+            candidate, n = f"{name}{self.KIT_SUFFIX}-{n}", n + 1
+        return candidate
 
     @staticmethod
     def _skip_record(adapter: ClientAdapter, client_findings: list[Finding]) -> dict[str, str]:
@@ -859,6 +1050,19 @@ class MCPAccessSubsystem:
             "reason_code": reason.code if reason else "unknown",
             "reason": reason.message if reason else "Client was skipped.",
             "recommended_action": (reason.recommended_action or "") if reason else "",
+        }
+
+    @staticmethod
+    def _not_writable_record(adapter: ClientAdapter, path: Path) -> dict[str, str]:
+        """The skip record of a client whose config file could not be written."""
+
+        action = "Fix the folder's permissions, then run: exakit mcp-setup"
+        return {
+            "client": adapter.adapter_id(),
+            "display_name": adapter.display_name(),
+            "reason_code": "client_config_not_writable",
+            "reason": f"its settings file {path} cannot be written. {action}",
+            "recommended_action": action,
         }
 
     @staticmethod
@@ -927,6 +1131,8 @@ class MCPAccessSubsystem:
             source_adapter=adapter.adapter_id(),
             metadata={
                 "entry_name": rendered.entry_name,
+                # the server this entry is (exasol, dash-server), whatever name it has in the file
+                "server": request.server_definition.name if request.server_definition else rendered.entry_name,
                 "transport": request.deployment_mode.value,
             },
         )

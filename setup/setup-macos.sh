@@ -36,12 +36,22 @@ if [ -f "$LIB_DIR/legacy-crossing.sh" ]; then . "$LIB_DIR/legacy-crossing.sh" ||
 if [ -f "$LIB_DIR/exapump.sh" ];  then . "$LIB_DIR/exapump.sh"  || die "Could not load $LIB_DIR/exapump.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/mcp.sh" ];      then . "$LIB_DIR/mcp.sh"      || die "Could not load $LIB_DIR/mcp.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/pyexasol.sh" ]; then . "$LIB_DIR/pyexasol.sh" || die "Could not load $LIB_DIR/pyexasol.sh (corrupted kit copy? re-download and re-run)"; fi
+if [ -f "$LIB_DIR/core-setup.sh" ]; then . "$LIB_DIR/core-setup.sh" || die "Could not load $LIB_DIR/core-setup.sh (corrupted kit copy? re-download and re-run)"; fi
+if [ -f "$LIB_DIR/persona.sh" ];  then . "$LIB_DIR/persona.sh"  || die "Could not load $LIB_DIR/persona.sh (corrupted kit copy? re-download and re-run)"; fi
+# The data table's "Federation: Connect other data sources" row: whether it can be picked
+# (exakit_vs_available) and the wizard it runs (exakit_vs_connect_wizard).
+if [ -f "$LIB_DIR/virtual-schemas.sh" ]; then . "$LIB_DIR/virtual-schemas.sh" || die "Could not load $LIB_DIR/virtual-schemas.sh (corrupted kit copy? re-download and re-run)"; fi
 
+# Every environment answer checked before anything is installed (audit AGK-10).
+exakit_validate_env_answers </dev/null || exit 2
 exakit_init_logging
 # Where the bootstrap time went, in the log: the installer stamps its start,
 # and this is the first line setup can write.
 [ -n "${EXAKIT_INSTALL_T0:-}" ] && _exakit_log_file "INFO  setup started $(( $(date +%s) - EXAKIT_INSTALL_T0 ))s after the installer began (download, extraction and library load)"
 manifest_init
+# The settings file: the commented template, once (never over the user's copy).
+exakit_env_file_install "$KIT_ROOT"
+exakit_env_file_note
 exakit_enable_failure_handling
 # The `exakit` command first, so `exakit status` answers from the first seconds
 # of this install (AGENTS.md tells an agent to poll it). It used to be written
@@ -64,6 +74,16 @@ exakit_note_kit_upgrade "$KIT_ROOT" || true
 _kit_version="$(exakit_kit_version_at "$KIT_ROOT" 2>/dev/null || true)"
 [ -n "$_kit_version" ] && manifest_set kit.version "$_kit_version"
 exakit_resolve_install_versions
+# A persona (EXAKIT_PERSONA) answers every question the user did not answer
+# explicitly; an unknown one stops here, before anything is installed.
+# Not in an installer an update started to finish new setup: the first
+# install's answers stand, and nothing is recorded, offered, installed or
+# started on a persona's strength - not even one named in exakit.env.
+if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+    unset EXAKIT_PERSONA_ACTIVE
+elif command -v exakit_persona_apply_env >/dev/null 2>&1; then
+    exakit_persona_apply_env
+fi
 
 # --- step 0: an installation this kit cannot manage -------------------------
 # An older kit could put the database in a container. This asks what to do with
@@ -77,13 +97,13 @@ EXAKIT_CURRENT_STEP="requirements"
 personal_check_requirements
 
 # --- step 2: launcher -------------------------------------------------------
-if begin_step launcher "Step 1/6  Exasol launcher"; then
+if begin_step launcher "Step 1/4  Exasol launcher"; then
     personal_install_launcher
     mark_step launcher
 fi
 
 # --- step 3: local deployment ----------------------------------------------
-if begin_step runtime "Step 2/6  Local database deployment"; then
+if begin_step runtime "Step 2/4  Local database deployment"; then
     # personal_deploy_local returns non-zero for ONE reason: Podman is not here
     # and the kit was not allowed, or not able, to install it. Everything else
     # in there still stops the run, because a deployment that half exists is
@@ -142,18 +162,62 @@ else
     fi
 fi
 
-# --- steps 3-6: exapump, MCP server, pyexasol, exakit helper (shared) -------
-kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
+# --- steps 3-4: Setup Utilities (data loader, SQL preprocessor, Python driver), AI bridge (shared)
+kit_shared_steps 3 4 "$SCRIPT_DIR" "$KIT_ROOT"
+
+# --- the personas, then the data ---------------------------------------------
+# "What will you use this machine for?" comes after the parts everyone needs,
+# and its answer ticks the datasets (and, at the close, the add-ons). With
+# EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
+EXAKIT_MARKETPLACE_PYTHON_APPLY=1
+export EXAKIT_MARKETPLACE_PYTHON_APPLY
+# Dash Server and JSON Tables start installing now, in the background, while the
+# data questions are on screen (exakit_addons_early_begin). Never in a rerun an
+# update started, which installs nothing new.
+if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; } && \
+   command -v exakit_addons_early_begin >/dev/null 2>&1; then
+    exakit_addons_early_begin || true
+fi
+# Not asked again by an installer an update started to finish new setup: the
+# personas and the data were the first install's question, and its answer stands.
+if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+    :
+elif command -v exakit_persona_flow >/dev/null 2>&1; then
+    exakit_persona_flow "$KIT_ROOT"
+    # The skills were placed before the question; a persona's own skill is placed now.
+    command -v exakit_install_persona_skills >/dev/null 2>&1 && { exakit_install_persona_skills || true; }
+fi
+
+# The exakit helper is the last item of Setup Utilities (kit_shared_steps).
 
 # The other half of the crossing. Last, because it needs all three things the
 # steps above provide: a database that is up, an exapump binary, and a profile
 # pointing at the NEW database.
-# Runs inside the shared steps now, right before the sample-data load; this is
-# the safety net for a run that never reached that point, and a no-op once the
-# restore has happened. See exakit_maybe_offer_data_load.
+# Runs at the start of the sample-data offer now (exakit_maybe_offer_data_load,
+# reached through the persona flow above); this is the safety net for a run that
+# never reached that point, and a no-op once the restore has happened.
 if command -v legacy_crossing_after >/dev/null 2>&1; then legacy_crossing_after; fi
 
 exakit_finish
+# A PERSONA INSTALL CLOSES ON ITS PANEL. The personas' own add-ons are part of
+# what was asked for, so they are offered first, and the connection panel and
+# the ready line are what the reader is left with. Without a persona the
+# marketplace stays the optional extra it always was, after the panel.
+# Never in an update-started rerun, which asks and installs nothing new.
+if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && \
+   ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
+    # exakit_finish released the install lock, and the personas' add-ons install
+    # after it - minutes, for a large one. Held again through them: without
+    # it a second setup run started meanwhile ran beside this one, and the one
+    # interrupted left "did not finish at step" on a kit that was fine.
+    exakit_acquire_lock
+    exakit_autostart_default_on || true
+    ( exakit_marketplace_offer ) || true
+    # Ctrl-C at the add-ons table does not stop the add-ons started early: said.
+    command -v exakit_addons_early_report >/dev/null 2>&1 && exakit_addons_early_report
+    command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
+    exakit_release_lock
+fi
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.
@@ -175,13 +239,21 @@ exakit_print_ready_line
 # took it away. Only ever applied when the manifest has no opinion yet, so
 # `exakit autostart off` survives a re-run of the installer. This runs BEFORE
 # the marketplace offer so an add-on installed from it joins the boot set.
-exakit_autostart_default_on || true
-( exakit_marketplace_offer ) || true
+if [ -z "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+    exakit_autostart_default_on || true
+    # Not asked again by an installer an update started to finish new setup: the
+    # first install already made that offer.
+    if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
+        ( exakit_marketplace_offer ) || true
+        # Ctrl-C at the add-ons table does not stop the add-ons started early: said.
+        command -v exakit_addons_early_report >/dev/null 2>&1 && exakit_addons_early_report
+    fi
+fi
 # A rule, then a heading: the last line on screen is where the reader is left,
 # and run together with whatever the marketplace printed it read as one more of
 # its bullets. The rule gives it air; the green arrow says it is not a step.
 ui_rule
-heading "Run \"exakit help\" for support"
+exakit_closing_hint
 # Two blank lines before the shell prompt returns. The installer's last line was
 # landing directly against it, so the prompt read as part of the output.
 printf '\n\n'

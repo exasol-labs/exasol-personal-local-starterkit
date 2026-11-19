@@ -1,0 +1,74 @@
+{
+  "id": "azure-blob",
+  "name": "Azure Blob Storage (document files)",
+  "profile": "java-document-files",
+  "upstream": "exasol/azure-blob-storage-document-files-virtual-schema",
+  "adapter": {
+    "version": "3.1.0",
+    "asset": "document-files-virtual-schema-dist-9.1.0-azure-blob-storage-3.1.0.jar",
+    "url": "https://github.com/exasol/azure-blob-storage-document-files-virtual-schema/releases/download/3.1.0/document-files-virtual-schema-dist-9.1.0-azure-blob-storage-3.1.0.jar",
+    "size": 116073941,
+    "sha256": "eab6d909c3c1fc8f93eaf38517e7a46b816a20b2177888e71f0995293e787878",
+    "license": "MIT"
+  },
+  "driver": null,
+  "etl": null,
+  "import_script": "IMPORT_FROM_AZURE_BLOB_STORAGE_DOCUMENT_FILES",
+  "inputs": [
+    {
+      "name": "account",
+      "label": "Storage account name",
+      "kind": "azure-account",
+      "required": true
+    },
+    {
+      "name": "container",
+      "label": "Container name",
+      "kind": "azure-container",
+      "required": true
+    },
+    {
+      "name": "mapping",
+      "label": "EDML mapping",
+      "prompt": "EDML mapping path",
+      "kind": "edml",
+      "draft": true,
+      "form_default": "auto:data/",
+      "hint": [
+        "EDML mapping: a .json file or a folder of them on this computer.",
+        "Enter takes auto:data/: the kit drafts the mapping from the data/ folder after you give the SAS token."
+      ]
+    },
+    {
+      "name": "secret",
+      "label": "SAS token (read + list), connection string or account key",
+      "kind": "secret",
+      "required": true
+    }
+  ],
+  "paste": {
+    "style": "azure",
+    "params": {"accountname": "account"},
+    "implied": ["defaultendpointsprotocol", "endpointsuffix", "blobendpoint"],
+    "forms": ["https://<account>.blob.core.windows.net/<container>", "abfss://<container>@<account>.dfs.core.windows.net", "AccountName=...;AccountKey=..."]
+  },
+  "auth": "azure-sas-or-key",
+  "host": "{account}.blob.core.windows.net",
+  "credential": "azure-blob",
+  "store": "container",
+  "access": "Azure: a SAS with read (r) and list (l) on this container, or the account key",
+  "auth_hint": "a SAS is valid only for the container it was made for, so a wrong container name also reads as a rejected credential",
+  "vs_properties": {
+    "MAPPING": "{mapping_path}"
+  },
+  "tips": [
+    "Tables and columns are named by the mapping file: a change to the mapping needs a new connect (exakit source remove <name>, then connect again).",
+    "A CSV mapping without fields has its columns inferred, and a date then arrives as VARCHAR(2000000): name the fields and their types in the mapping to get typed columns."
+  ],
+  "notes": [
+    "The credential is one of three things Azure gives you, on standard input or through --password-file: a SAS token (recommended: limited to the container, read and list only, with an expiry), the storage account's connection string, or its account key. The kit checks a SAS on this computer first - read and list permission, not expired, not scoped to one blob - and builds the connection string itself, always over HTTPS to <account>.blob.core.windows.net.",
+    "A SAS cannot be narrowed to a folder: it opens the whole container, so keep data the database must not read in another container. An account key opens every container of the account, for writing too.",
+    "The public Azure cloud only: no custom domain, Azurite, or sovereign-cloud endpoint.",
+    "The adapter detects the file type by extension (.json, .jsonl, .csv, .parquet); CSV and Parquet can infer their columns, JSON needs explicit fields. A source glob that matches no file reads as an empty table - the check names such tables."
+  ]
+}

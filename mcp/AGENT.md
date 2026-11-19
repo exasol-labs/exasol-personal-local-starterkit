@@ -77,8 +77,8 @@ Hard rules:
 - Never hardcode client-specific behavior into the core domain.
 - Prefer composition, dependency injection, and testable interfaces.
 - Preserve clean integration boundaries with the existing installer.
-- Default to local `stdio` MCP usage for single-user flows unless a documented reason requires HTTP.
-- Treat remote HTTP mode as higher risk and require compensating controls.
+- The database's MCP server is the Exasol Personal launcher's sidecar, on loopback HTTP only, as the read-only user; there is no other server to fall back to - heal the sidecar (`exakit mcp-setup`), never replace it. `stdio` is only the bridge for clients that cannot hold a URL (Claude Desktop).
+- Treat any HTTP endpoint off loopback as higher risk and require compensating controls.
 
 ## Security Rules
 
@@ -94,7 +94,6 @@ Hard rules:
 
 - Documentation is part of the product, not project exhaust.
 - Every significant decision must state rationale, alternatives, trade-offs, risks, and evidence.
-- Use ADR style in `docs/decisions.md`.
 - Keep requirements traceable to sources.
 - Keep assumptions explicit and review them at each phase gate.
 

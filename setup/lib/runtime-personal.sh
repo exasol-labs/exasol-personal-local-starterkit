@@ -60,9 +60,11 @@ personal_heal_rootless_podman() {
     _phr_why="$(detect_rootless_podman_gap 2>/dev/null || true)"
 
     case "$_phr_kind" in
-        cgroups)
-            # No process can turn this on. Say so, and say it in the words of
-            # the platform the reader is actually on.
+        cgroups|pids)
+            # No process can turn this on - cgroups v2 is a boot setting, and
+            # a pids controller is a systemd delegation or, under WSL 2.9+, an
+            # upstream fix. Say so, in the words of the platform the reader is
+            # actually on, and let the deploy (and its container error) judge.
             warn "Rootless Podman: ${_phr_why}"
             return 0
             ;;
@@ -198,6 +200,18 @@ personal_podman_installable() {
     command -v sudo >/dev/null 2>&1
 }
 
+# --- the container engine ---------------------------------------------------
+# From launcher 2.4.0 a local deployment on Linux (and WSL) runs in Podman when
+# Podman is installed, and otherwise in a Docker that runs Linux containers -
+# the launcher's container_engine "auto". The kit follows the same rule rather
+# than choosing for it: Podman is installed only where the launcher would need
+# it, and every check the kit makes against a deployment asks the engine that
+# deployment runs on. A deployment keeps the engine it first started on, which
+# the launcher records in local/runtime/container-engine.json; one made before
+# 2.4.0 has no record and runs in Podman. macOS has none of this: the launcher
+# runs its own VM there, and personal_engine answers nothing.
+PERSONAL_DOCKER_MIN_MAJOR=29
+
 # personal_install_podman — Podman, when the database step finds it missing.
 #
 # WHERE THIS RUNS MATTERS. The launcher is installed first and the database is
@@ -223,6 +237,8 @@ personal_install_podman() {
         linux|wsl) : ;;
         *) return 0 ;;   # macOS and Windows: the launcher brings its own
     esac
+    # Docker runs this deployment: nothing to install.
+    [ "${EXAKIT_PERSONAL_ENGINE:-$(personal_engine_recorded)}" = docker ] && return 0
 
     _pin_cmd="$(_personal_podman_install_cmd 2>/dev/null || true)"
     _pin_where="on this machine"
@@ -356,6 +372,25 @@ personal_check_requirements() {
                 info "Then reopen the distro and re-run the installer: $(exakit_install_command)"
                 die "WSL 1 is not supported: Exasol Personal needs a real Linux kernel."
             fi
+            # MUSL IS REFUSED BEFORE ANYTHING IS INSTALLED (LNX-06). Alpine and other
+            # musl distros got a `sudo apk add podman` and then binaries - the
+            # launcher, exapump, uv's Python - that are built for glibc and do not
+            # run there. Said at the start, with the way that works.
+            if detect_musl 2>/dev/null; then
+                error "This Linux uses the musl C library (Alpine or similar). The Exasol launcher, exapump and the kit's Python are built for glibc and cannot run here."
+                info "Use a glibc distribution (Ubuntu, Debian, Fedora, RHEL and its rebuilds), for example in a VM or a WSL 2 distro, and run the installer there."
+                die "Unsupported C library: musl."
+            fi
+            # A KIT HOME ON A WINDOWS DRIVE, refused before the first password is
+            # written (WSL-06). DrvFs mounts without Linux permissions, so the
+            # chmod 600 on the database passwords is accepted and discarded: any
+            # Windows user can read them, and OneDrive syncs them. The preflight
+            # said so; the install itself only warned after writing them there.
+            if [ "$_pcr_os" = wsl ] && detect_wsl_drvfs_path "$EXAKIT_HOME" 2>/dev/null; then
+                error "The kit home $EXAKIT_HOME is on a Windows drive: WSL mounts those without Linux file permissions, so the database passwords stored there could not be protected (any Windows user could read them, and OneDrive would sync them)."
+                info "Put the kit on the Linux filesystem and re-run the installer: EXAKIT_HOME=\$HOME/.exasol-starter-kit $(exakit_install_command)"
+                die "Kit home on a Windows drive: $EXAKIT_HOME."
+            fi
             # WSL IS LINUX TO THE LAUNCHER, AND THAT IS THE WHOLE STORY. A WSL2
             # distro is an AMD64 Linux with a real kernel, the launcher ships a
             # Linux build, and its Linux local runtime asks for exactly one
@@ -448,7 +483,12 @@ personal_check_requirements() {
     _arch="$(detect_arch)"
     if [ "$_arch" = "unsupported" ]; then
         error "This machine is not compatible: no Exasol Personal build exists for the '$(uname -m)' CPU architecture."
-        info "Supported architectures: Apple Silicon (arm64) and Intel (x86_64)."
+        # In the platform's own words: "Apple Silicon" told a Raspberry Pi
+        # (armv7l) or a ppc64le box what a Mac would need (LNX-13).
+        case "$_pcr_os" in
+            macos) info "Supported on macOS: Apple Silicon (arm64) and Intel (x86_64)." ;;
+            *)     info "Supported on Linux: 64-bit x86 (x86_64) and 64-bit Arm (aarch64/arm64) - not 32-bit Arm (armv7l), ppc64le, s390x or riscv64." ;;
+        esac
         die "Incompatible CPU architecture: $(uname -m)."
     fi
 
@@ -499,7 +539,10 @@ personal_check_requirements() {
     # and the preflight offer EXAKIT_DB_PORT for port conflicts, but only the
     # container deployments honour it - the launcher picks the port for a
     # personal deployment and the kit reads it back with personal_db_port.
-    if [ -n "${EXAKIT_DB_PORT:-}" ] && [ "${EXAKIT_DB_PORT}" != "$(personal_db_port)" ]; then
+    # EXAKIT_DB_PORT_EXPLICIT, not the value: common.sh defaults the value to
+    # 8563, so testing it warned on a plain re-run whenever the launcher had
+    # picked another port, about a variable the user never set.
+    if [ -n "${EXAKIT_DB_PORT_EXPLICIT:-}" ] && [ "${EXAKIT_DB_PORT}" != "$(personal_db_port)" ]; then
         warn "EXAKIT_DB_PORT does not choose the port of an Exasol Personal deployment: the launcher selects it and the kit uses whatever it selected (currently $(personal_db_port))."
     fi
 
@@ -538,9 +581,10 @@ personal_s3_source() {
     # EXAKIT_PERSONAL_S3=0: the user's network blocks the bucket, or they want
     # the release path for its own sake; the GitHub download is as verified.
     [ "${EXAKIT_PERSONAL_S3:-1}" = "0" ] && return 1
-    _pss_manifest_version="$(exakit_versions_value components.personal.version 2>/dev/null || true)"
+    # The kit copy's own pins, never the fetched document (SEC-13).
+    _pss_manifest_version="$(exakit_versions_pin components.personal.version 2>/dev/null || true)"
     [ "$_pss_manifest_version" = "$EXAKIT_PERSONAL_VERSION" ] || return 1
-    _pss_base="$(exakit_versions_value components.personal.s3.base_url 2>/dev/null || true)"
+    _pss_base="$(exakit_versions_pin components.personal.s3.base_url 2>/dev/null || true)"
     case "$_pss_base" in https://*) : ;; *) return 1 ;; esac
     case "$(detect_os)" in
         macos) _pss_os=macos ;;
@@ -548,7 +592,7 @@ personal_s3_source() {
         *) return 1 ;;
     esac
     case "$(detect_arch)" in arm64|x86_64) _pss_arch="$(detect_arch)" ;; *) return 1 ;; esac
-    _pss_hash="$(exakit_versions_value "components.personal.s3.sha256.${_pss_os}-${_pss_arch}" 2>/dev/null || true)"
+    _pss_hash="$(exakit_versions_pin "components.personal.s3.sha256.${_pss_os}-${_pss_arch}" 2>/dev/null || true)"
     case "$_pss_hash" in *[!0-9a-f]*|'') return 1 ;; esac
     [ "${#_pss_hash}" -eq 64 ] || return 1
     printf '%s\n%s\n' "${_pss_base%/}/${_pss_os}/${_pss_arch}/${EXAKIT_PERSONAL_VERSION}/exasol" "$_pss_hash"
@@ -693,8 +737,10 @@ personal_refuse_launcher_downgrade() {
 # preset (older releases do not); otherwise the resolved version is installed
 # alongside it and preferred.
 personal_install_launcher() {
-    if [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] && command -v exasol >/dev/null 2>&1; then
+    if command -v exasol >/dev/null 2>&1; then exakit_reuse_ownership personal "$(command -v exasol)"; fi
+    if { [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || ! exakit_component_is_managed personal; } && command -v exasol >/dev/null 2>&1; then
         _existing="$(command -v exasol)"
+        exakit_reuse_ownership personal "$_existing"
         # BOUNDED, and anchored to a subcommand line. Bounded because a wedged
         # launcher answers `install --help` no faster than it answers anything
         # else and this is the first thing the installer runs; anchored because
@@ -706,8 +752,18 @@ personal_install_launcher() {
             ok "Exasol launcher already installed: $_existing"
             return 0
         fi
+        if ! exakit_component_is_managed personal; then
+            warn "The user-owned Exasol launcher is not compatible with this kit; update it outside the kit. It was not replaced."
+            return 1
+        fi
         warn "The installed Exasol launcher ($_existing) does not support the 'local' preset (too old)."
-        info "Installing launcher v${EXAKIT_PERSONAL_VERSION} to $EXAKIT_PERSONAL_BIN — your existing launcher is left untouched"
+        # Say what happens to it (#41): the kit's own launcher at the same path is replaced; one anywhere else
+        # is only shadowed, never touched.
+        if [ "$_existing" = "$EXAKIT_PERSONAL_BIN" ]; then
+            info "Replacing the kit's launcher at $EXAKIT_PERSONAL_BIN with v${EXAKIT_PERSONAL_VERSION}"
+        else
+            info "Installing launcher v${EXAKIT_PERSONAL_VERSION} to $EXAKIT_PERSONAL_BIN — your launcher at $_existing is left untouched"
+        fi
     fi
 
     # Refuse before acting: from here on the advertised version WILL be written
@@ -719,6 +775,10 @@ personal_install_launcher() {
     personal_refuse_launcher_downgrade
 
     _tmp="$(mktemp -d "${TMPDIR:-/tmp}/exakit-personal.XXXXXX")"
+    # Removed below once the launcher is in place; every die() between here and
+    # there (a failed download, a bad checksum, a full disk) sweeps it instead.
+    # Guarded: the suites load this module without common.sh.
+    command -v exakit_track_tmp >/dev/null 2>&1 && exakit_track_tmp "$_tmp"
 
     # The whole step on ONE line. begin_step already set a spinner label, and
     # fetch/run_logged animate it, so every stage here was narrated twice: once
@@ -755,8 +815,17 @@ personal_install_launcher() {
                 _pil_source="s3"
                 ok "S3 launcher SHA-256 verified"
             else
-                warn "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
-                _exakit_log_file "WARN  S3 launcher SHA-256 expected $_pil_s3_hash, got $_pil_actual"
+                # A MISMATCH IS NOT A MISSING FILE (SEC-03). Falling back to
+                # GitHub here traded a pin that failed for a checksum file that
+                # sits beside the archive it vouches for - the weaker check, picked
+                # exactly when the stronger one said something is wrong. Nothing
+                # is installed; the person decides.
+                _exakit_log_file "ERROR S3 launcher SHA-256 expected $_pil_s3_hash, got $_pil_actual"
+                rm -f "$_tmp/exasol"
+                error "The Exasol launcher from Exasol's server does not match the checksum this kit pins for v${EXAKIT_PERSONAL_VERSION}, so it was not installed."
+                info "That is either a changed file on the server or a wrong pin: report it (exakit logs setup has both checksums)."
+                info "To install from the GitHub release instead, checked against its own checksums file: EXAKIT_PERSONAL_S3=0 $(exakit_install_command)"
+                die "Launcher checksum mismatch (Exasol S3)."
             fi
         else
             warn "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."
@@ -787,9 +856,14 @@ personal_install_launcher() {
     EXAKIT_ACTIVE_LABEL="Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     info "Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     mkdir -p "$EXAKIT_BIN_DIR"
+    # Only now, with the new binary downloaded and verified, is the old one
+    # removed: a fresh file rather than one rewritten in place, which macOS's
+    # code-signature cache would refuse to run.
+    rm -f "$EXAKIT_PERSONAL_BIN"
     install -m 755 "$_binary" "$EXAKIT_PERSONAL_BIN" \
         || die "Could not install the Exasol launcher to $EXAKIT_PERSONAL_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_PERSONAL_BIN\""
+    exakit_record_ownership personal kit "$EXAKIT_PERSONAL_BIN"
     rm -rf "$_tmp"
 
     # Prove the downloaded binary can actually be executed before anything
@@ -925,10 +999,17 @@ personal_db_answers() {
 personal_tls_answers() {
     _pta_port="$(personal_db_port)"
     if command -v openssl >/dev/null 2>&1; then
+        # WHAT THE HANDSHAKE PRINTED, NEVER THE CLIENT'S EXIT STATUS. This was a
+        # pipeline into grep, and the installer and exakit run with pipefail:
+        # macOS's own openssl (LibreSSL) exits 1 at the end of stdin after a
+        # handshake that succeeded, so on every Mac without another openssl
+        # first on PATH the probe said "no database" about one that answered.
+        # The readiness wait then ran out its whole budget, the kit "repaired"
+        # the running database by deploying over it, and the launcher recorded
+        # the deployment as failed for good. Reported from a real install;
+        # machines with Homebrew's openssl (exit 0) never showed it.
         _pta_out="$(exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" openssl s_client -connect "127.0.0.1:$_pta_port" </dev/null 2>/dev/null || true)"
-        case "$_pta_out" in
-            *'BEGIN CERTIFICATE'*) return 0 ;;
-        esac
+        case "$_pta_out" in *'BEGIN CERTIFICATE'*) return 0 ;; esac
         return 1
     fi
     if command -v python3 >/dev/null 2>&1; then
@@ -1081,8 +1162,19 @@ _personal_proc_age_seconds() {
 # The name test alone, shared by the reaper (which additionally needs it to be
 # old and abandoned) and by personal_starting (which needs it to be young).
 # One definition, so the two can never disagree about whose process it is.
+# _personal_proc_command <pid> - the process's command line: /proc where there
+# is one (BusyBox and procps-less images have no `ps -o command=`, LNX-10),
+# else ps.
+_personal_proc_command() {
+    if [ -r "/proc/$1/cmdline" ]; then
+        tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+        return 0
+    fi
+    ps -p "$1" -o command= 2>/dev/null || true
+}
+
 _personal_is_runner_process() {
-    case "$(ps -p "$1" -o command= 2>/dev/null || true)" in
+    case "$(_personal_proc_command "$1")" in
         *mac-runner*__daemon__*) return 0 ;;
         *exasol-local-runner*)   return 0 ;;
     esac
@@ -1156,6 +1248,15 @@ personal_reap_orphan_daemon() {
     _listeners="$(personal_db_port_pids)"
     [ -n "$_listeners" ] || return 0   # nothing listening → port is free
 
+    # WHO HOLDS IT, for the caller's next step (set only when nothing is reaped):
+    #   foreign       not an Exasol runner at all
+    #   runner_young  an Exasol runner younger than the start budget (starting,
+    #                 or the leftover of an install interrupted a moment ago);
+    #                 PERSONAL_PORT_HOLDER_WAIT is what is left of that budget
+    #   runner_live   an Exasol runner whose deployment the launcher calls live
+    PERSONAL_PORT_HOLDER=""
+    PERSONAL_PORT_HOLDER_PID=""
+    PERSONAL_PORT_HOLDER_WAIT=0
     _reaped=""
     for _pid in $_listeners; do
         if personal_is_orphan_daemon "$_pid"; then
@@ -1163,8 +1264,26 @@ personal_reap_orphan_daemon() {
             pkill -P "$_pid" 2>/dev/null || true
             kill "$_pid" 2>/dev/null || true
             _reaped="$_reaped $_pid"
+        elif _personal_is_runner_process "$_pid"; then
+            # IT IS EXASOL'S OWN RUNNER, AND IT USED TO BE CALLED "a non-Exasol
+            # process". The reaper spared it for a reason (its age, or the
+            # launcher's word), and the message named neither: the reader was
+            # told to go and stop an application that is the database itself.
+            PERSONAL_PORT_HOLDER_PID="$_pid"
+            _rod_age="$(_personal_proc_age_seconds "$_pid" 2>/dev/null || true)"
+            if [ "${EXAKIT_PERSONAL_REAP_MIN_AGE:-0}" -gt 0 ] && [ -n "$_rod_age" ] && \
+               [ "$_rod_age" -lt "$EXAKIT_PERSONAL_REAP_MIN_AGE" ]; then
+                PERSONAL_PORT_HOLDER="runner_young"
+                PERSONAL_PORT_HOLDER_WAIT=$((EXAKIT_PERSONAL_REAP_MIN_AGE - _rod_age))
+                warn "Port $_rod_port is held by an Exasol Personal runner that started ${_rod_age}s ago (pid $_pid): it is still starting, or left by an install interrupted a moment ago; leaving it untouched."
+            else
+                PERSONAL_PORT_HOLDER="runner_live"
+                _rod_state="$(personal_launcher_state 2>/dev/null || true)"
+                warn "Port $_rod_port is held by an Exasol Personal runner (pid $_pid) whose deployment the launcher reports as ${_rod_state:-live}; leaving it untouched."
+            fi
         else
-            warn "Port $_rod_port is held by a non-Exasol process (pid $_pid: $(ps -p "$_pid" -o command= 2>/dev/null | cut -c1-80)); leaving it untouched."
+            [ -n "$PERSONAL_PORT_HOLDER" ] || { PERSONAL_PORT_HOLDER="foreign"; PERSONAL_PORT_HOLDER_PID="$_pid"; }
+            warn "Port $_rod_port is held by a non-Exasol process (pid $_pid: $(_personal_proc_command "$_pid" | cut -c1-80)); leaving it untouched."
         fi
     done
 
@@ -1338,6 +1457,120 @@ personal_stop_runner_of_failed_deployment() {
         _psr_waited=$((_psr_waited + 1))
     done
     [ -z "$(personal_db_port_pids)" ]
+}
+
+# _personal_vm_already_running <log-line> - did the launcher, since that line of
+# this run's log, refuse a deploy or start because its VM is already running?
+# Its own words ("Error: VM is already running"), read from the log the way
+# _personal_start_network_blocked reads netavark's.
+_personal_vm_already_running() {
+    [ -n "${1:-}" ] && [ -n "${EXAKIT_LOG_FILE:-}" ] && [ -f "$EXAKIT_LOG_FILE" ] || return 1
+    tail -n "+$(( ${1} + 1 ))" "$EXAKIT_LOG_FILE" 2>/dev/null | grep -qi 'VM is already running'
+}
+
+# personal_vm_runner_pid - the Exasol runner (the process that IS the VM on
+# macOS and Linux) listening on this deployment's database port; nothing when
+# none does. A container deployment has no such process: its port is the
+# engine's.
+personal_vm_runner_pid() {
+    for _vrp_pid in $(personal_db_port_pids); do
+        if _personal_is_runner_process "$_vrp_pid"; then
+            printf '%s' "$_vrp_pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# personal_stuck_vm_hint <log-line> - one sentence for a deployment the
+# launcher refuses to deploy because its VM runs: what it is and the command
+# that ends it. Empty without the launcher's own "VM is already running".
+personal_stuck_vm_hint() {
+    _personal_vm_already_running "${1:-}" || return 0
+    _svh_pid="$(personal_vm_runner_pid 2>/dev/null || true)"
+    [ -n "$_svh_pid" ] || return 0
+    printf ' Its VM is still running (pid %s) and the launcher will not deploy over it: stop it with kill %s, then re-run.' "$_svh_pid" "$_svh_pid"
+}
+
+# personal_clear_stale_vm - stop the Exasol runner an earlier, failed attempt
+# left alive. For the caller that has the launcher's own "VM is already
+# running" and a database that does not answer. Returns 0 only when a runner
+# was stopped and is gone.
+#
+# WHICH PROCESS: only an Exasol runner LISTENING ON THIS DEPLOYMENT'S DATABASE
+# PORT. Never one found by name alone: a machine can run a second deployment,
+# its runner carries the same name, and the name cannot say whose it is - the
+# port can. A leftover that never reached the port is left for the ladder
+# below (the replace offer). NEVER A YOUNG ONE: inside
+# EXAKIT_PERSONAL_REAP_MIN_AGE a runner is a VM still booting, and killing
+# that is the data-loss path the reaper's age gate exists for
+# (personal_is_orphan_daemon).
+#
+# AND ONLY THIS DEPLOYMENT'S OWN RUNNER: the port alone is not proof either
+# (another deployment can be configured on the same port while this one is
+# down). Each listener must pass the same proof as the deployment_failed
+# recovery (_personal_is_own_runner_pid: the kit's runner, working inside
+# this deployment), and is proven again before a KILL, since after the wait
+# the pid may belong to another process. Nothing unproven is ever touched.
+personal_clear_stale_vm() {
+    _csv_pids=""
+    _csv_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+    [ -n "$_csv_cache" ] || return 1
+    for _csv_pid in $(personal_db_port_pids); do
+        _personal_is_own_runner_pid "$_csv_pid" "$_csv_cache" && _csv_pids="$_csv_pids $_csv_pid"
+    done
+    [ -n "$_csv_pids" ] || return 1
+    for _csv_pid in $_csv_pids; do
+        _csv_age="$(_personal_proc_age_seconds "$_csv_pid" 2>/dev/null || true)"
+        if [ "${EXAKIT_PERSONAL_REAP_MIN_AGE:-0}" -gt 0 ] && [ -n "$_csv_age" ] && \
+           [ "$_csv_age" -lt "$EXAKIT_PERSONAL_REAP_MIN_AGE" ]; then
+            command -v _exakit_log_file >/dev/null 2>&1 &&
+                _exakit_log_file "INFO  not stopping runner pid $_csv_pid: ${_csv_age}s old, still within the start budget"
+            return 1
+        fi
+    done
+    for _csv_pid in $_csv_pids; do
+        command -v _exakit_log_file >/dev/null 2>&1 &&
+            _exakit_log_file "INFO  stopping the runner an earlier attempt left alive (pid $_csv_pid)"
+        pkill -P "$_csv_pid" 2>/dev/null || true
+        kill "$_csv_pid" 2>/dev/null || true
+    done
+    _csv_waited=0
+    while [ "$_csv_waited" -lt 10 ]; do
+        _csv_alive=0
+        for _csv_pid in $_csv_pids; do kill -0 "$_csv_pid" 2>/dev/null && _csv_alive=1; done
+        [ "$_csv_alive" = 1 ] || return 0
+        sleep 1
+        _csv_waited=$((_csv_waited + 1))
+    done
+    for _csv_pid in $_csv_pids; do
+        if kill -0 "$_csv_pid" 2>/dev/null; then
+            if ! _personal_is_own_runner_pid "$_csv_pid" "$_csv_cache"; then
+                warn "Process $_csv_pid is still running but is no longer proven to be this deployment's runner - it was not forced."
+                continue
+            fi
+            pkill -9 -P "$_csv_pid" 2>/dev/null || true
+            kill -9 "$_csv_pid" 2>/dev/null || true
+        fi
+    done
+    sleep 1
+    for _csv_pid in $_csv_pids; do kill -0 "$_csv_pid" 2>/dev/null && return 1; done
+    return 0
+}
+
+# personal_wait_out_young_runner <seconds> - wait for the port while a runner
+# too young to judge holds it: until the port is free, or the rest of the
+# runner's start budget (plus a margin) has passed. Says so once; never fails.
+# Bounded by EXAKIT_PERSONAL_REAP_MIN_AGE, so at most about three minutes.
+personal_wait_out_young_runner() {
+    _wyr_left=$(( ${1:-0} + 5 ))
+    [ "$_wyr_left" -gt 5 ] || return 0
+    info "Waiting up to ${_wyr_left}s for it to finish starting or to stop, then checking the port again."
+    while [ "$_wyr_left" -gt 0 ] && [ -n "$(personal_db_port_pids)" ]; do
+        sleep 5
+        _wyr_left=$((_wyr_left - 5))
+    done
+    return 0
 }
 
 # --- deployment progress ----------------------------------------------------
@@ -1542,14 +1775,21 @@ personal_recover_slow_first_boot() {
     info "The launcher stopped waiting after its own short budget, but the deployment exists — waiting up to ${_prs_budget}s for the database"
     _prs_t0="$(date +%s 2>/dev/null || echo 0)"
     _prs_tries=0
+    PERSONAL_CONTAINER_ERROR=""
     until personal_tls_answers; do
         _prs_tries=$(( _prs_tries + 1 ))
         _prs_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))
         [ "$_prs_elapsed" -ge "$_prs_budget" ] && return 1
         [ "$_prs_tries" -ge $(( _prs_budget / 5 + 1 )) ] && return 1
+        # The same early exit as the readiness probe: a container that refused
+        # to start is not slow.
+        if [ $(( _prs_tries % 3 )) -eq 0 ]; then
+            _personal_container_refused && return 1
+        fi
         sleep 5
     done
     ok "The database answered after $(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))s"
+    personal_set_first_boot_pending 0
     # NOTHING TO RECONCILE when the launcher already says its database is up:
     # a deploy over a running VM is what the launcher answers with "VM is
     # already running" and a record that then refuses every command, stop
@@ -1622,6 +1862,40 @@ personal_podman_running() {
     info "Check it with 'podman info'; once that answers, re-run the installer to finish the install: $(exakit_install_command)"
     exakit_note_failure "Podman is installed but not usable ('podman info' failed): ${_ppr_said:-no output}"
     return 1
+}
+
+# personal_container_error — the error podman recorded for this deployment's
+# container when it never ran ("created") or died ("exited"), first line only;
+# empty otherwise. THE REAL ERROR, which the launcher never repeats: a
+# container can sit in "created" with "crun: controller 'pids' is not
+# available" while the kit waits out its whole budget and then says "never
+# answered". Nothing is reported while any of the containers runs - a stale
+# one from an earlier deployment is not this one's error. Linux and WSL only:
+# the macOS launcher runs its own VM, and a podman there is somebody else's.
+# Twin of Get-PersonalContainerError.
+personal_container_error() {
+    case "$(detect_os 2>/dev/null)" in
+        linux|wsl) : ;;
+        *) return 0 ;;
+    esac
+    _pce_engine="${EXAKIT_PERSONAL_ENGINE:-$(personal_engine_recorded)}"
+    command -v "${_pce_engine:-podman}" >/dev/null 2>&1 || return 0
+    _pce_list="$(exakit_run_bounded 15 "$_pce_engine" ps -a --filter name=exasol-db --format '{{.Names}} {{.State}}' 2>/dev/null)" || return 0
+    case " $_pce_list " in
+        *" running"*) return 0 ;;
+    esac
+    printf '%s\n' "$_pce_list" | head -3 | while read -r _pce_name _pce_state _pce_rest; do
+        case "$_pce_state" in
+            created|exited|stopped) : ;;
+            *) continue ;;
+        esac
+        _pce_err="$(exakit_run_bounded 15 "$_pce_engine" inspect --format '{{.State.Error}}' "$_pce_name" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)"
+        if [ -n "$_pce_err" ]; then
+            printf '%s\n' "$_pce_err"
+            break
+        fi
+    done
+    return 0
 }
 
 # --- container engine ---------------------------------------------------------
@@ -1949,6 +2223,109 @@ _personal_deployment_id() {
     return 0
 }
 
+# _personal_short <text> — one line of foreign output, cut to what a terminal
+# row can carry; the pids error alone names a cgroup path 150 characters deep.
+_personal_short() {
+    printf '%s\n' "$1" | head -1 | cut -c1-240
+}
+
+# personal_known_cause <text> — "cause|remedy" for an error the kit recognises
+# in a container's State.Error or in the launcher's output, in the words of
+# this platform; nothing, and 1, for anything else. Twin of
+# Get-PersonalKnownCause (whose remedies are the Windows machine's).
+personal_known_cause() {
+    _pkc_os="$(detect_os 2>/dev/null || true)"
+    case "$1" in
+        *"controller "?"pids"?" is not available"*)
+            printf "rootless Podman gets no 'pids' cgroup controller, so the database container cannot start (podman-container-tools/podman#29909)|"
+            if [ "$_pkc_os" = "wsl" ]; then
+                printf "this is a known WSL 2.9+ problem that only a WSL or Podman update fixes - follow the issue; 'podman info --format {{.Host.CgroupControllers}}' must list pids before a re-run can work\n"
+            else
+                printf "delegate it to your user ('[Service]' and 'Delegate=cpu cpuset io memory pids' in /etc/systemd/system/user@.service.d/delegate.conf, 'sudo systemctl daemon-reload', log in again), then re-run the installer\n"
+            fi
+            return 0
+            ;;
+        *"Temporary failure in name resolution"*|*"lookup registry"*)
+            printf 'this machine cannot resolve registry-1.docker.io, so the database image cannot be downloaded|'
+            if [ "$_pkc_os" = "wsl" ]; then
+                printf "on the WINDOWS side add 'dnsTunneling=true' under [wsl2] in %%USERPROFILE%%\\\\.wslconfig, run 'wsl --shutdown', then re-run the installer\n"
+            else
+                printf "fix this machine's DNS ('getent hosts registry-1.docker.io' must answer), then re-run the installer\n"
+            fi
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# personal_explain_failure [launcher-output-file] — after a deploy or start
+# that failed: the container's own error when it has one, and the cause and
+# the fix when the kit recognises it there or in what the launcher said. The
+# cause is left in PERSONAL_FAILURE_CAUSE (": ..." form, empty when nothing
+# more is known) for the caller's failure note. Twin of
+# Show-PersonalFailureCause.
+personal_explain_failure() {
+    PERSONAL_FAILURE_CAUSE=""
+    _pef_err="${PERSONAL_CONTAINER_ERROR:-}"
+    if [ -z "$_pef_err" ]; then
+        _pef_err="$(personal_container_error 2>/dev/null || true)"
+        [ -n "$_pef_err" ] && warn "The database container could not start: $(_personal_short "$_pef_err")"
+    fi
+    [ -n "$_pef_err" ] && PERSONAL_FAILURE_CAUSE=": the database container could not start ($(_personal_short "$_pef_err"))"
+    _pef_text="$_pef_err"
+    if [ -n "${1:-}" ] && [ -s "$1" ]; then
+        _pef_text="$_pef_text
+$(cat "$1")"
+    fi
+    _pef_known="$(personal_known_cause "$_pef_text")" || return 0
+    warn "${_pef_known%%|*}."
+    # info_step, not info: this can be printed inside the deploy's quiet
+    # bracket, and a fix nobody sees is no fix.
+    if command -v info_step >/dev/null 2>&1; then info_step "Fix: ${_pef_known#*|}"; else info "Fix: ${_pef_known#*|}"; fi
+    [ -n "$PERSONAL_FAILURE_CAUSE" ] || PERSONAL_FAILURE_CAUSE=": ${_pef_known%%|*}"
+    return 0
+}
+
+# _personal_container_refused — has the database container failed for good?
+# Asked from inside every wait, so a terminal error ends the wait at once
+# instead of spending the rest of its budget. Kept in PERSONAL_CONTAINER_ERROR
+# for the failure reason, said once. Twin of Test-PersonalContainerRefused.
+_personal_container_refused() {
+    _pcr_err="$(personal_container_error 2>/dev/null || true)"
+    [ -n "$_pcr_err" ] || return 1
+    PERSONAL_CONTAINER_ERROR="$_pcr_err"
+    # The wait's spinner owns its line: paused for the warning, not ended -
+    # ending it is the wait's own job.
+    command -v ui_spin_pause >/dev/null 2>&1 && ui_spin_pause
+    warn "The database container could not start: $(_personal_short "$_pcr_err")"
+    command -v ui_spin_resume >/dev/null 2>&1 && ui_spin_resume
+    return 0
+}
+
+# personal_first_boot_pending / personal_set_first_boot_pending 1|0 — did the
+# KIT create this deployment and never see its database answer? Recorded right
+# before the kit's own `install local` and cleared the first time the database
+# answers, so a deployment the kit did not make - or one that has EVER
+# answered, and so may hold data - never reads as pending. The never-booted
+# branch of personal_deploy_local rests on it. Twin of
+# Test-PersonalFirstBootPending.
+personal_first_boot_pending() {
+    case "$(manifest_get runtime.first_boot_pending 2>/dev/null || true)" in
+        true|True|1) return 0 ;;
+    esac
+    return 1
+}
+
+personal_set_first_boot_pending() {
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    if [ "$1" = 1 ]; then
+        ( manifest_set runtime.first_boot_pending true ) >/dev/null 2>&1 || true
+    elif [ -n "$(manifest_get runtime.first_boot_pending 2>/dev/null || true)" ]; then
+        ( manifest_del runtime.first_boot_pending ) >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # personal_engine_existing [quiet] - the engine an EXISTING deployment runs on.
 # The record's word when it has one. A deployment the kit never recorded (made
 # by hand with `exasol install local`, whose own `auto` lands on Docker on a
@@ -2263,6 +2640,7 @@ personal_deploy_local() {
     if personal_deployment_running; then
         info "An Exasol database is already running on port $(personal_db_port)."
         if confirm_env EXAKIT_REUSE_DB "Use it instead of deploying a new one?" y; then
+            exakit_reuse_ownership database "$EXAKIT_PERSONAL_DEPLOY_DIR"
             ok "Reusing the existing Exasol deployment"
             # personal_deployment_running just answered a real SELECT.
             personal_record_manifest "healthy"
@@ -2290,7 +2668,11 @@ personal_deploy_local() {
     # before the answer. The one exception is a deployment that will not
     # start at all (a crashed VM): that is replaced — announced, never
     # silently — because there is nothing left to reuse.
-    if personal_deployment_exists; then
+    _pdl_never_booted_replaced=0
+    _pdl_exists=0
+    personal_deployment_exists && _pdl_exists=1
+    if [ "$_pdl_exists" = 1 ]; then
+        exakit_reuse_ownership database "$EXAKIT_PERSONAL_DEPLOY_DIR"
         # This run's launcher output starts here: the evidence the replace
         # below reads before deleting anything (_personal_start_network_blocked).
         _pdl_start_log_at=""
@@ -2307,18 +2689,77 @@ personal_deploy_local() {
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy."
             EXAKIT_ACTIVE_LABEL="Retrying the deployment"
+            PERSONAL_CONTAINER_ERROR=""
             # Its own runner still holding the VM makes that deploy fail with
             # "VM is already running"; stop it first when it is certainly ours.
             personal_stop_runner_of_failed_deployment || true
-            if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
-               personal_recover_slow_first_boot; then
+            _pdl_redeployed=0
+            if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
+                _pdl_redeployed=1
+            elif _personal_vm_already_running "$_pdl_start_log_at" && \
+                 { personal_first_boot_pending || ! personal_tls_answers; } && \
+                 personal_clear_stale_vm; then
+                # THE RETRY WAS BLOCKED BY THE THING IT RETRIES. Reported from a
+                # real install: a deploy was run over a VM that was still
+                # running, the launcher recorded the deployment as failed, and
+                # every later deploy ended in "VM is already running" - the
+                # launcher cannot adopt its own running VM, and its start and
+                # stop do nothing in this state. So the runner is stopped and
+                # the deploy run once more. Never a runner still inside its
+                # start budget; and a database that answers is only stopped
+                # when it has never held data (a first boot the kit made and
+                # never saw answer) - one that may hold data is left running
+                # and named below.
+                info "A VM left running by an earlier attempt blocked the deploy; it was stopped, deploying again."
+                if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
+                   personal_recover_slow_first_boot; then
+                    _pdl_redeployed=1
+                fi
+            elif personal_recover_slow_first_boot; then
+                _pdl_redeployed=1
+            fi
+            if [ "$_pdl_redeployed" = 1 ]; then
                 ok "Reusing the existing Exasol deployment (deployed again)"
                 personal_wait_ready_or_deploy || return 1
                 personal_record_manifest "healthy"
                 return 0
             fi
-            warn "The failed deployment could not be brought up.$(personal_foreign_db_hint)"
+            warn "The failed deployment could not be brought up.$(personal_foreign_db_hint)$(personal_stuck_vm_hint "$_pdl_start_log_at")"
+            personal_explain_failure
+            # A DEPLOYMENT THAT NEVER STARTED HOLDS NO DATA, so the ladder below
+            # asks the wrong questions of it: "start it and keep its data" is a
+            # no-op in this state, and "DELETE ... and its data" defaulting to
+            # no left the user with nothing either way. The kit made it and has
+            # never seen it answer (personal_first_boot_pending), so it is
+            # offered for replacement, default yes - still a consent prompt,
+            # still answered by EXAKIT_REPLACE_DB. A deployment that ever
+            # answered, one the kit did not make, and an explicit
+            # EXAKIT_REUSE_DB=1 all keep the ladder unchanged.
+            case "${EXAKIT_REUSE_DB:-}" in
+                1|y|Y|yes|YES|Yes) _pdl_reuse_asked=1 ;;
+                *) _pdl_reuse_asked=0 ;;
+            esac
+            if [ "$_pdl_reuse_asked" = 0 ] && personal_first_boot_pending; then
+                if ! confirm_env EXAKIT_REPLACE_DB "This deployment never started, so it holds no data. Remove it and deploy a fresh one?" y; then
+                    info "Nothing was deleted. Diagnose it with 'exakit status', or re-run with EXAKIT_REPLACE_DB=1 to replace it: $(exakit_install_command)"
+                    exakit_note_failure "A deployment that never started could not be brought up, and replacing it was declined"
+                    return 1
+                fi
+                # A FRESH DEPLOY ON A WSL KERNEL WITHOUT NFTABLES FAILS, so a
+                # Podman deployment is checked before its destroy, as the
+                # replace below is (personal_wsl_podman_network_ok --replace).
+                if [ "${EXAKIT_PERSONAL_ENGINE:-}" != "docker" ] && \
+                   ! personal_wsl_podman_network_ok --replace "exakit start"; then
+                    return 1
+                fi
+                info "Removing the deployment that never started, and deploying a fresh one."
+                run_logged "$(personal_cli)" destroy --remove --auto-approve || \
+                    warn "Could not fully remove the old deployment; the launcher will deploy over it."
+                _pdl_never_booted_replaced=1
+            fi
         fi
+    fi
+    if [ "$_pdl_exists" = 1 ] && [ "$_pdl_never_booted_replaced" = 0 ]; then
         info "An Exasol deployment was found, not running."
         if confirm_env EXAKIT_REUSE_DB "Start the existing database and keep its data?" y; then
             personal_note_guest_rebuild
@@ -2396,12 +2837,16 @@ personal_deploy_local() {
             exakit_note_failure "A stopped deployment could not be started, and deleting it was declined"
             return 1
         fi
+        if ! exakit_component_is_managed database; then
+            warn "The user-owned deployment was not replaced; repair it with its own launcher, then retry."
+            return 1
+        fi
         info "Replacing the existing deployment — its previous data is not recoverable."
         # --auto-approve: destroy has its own [y/N] prompt, which a piped or
         # scripted install cannot answer; the consent came from the explicit
         # replace question (or EXAKIT_REPLACE_DB=1) just above.
-        run_logged "$(personal_cli)" destroy --remove --auto-approve || \
-            warn "Could not fully remove the old deployment; the launcher will deploy over it."
+        personal_destroy || \
+            warn "Could not fully remove the old deployment (the launcher said: $PERSONAL_DESTROY_ERROR); it will deploy over it."
     fi
 
     # Port busy but the launcher sees no reachable deployment on it. This is
@@ -2410,10 +2855,38 @@ personal_deploy_local() {
     # a stale container), which the reaper leaves untouched, is a hard stop.
     # EXAKIT_DB_PORT does not apply to the personal path, so name the real port.
     if port_in_use "$(personal_db_port)"; then
-        if ! personal_reap_orphan_daemon; then
-            warn "Port $(personal_db_port) is in use by a process that is not a reachable Exasol Personal deployment.$(personal_foreign_db_hint)"
-            info "Stop that application, then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
-            exakit_note_failure "Port $(personal_db_port) is held by something that is not an Exasol Personal deployment"
+        _pdl_port_free=0
+        personal_reap_orphan_daemon && _pdl_port_free=1
+        # A RUNNER TOO YOUNG TO JUDGE IS WAITED FOR, NOT GIVEN UP ON. The usual
+        # one is this installer's own runner from a run interrupted a moment
+        # ago: nobody can stop it for the user (its deployment record is gone),
+        # and in three minutes it is either a database that answers or an
+        # orphan the reaper takes. So the rest of its start budget is waited
+        # out here, once, and the port is judged again.
+        if [ "$_pdl_port_free" = 0 ] && [ "${PERSONAL_PORT_HOLDER:-}" = "runner_young" ]; then
+            personal_wait_out_young_runner "${PERSONAL_PORT_HOLDER_WAIT:-0}"
+            if ! port_in_use "$(personal_db_port)" || personal_reap_orphan_daemon; then
+                _pdl_port_free=1
+            fi
+        fi
+        if [ "$_pdl_port_free" = 0 ]; then
+            case "${PERSONAL_PORT_HOLDER:-}" in
+                runner_young|runner_live)
+                    # NAME WHAT IT IS AND THE ONE COMMAND THAT FREES THE PORT. "Stop
+                    # that application" sent the reader looking for a program;
+                    # it is an Exasol runner, and with no deployment here to
+                    # stop it through, its process id is the handle there is.
+                    warn "Port $(personal_db_port) is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that is not a reachable deployment of this kit.$(personal_foreign_db_hint)"
+                    info "If it is a database you use, stop it with its own 'exasol stop' (or 'exakit stop' where it was installed). If it is a leftover, free the port with: kill ${PERSONAL_PORT_HOLDER_PID}"
+                    info "Then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
+                    exakit_note_failure "Port $(personal_db_port) is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that is not a reachable deployment of this kit: stop it, or kill ${PERSONAL_PORT_HOLDER_PID}, then re-run the installer"
+                    ;;
+                *)
+                    warn "Port $(personal_db_port) is in use by a process that is not a reachable Exasol Personal deployment.$(personal_foreign_db_hint)"
+                    info "Stop that application, then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
+                    exakit_note_failure "Port $(personal_db_port) is held by something that is not an Exasol Personal deployment"
+                    ;;
+            esac
             return 1
         fi
     fi
@@ -2462,15 +2935,25 @@ personal_deploy_local() {
     : > "$_deploy_notice"
 
     EXAKIT_DEPLOY_LIVE=0
+    PERSONAL_CONTAINER_ERROR=""
+    # Recorded BEFORE the deploy: a deployment the launcher creates and never
+    # boots is the one the never-booted branch above may later offer to
+    # replace as empty. The first answer from its database clears it.
+    personal_set_first_boot_pending 1
     ui_progress_begin "$_deploy_state" "$_deploy_t0" && EXAKIT_DEPLOY_LIVE=1
     # --auto-approve: 2.3 fails a non-interactive host preparation rather than
     # proceeding without approval, and this pipeline is the definition of one.
     # Omitted on launchers that do not take it — see personal_auto_approve_flag.
+    _pdl_fresh=0
+    personal_deployment_exists || _pdl_fresh=1
     # shellcheck disable=SC2046
     "$(personal_cli)" install local $(personal_auto_approve_flag install) \
         $(personal_engine_flag "$EXAKIT_PERSONAL_ENGINE") 2>&1 | \
         _personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"
     _deploy_rc=${PIPESTATUS[0]}
+    if [ "$_pdl_fresh" = 1 ] && personal_deployment_exists; then
+        exakit_record_ownership database kit "$EXAKIT_PERSONAL_DEPLOY_DIR"
+    fi
     ui_progress_end
     EXAKIT_DEPLOY_LIVE=0
 
@@ -2489,14 +2972,17 @@ personal_deploy_local() {
             rm -rf "$_deploy_tmp"
         else
             _personal_deploy_print_tail "$_deploy_tail"
-            rm -rf "$_deploy_tmp"
             # DISARMED, NOT FIRED. The destroy pushed above is the right undo
             # for a run that is ending; this run is not ending, and a partial
             # deployment is what a retry needs to look at.
             rollback_clear
             warn "Local deployment failed.$(personal_foreign_db_hint)"
+            # WHAT ACTUALLY WENT WRONG: the container's own error, and the fix
+            # when the kit recognises it there or in the launcher's tail.
+            personal_explain_failure "$_deploy_tail"
+            rm -rf "$_deploy_tmp"
             info "Retry it by re-running the installer - completed steps are skipped: $(exakit_install_command)"
-            exakit_note_failure "The launcher could not deploy the database locally"
+            exakit_note_failure "The launcher could not deploy the database locally${PERSONAL_FAILURE_CAUSE}"
             return 1
         fi
     fi
@@ -2525,6 +3011,8 @@ personal_deploy_local() {
     _personal_deploy_print_notice "$_deploy_notice"
     rm -rf "$_deploy_tmp"
 
+    exakit_record_ownership database kit "$EXAKIT_PERSONAL_DEPLOY_DIR"
+    PERSONAL_RECORD_FRESH=1
     personal_forget_database_steps
     personal_record_manifest "healthy"
 }
@@ -2587,6 +3075,7 @@ _personal_wait_ready_probe() {
     # To STDERR: a caller composing a --json answer on stdout must not find
     # progress lines spliced into it.
     _pwr_last_note=0
+    PERSONAL_CONTAINER_ERROR=""
     while [ "$_pwr_elapsed" -lt "$_pwr_budget" ] && [ "$_tries" -lt "$_pwr_maxtries" ]; do
         # A HANDSHAKE, NOT AN OPEN PORT. Under rootless Podman the port is
         # pasta's from the moment the container starts, and `exasol info`
@@ -2596,12 +3085,19 @@ _personal_wait_ready_probe() {
         if personal_tls_answers; then
             ui_spin_end
             ok "Deployment is reachable"
+            personal_set_first_boot_pending 0
             # The database answered under this launcher, so whatever rebuild
             # that first start owed is paid. Recorded so the notice does not
             # announce it again for the same launcher.
             _pwr_lv="$(personal_launcher_version 2>/dev/null || true)"
             [ -n "$_pwr_lv" ] && manifest_set runtime.guest_rebuilt_for "$_pwr_lv" 2>/dev/null
             return 0
+        fi
+        # A CONTAINER THAT REFUSED TO START WILL NOT ANSWER LATER. Asked every
+        # third try (15 s): two podman calls, and the point is to stop the wait
+        # early, not to race it.
+        if [ $(( (_tries + 1) % 3 )) -eq 0 ]; then
+            _personal_container_refused && break
         fi
         sleep 5
         _tries=$((_tries + 1))
@@ -2628,6 +3124,10 @@ _personal_wait_ready_probe() {
 # refusal back instead of ending the run.
 personal_wait_ready() {
     _personal_wait_ready_probe && return 0
+    if [ -n "${PERSONAL_CONTAINER_ERROR:-}" ]; then
+        personal_explain_failure
+        die "The database could not start${PERSONAL_FAILURE_CAUSE}. Read the state with 'exakit status'; once the cause is fixed: exakit start"
+    fi
     die "The deployment did not answer within ${_pwr_spent} seconds (the ceiling is ${_pwr_budget}s; raise it with ${_pwr_raise}). Read the state with 'exakit status', then 'exakit start' to retry - a deployment stuck in 'interrupted' is repaired with 'exakit repair-runtime' (destructive, it asks first)."
 }
 
@@ -2662,8 +3162,34 @@ personal_wait_ready() {
 personal_wait_ready_or_deploy() {
     _PERSONAL_WAIT_NETWORK=0
     _personal_wait_ready_probe && return 0
-    warn "The database did not answer after the launcher accepted the start."
-    info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
+    # A CONTAINER THAT REFUSED TO START is not fixed by deploying it again: the
+    # deploy would recreate it and the same error would refuse it the same
+    # way. Its cause is the answer.
+    if [ -n "${PERSONAL_CONTAINER_ERROR:-}" ]; then
+        personal_explain_failure
+        exakit_note_failure "The database never answered${PERSONAL_FAILURE_CAUSE}"
+        return 1
+    fi
+    # A VM THAT IS RUNNING IS NOT DEPLOYED OVER. The launcher refuses that
+    # ("VM is already running") and then records the deployment as failed, after
+    # which it refuses everything - a slow first boot turned into an install
+    # that could not be re-run. So while the VM's runner holds the port the
+    # database is given a second budget, and a VM still silent after that is
+    # stopped before the deploy that starts it again.
+    _pwrd_vm="$(personal_vm_runner_pid 2>/dev/null || true)"
+    if [ -n "$_pwrd_vm" ]; then
+        info "The database VM is running (pid $_pwrd_vm) but has not answered yet - a first boot can take several minutes. Waiting once more instead of deploying over it."
+        _personal_wait_ready_probe && { ok "The database answered"; return 0; }
+        if ! personal_clear_stale_vm; then
+            warn "The database VM is still running (pid $_pwrd_vm) and never answered. Stop it with: kill $_pwrd_vm   then: exakit start"
+            exakit_note_failure "The database VM runs (pid $_pwrd_vm) but never answered: stop it with kill $_pwrd_vm, then exakit start"
+            return 1
+        fi
+        info "The VM that never answered was stopped; the launcher's deploy starts it again."
+    else
+        warn "The database did not answer after the launcher accepted the start."
+        info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
+    fi
     _pwrd_log_at=""
     if [ -n "${EXAKIT_LOG_FILE:-}" ] && [ -f "$EXAKIT_LOG_FILE" ]; then
         _pwrd_log_at="$(wc -l < "$EXAKIT_LOG_FILE" 2>/dev/null | tr -d ' ')"
@@ -2685,7 +3211,9 @@ personal_wait_ready_or_deploy() {
     fi
     EXAKIT_ACTIVE_LABEL=""
     _personal_wait_ready_probe && { ok "The database answered after the launcher's deploy"; return 0; }
-    exakit_note_failure "The database never answered, even after the launcher deployed it again"
+    PERSONAL_FAILURE_CAUSE=""
+    [ -n "${PERSONAL_CONTAINER_ERROR:-}" ] && personal_explain_failure
+    exakit_note_failure "The database never answered, even after the launcher deployed it again${PERSONAL_FAILURE_CAUSE}"
     return 1
 }
 
@@ -2698,8 +3226,8 @@ personal_wait_network_die_if_blocked() {
     return 0
 }
 
-# personal_record_manifest [status] — write the connection details this kit
-# hands to every client, plus the runtime state.
+# personal_record_manifest [status] [fresh] — write the connection details this
+# kit hands to every client, plus the runtime state and the database's TLS pin.
 #
 # The STATUS IS AN ARGUMENT because it used to be the constant "healthy". Every
 # caller got it, including `exakit update`, which reaches here after swapping
@@ -2743,6 +3271,13 @@ personal_clear_stale_record() {
 
 personal_record_manifest() {
     _prm_status="${1:-}"
+    # "fresh": the kit has just deployed this database itself (see the TLS pin
+    # at the end). Every other caller adopted, started or updated one. Said by
+    # PERSONAL_RECORD_FRESH=1 on the line before, consumed here, so the fresh
+    # deploy's record line reads like every other one.
+    _prm_fresh="${2:-}"
+    [ "${PERSONAL_RECORD_FRESH:-0}" = 1 ] && _prm_fresh="fresh"
+    PERSONAL_RECORD_FRESH=0
     manifest_set runtime.type "personal"
     # Read before the clear below drops the key: a record that already names
     # its engine keeps it, and one that never did is Podman (every deployment
@@ -2812,6 +3347,28 @@ print("%s:%s\t%s" % (c.get("host", "127.0.0.1"), c.get("dbPort", 8563), c.get("u
     # Never assert health without either having just seen it or probing for it.
     [ -n "$_prm_status" ] || _prm_status="$(personal_status 2>/dev/null || true)"
     manifest_set runtime.status "${_prm_status:-unknown}"
+    # A database that has been seen healthy may hold data from now on.
+    [ "$_prm_status" = "healthy" ] && personal_set_first_boot_pending 0
+    # ITS TLS CERTIFICATE, PINNED (SEC-14). Trust on first use, taken while the
+    # kit is looking at its own database: a deployment it has just made
+    # replaces any earlier pin (a new deployment is a new certificate); one it
+    # adopted, started or merely updated the launcher of records one only when
+    # none is recorded yet - a recorded pin is never silently replaced. Never
+    # fatal: no TLS answer leaves the clients exactly as unpinned as before.
+    case "$_prm_status" in
+        healthy|running*)
+            # Clients that already exist hold the old value (a first install
+            # writes them after this step, so there is nothing to rewrite yet).
+            if [ "$_prm_fresh" = "fresh" ]; then
+                exakit_tls_record --replace || true
+                [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients --profile-only
+            else
+                exakit_tls_record || true
+                [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients
+            fi
+            ;;
+    esac
+    return 0
 }
 
 # personal_refresh_changed_password <password before> — true when the database
@@ -3097,6 +3654,7 @@ personal_start() {
         # launcher's own retry for that state is its deploy.
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy instead of a start it would ignore."
+            PERSONAL_CONTAINER_ERROR=""
             # A VM its runner still runs answers that deploy with "VM is
             # already running"; stop our own runner first (only when certain).
             personal_stop_runner_of_failed_deployment || true
@@ -3105,7 +3663,8 @@ personal_start() {
                 return 0
             fi
             _personal_start_network_blocked "$_pst_log_at" && _personal_start_network_die
-            die "The deployment could not be brought up.$(personal_foreign_db_hint) Check the log above; if it fails the same way, repair with: $(personal_repair_command)"
+            personal_explain_failure
+            die "The deployment could not be brought up${PERSONAL_FAILURE_CAUSE}.$(personal_foreign_db_hint) Check the log above; if it fails the same way, repair with: $(personal_repair_command)"
         fi
         personal_note_guest_rebuild
         # A STOPPED DEPLOYMENT CAN STILL BE HOLDING ITS OWN PORT. The 2.3
@@ -3119,6 +3678,10 @@ personal_start() {
             info "Clearing a leftover Exasol runner still holding port $(personal_db_port)"
             personal_reap_orphan_daemon >/dev/null 2>&1 || true
         fi
+        # Docker mounts a language container read-only: its DNS links go into
+        # the image, before the start that mounts it - see
+        # personal_slc_dns_prepare.
+        personal_slc_dns_prepare
         if ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start); then
             # Say what to do, not just that it failed. A start that fails on a
             # wedged deployment fails identically every time it is retried, and
@@ -3135,13 +3698,309 @@ personal_start() {
             if [ "$(personal_status 2>/dev/null)" = "conflict" ]; then
                 die "Port $(personal_db_port) is held by another process$(personal_port_holder_hint), so the database cannot start. Stop that process, then: exakit start"
             fi
-            die "Failed to start the database. Check the log above, then retry with 'exakit start'; if it fails the same way, repair with: $(personal_repair_command)"
+            PERSONAL_CONTAINER_ERROR=""
+            personal_explain_failure
+            die "Failed to start the database${PERSONAL_FAILURE_CAUSE}. Check the log above, then retry with 'exakit start'; if it fails the same way, repair with: $(personal_repair_command)"
         fi
         ok "Database started"
+        # Every start rebuilds the language containers from their images, and
+        # with them their empty DNS files - see personal_slc_dns_repair.
+        _pst_dns=0
+        personal_slc_dns_repair || _pst_dns=$?
+        if [ "$_pst_dns" -eq 2 ]; then
+            # Docker, and an image the launcher pulled during this start: it
+            # is linked now, and only a start mounts it. Once - the next one
+            # finds it linked before it starts.
+            info "Restarting the database once, so Java in it can resolve host names"
+            if ! run_logged "$(personal_cli)" stop || \
+               ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start); then
+                die "The database did not come back from its restart. Start it with: exakit start"
+            fi
+            personal_slc_dns_repair || true
+        fi
     else
         info "This launcher version has no explicit start command."
         info "Check the database with: $(personal_cli) info"
     fi
+}
+
+# Where this module and its helpers live, captured while it is being sourced.
+EXAKIT_PERSONAL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# personal_slc_dns_script [--engine CLI] [--deployment-id ID] <flavor...> — the
+# POSIX sh that repairs DNS inside the database container from the launcher
+# VM's shell on macOS (where the engine is always the VM's Podman). Linux, WSL
+# and Windows run the same logic through setup/lib/personal-slc-dns.py, against
+# the deployment's own engine (Podman or Docker).
+#
+# A language container (SLC) is its own filesystem, and the official ones ship
+# etc/resolv.conf and etc/hosts EMPTY. The database mounts the deployment's real
+# files into every UDF sandbox at /conf, but a UDF reads /etc - so Java code in
+# the database could reach any IP address and resolve no name at all, and a
+# virtual schema adapter could never connect to a remote source by hostname.
+# Pointing the two files at /conf gives every UDF the deployment's DNS. Only a
+# file that is still the shipped EMPTY one is replaced, so a Personal release
+# that fixes this upstream turns the whole step into a no-op.
+#
+# ONLY THIS DEPLOYMENT'S DATABASE CONTAINER. The launcher names it
+# exasol-db-<deployment id> on every engine; from Exasol Personal 2.4 a
+# sidecar is exasol-db-<id>-sidecar-<name>, and another deployment's database
+# (a second kit on a shared Docker Desktop, a second deployment folder, a
+# stale container) is exasol-db-<its id>. With the id known only that exact
+# name is taken; without one (or the launcher's "local"), an exasol-db-* that
+# is not a sidecar only when it is the only one. Anything else is
+# "nocontainer", never a repair written into someone else's database.
+# ⇄ twin: pick() in setup/lib/personal-slc-dns.py.
+#
+# Prints one "EXAKIT_SLC_DNS <flavor> repaired|ok|absent|failed" line per
+# flavor.
+personal_slc_dns_script() {
+    _psds_engine="podman"
+    _psds_id=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --engine|--deployment-id)
+                # A trailing option has no value: dropped. `shift 2` with one
+                # argument left shifts nothing, and the loop never ended.
+                [ $# -ge 2 ] || { shift; break; }
+                case "$1" in --engine) _psds_engine="$2" ;; *) _psds_id="$2" ;; esac
+                shift 2 ;;
+            *) break ;;
+        esac
+    done
+    # Both are written into the script: only an engine CLI and an id the
+    # launcher could have made get through. The id is trimmed as the launcher
+    # trims it (TrimSpace) before it names the container.
+    case "$_psds_engine" in docker|podman) : ;; *) _psds_engine="podman" ;; esac
+    _psds_id="${_psds_id#"${_psds_id%%[![:space:]]*}"}"
+    _psds_id="${_psds_id%"${_psds_id##*[![:space:]]}"}"
+    case "$_psds_id" in local|*[!A-Za-z0-9_.-]*) _psds_id="" ;; esac
+    printf "E='%s'\nID='%s'\n" "$_psds_engine" "$_psds_id"
+    # One name per line: the VM's engine is Podman, which never joins names.
+    cat <<'EOF'
+CTR=""; ONE=""; DBS=0
+for N in $("$E" ps --format '{{.Names}}' 2>/dev/null); do
+  if [ -n "$ID" ]; then
+    if [ "$N" = "exasol-db-$ID" ]; then CTR="$N"; fi
+  else
+    case "$N" in exasol-db-*-sidecar-*) : ;; exasol-db-*) ONE="$N"; DBS=$((DBS + 1)) ;; esac
+  fi
+done
+[ -n "$ID" ] || [ "$DBS" -ne 1 ] || CTR="$ONE"
+[ -n "$CTR" ] || { echo "EXAKIT_SLC_DNS - nocontainer"; exit 0; }
+EOF
+    for _psds_flavor in "$@"; do
+        cat <<EOF
+F='$_psds_flavor'
+D=\$(mktemp -d)
+# Extracted and tested, not read off a listing: tar -tv columns differ between
+# GNU and BSD tar, and the size column is the one that moves.
+"\$E" cp "\$CTR":/exa/slc/\$F/etc - 2>/dev/null | tar -C "\$D" -xf - etc/resolv.conf 2>/dev/null
+if [ -L "\$D/etc/resolv.conf" ] || [ -s "\$D/etc/resolv.conf" ]; then echo "EXAKIT_SLC_DNS \$F ok"
+elif [ ! -e "\$D/etc/resolv.conf" ]; then echo "EXAKIT_SLC_DNS \$F absent"
+else
+  ln -s /conf/resolv.conf "\$D/resolv.conf"; ln -s /conf/hosts "\$D/hosts"
+  if tar -C "\$D" -cf - resolv.conf hosts | "\$E" cp - "\$CTR":/exa/slc/\$F/etc/; then echo "EXAKIT_SLC_DNS \$F repaired"; else echo "EXAKIT_SLC_DNS \$F failed"; fi
+fi
+rm -rf "\$D"
+EOF
+    done
+    printf '%s\n' 'exit 0'
+}
+
+# personal_slc_installed_flavors — the official language containers the
+# launcher reports installed, space-separated (java-17 python-3.12 ...).
+personal_slc_installed_flavors() {
+    exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" "$(personal_cli)" slc list --json 2>/dev/null \
+        | run_python_any -c 'import json, sys
+text = sys.stdin.read()
+try:
+    rows = json.loads(text[text.find("["):]) if "[" in text else []
+except ValueError:
+    rows = []
+print(" ".join(r["flavor"] for r in rows if isinstance(r, dict) and r.get("installed")
+               and r.get("type") == "official" and r.get("flavor")))' 2>/dev/null
+}
+
+# personal_slc_container_id — the deployment id the launcher names its database
+# container by (exasol-db-<id>), trimmed; empty when no state file names one.
+# THE LAUNCHER'S OWN STATE FIRST: ContainerName reads .exasolLauncherState.json,
+# and deployment.json can be older than it, or say "local" (what the launcher
+# writes there when it cannot read its state). Read as JSON, the top-level key
+# only - never a "deploymentId" nested deeper, never a different occurrence
+# than the PowerShell twin takes. ⇄ twin: Get-PersonalSlcContainerId.
+personal_slc_container_id() {
+    run_python_any - "$EXAKIT_PERSONAL_DEPLOY_DIR" <<'PY' 2>/dev/null
+import json, os, sys
+for name in (".exasolLauncherState.json", "deployment.json"):
+    try:
+        with open(os.path.join(sys.argv[1], name), encoding="utf-8-sig") as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError):
+        continue
+    value = doc.get("deploymentId") if isinstance(doc, dict) else None
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        break
+PY
+    return 0
+}
+
+# personal_slc_dns_engine — the engine the repair asks: the RECORD first (a
+# nano record's engine is the old database's, not this one's), then this
+# run's choice when nothing is recorded (an install that has not recorded it
+# yet), then Podman - every deployment before kit 0.2.4. Not the other way
+# round: EXAKIT_PERSONAL_ENGINE left in a caller's environment must not send
+# a Podman deployment's repair to Docker. ⇄ twin: Get-PersonalSlcDnsEngine.
+personal_slc_dns_engine() {
+    _psde="$(manifest_get runtime.engine 2>/dev/null || true)"
+    [ -n "$(manifest_get runtime.container 2>/dev/null || true)" ] && _psde=""
+    case "$_psde" in docker|podman) : ;; *) _psde="${EXAKIT_PERSONAL_ENGINE:-}" ;; esac
+    case "$_psde" in docker) printf 'docker' ;; *) printf 'podman' ;; esac
+}
+
+# personal_slc_dns_prepare [--pull] — before a start on Docker: link every
+# official language container IMAGE the launcher state lists (installedSlcs)
+# through setup/lib/personal-slc-dns.py --prepare. Docker mounts an image
+# read-only, so the links personal_slc_dns_repair writes into the running
+# container on Podman have to be in the image the start mounts; the image is
+# committed back under the tag the launcher mounts, once, and labelled, so a
+# later start asks one `docker image inspect` and nothing more. --pull first
+# pulls an image that is not here yet (the Java install, whose start would
+# otherwise pull it and mount it unlinked). Podman and macOS (the launcher
+# VM's Podman): nothing - their mount is writable and repaired after the
+# start. Best effort: logged, and never fails the start.
+# ⇄ twin: Initialize-PersonalSlcDns.
+personal_slc_dns_prepare() {
+    [ "$(detect_os 2>/dev/null)" = "macos" ] && return 0
+    [ "$(personal_slc_dns_engine)" = "docker" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    _psdp_state="$EXAKIT_PERSONAL_DEPLOY_DIR/.exasolLauncherState.json"
+    [ -f "$_psdp_state" ] || return 0
+    # The interpreter as an executable (exakit_python_any_argv): the runner
+    # refuses a shell function. Bounded at 300 s, and the helper's --budget
+    # (240 s) keeps it inside that bound: it ends, its containers removed,
+    # before the runner would kill it. Except a --pull: a download of the
+    # image can take minutes, so that run is not under the runner; the pull
+    # is capped at 30 minutes and the rest keeps the same budget.
+    if ! exakit_python_any_argv; then
+        _psdp_out="no Python to run it with"
+        _psdp_ran=1
+    elif [ "${1:-}" = "--pull" ]; then
+        _psdp_out="$("${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" --engine docker \
+            --prepare "$_psdp_state" --pull --budget 240 2>&1)"
+        _psdp_ran=$?
+    else
+        _psdp_out="$(exakit_run_bounded 300 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+            --engine docker --prepare "$_psdp_state" --budget 240 2>&1)"
+        _psdp_ran=$?
+    fi
+    for _psdp_line in $(printf '%s\n' "$_psdp_out" | sed -n 's/^EXAKIT_SLC_DNS \([^ ]*\) \([a-z]*\)$/\1:\2/p'); do
+        _exakit_log_file "INFO  language container DNS (before the start): $_psdp_line"
+        case "$_psdp_line" in
+            *:derived) info "Gave the ${_psdp_line%%:*} language container image the deployment's DNS" ;;
+        esac
+    done
+    if ! printf '%s\n' "$_psdp_out" | grep -q '^EXAKIT_SLC_DNS '; then
+        # It always answers (`- none` when nothing is installed): silence is a
+        # run that did not happen, timed out or died - one line with the
+        # reason, as personal_slc_dns_repair leaves. ⇄ twin: the same line in
+        # Initialize-PersonalSlcDns.
+        _psdp_why="$(printf '%s\n' "$_psdp_out" | grep -m 1 . | cut -c1-200)"
+        _exakit_log_file "WARN  language container DNS before the start did not run (exit $_psdp_ran): ${_psdp_why:-no output}"
+    fi
+    return 0
+}
+
+# personal_slc_dns_repair — run personal_slc_dns_script for every official
+# language container the launcher reports installed. Best effort and bounded:
+# no container, a launcher without `slc` or a VM shell that does not answer is
+# logged and returns 1, and never fails the caller - the virtual schema check
+# reports a database without DNS on its own. Returns 2 on Docker when an image
+# was linked (or found linked) under a database started before it was - also
+# beside another flavor that failed: the fix is in the image, and the
+# database sees it from its next start - the caller restarts it, or says so.
+# ⇄ twin: Repair-PersonalSlcDns.
+personal_slc_dns_repair() {
+    _psdr_flavors="$(personal_slc_installed_flavors)"
+    [ -n "$_psdr_flavors" ] || return 0
+    # The id names the database container (exasol-db-<id>); without one only
+    # a lone exasol-db-* that is not a sidecar is taken.
+    _psdr_id="$(personal_slc_container_id)"
+    _psdr_script=""
+    _psdr_ran=0
+    if [ "$(detect_os 2>/dev/null)" = "macos" ]; then
+        _psdr_script="$(mktemp "${TMPDIR:-/tmp}/exakit-slc-dns.XXXXXX")" || return 1
+        # The launcher VM's engine is Podman whatever runs elsewhere.
+        # shellcheck disable=SC2086 -- one argument per flavor
+        personal_slc_dns_script --engine podman ${_psdr_id:+--deployment-id "$_psdr_id"} $_psdr_flavors > "$_psdr_script"
+        # The database runs in the launcher's Linux VM; its shell is the one
+        # with the Podman that owns the container. It takes the script on stdin
+        # - redirected INSIDE the bounded command: without timeout(1) that
+        # command runs as a background job, and a background job's stdin is
+        # /dev/null, so a redirect on the outside never reached it.
+        _psdr_out="$(exakit_run_bounded 90 sh -c 'exec "$0" shell container < "$1"' "$(personal_cli)" "$_psdr_script" 2>&1)"
+        _psdr_ran=$?
+    else
+        # THE DEPLOYMENT'S ENGINE, NOT PODMAN BY DEFAULT. From kit 0.2.4 a new
+        # deployment runs on Docker wherever Docker Engine 29+ runs, and
+        # Podman's CLI cannot see a Docker container: Java kept its empty DNS
+        # files and every connect by host name failed.
+        _psdr_engine="$(personal_slc_dns_engine)"
+        if command -v "$_psdr_engine" >/dev/null 2>&1; then
+            # The host's own engine owns the container (Linux, WSL): the shared
+            # helper the Windows twin runs too. The id in the = form: one that
+            # starts with "-" is still a value, not an option.
+            # THE INTERPRETER AS AN EXECUTABLE, not run_python_any: timeout(1)
+            # execs its command, and a shell function was "failed to run
+            # command", exit 127 - the repair never ran on Linux or WSL.
+            # Docker links the image (containers created, copied into,
+            # committed): 300 s, against 90 for a write into a container. The
+            # helper's --budget, 60 s inside the bound, ends it - its
+            # containers removed - before the runner would kill it.
+            _psdr_bound=90
+            [ "$_psdr_engine" = docker ] && _psdr_bound=300
+            if exakit_python_any_argv; then
+                # shellcheck disable=SC2086 -- one argument per flavor
+                _psdr_out="$(exakit_run_bounded "$_psdr_bound" "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+                    --engine "$_psdr_engine" --budget $((_psdr_bound - 60)) \
+                    ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
+                _psdr_ran=$?
+            else
+                _psdr_out="no Python to run the repair with"
+                _psdr_ran=1
+            fi
+        else
+            _psdr_out="EXAKIT_SLC_DNS - no$_psdr_engine"
+        fi
+    fi
+    [ -z "$_psdr_script" ] || rm -f "$_psdr_script"
+    _psdr_rc=0
+    _psdr_derived=0
+    for _psdr_line in $(printf '%s\n' "$_psdr_out" | sed -n 's/^EXAKIT_SLC_DNS \([^ ]*\) \([a-z]*\)$/\1:\2/p'); do
+        _exakit_log_file "INFO  language container DNS: $_psdr_line"
+        case "$_psdr_line" in
+            *:repaired) info "Gave the ${_psdr_line%%:*} language container the deployment's DNS" ;;
+            *:derived) _psdr_derived=1
+                       info "Gave the ${_psdr_line%%:*} language container image the deployment's DNS; the database sees it from its next start" ;;
+            *:failed) _psdr_rc=1
+                      _exakit_log_file "WARN  language container DNS could not be given to ${_psdr_line%%:*}" ;;
+            *:nocontainer|*:nopodman|*:nodocker) _psdr_rc=1 ;;
+        esac
+    done
+    if ! printf '%s\n' "$_psdr_out" | grep -q '^EXAKIT_SLC_DNS '; then
+        # The repair never answered (it did not run, or died first): one line
+        # with the reason, because every caller ignores this exit code and
+        # the reader otherwise sees only "DNS could not be repaired".
+        # ⇄ twin: the same line in Repair-PersonalSlcDns.
+        _psdr_why="$(printf '%s\n' "$_psdr_out" | grep -m 1 . | cut -c1-200)"
+        _exakit_log_file "WARN  language container DNS repair did not run (exit $_psdr_ran): ${_psdr_why:-no output}"
+        _psdr_rc=1
+    fi
+    # A linked image wins over another flavor's failure: only a start mounts
+    # it, and without that restart Java has no DNS (the failure is logged).
+    [ "$_psdr_derived" = 1 ] && _psdr_rc=2
+    return "$_psdr_rc"
 }
 
 personal_stop() {
@@ -3156,6 +4015,58 @@ personal_stop() {
         info "This launcher version has no explicit stop command."
         info "To remove the database entirely use: exakit uninstall"
     fi
+}
+
+# The launcher's words for a deployment whose lock another run holds.
+PERSONAL_LOCKED_TEXT="locked by another operation"
+
+# personal_unlock_stale — release the deployment's lock when no launcher holds
+# it: a launcher that crashed or was killed leaves its lock behind, and then
+# even `destroy` refuses, leaving the database running and its folder on disk.
+# A launcher that IS running keeps its lock - unlocking under it could leave
+# the deployment half-written. The database daemon runs under another name and
+# does not count. Returns 0 when the lock was released.
+personal_unlock_stale() {
+    # A launcher RUNNING: its command line starts with the launcher's path. Not
+    # any process that merely mentions the path somewhere in its arguments (a
+    # shell script, an editor, `bash -c '...'`), which held a stale lock forever.
+    _pus_cli="$(personal_cli | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    if pgrep -f "^${_pus_cli}( |\$)" >/dev/null 2>&1; then
+        _exakit_log_file "WARN  the deployment is locked and a launcher is running: not unlocking"
+        return 1
+    fi
+    run_logged "$(personal_cli)" diag unlock --auto-approve
+}
+
+# personal_destroy — destroy the deployment and remove its folder. Called only
+# from behind a consent gate (teardown's --data guard, or the replace question);
+# tests/agent-operability.sh checks every caller. A stale lock (see
+# personal_unlock_stale) is released and the destroy tried once more. When it
+# still fails, PERSONAL_DESTROY_ERROR holds the launcher's own last error line
+# for the warning (the log keeps all of it). Returns the outcome.
+personal_destroy() {
+    PERSONAL_DESTROY_ERROR=""
+    _pd_out="$(mktemp "${TMPDIR:-/tmp}/exakit-destroy.XXXXXX")" || return 1
+    _pd_try=1
+    while :; do
+        _exakit_log_file "CMD   $(personal_cli) destroy (attempt $_pd_try, removing the deployment folder)"
+        ui_spin_begin "${EXAKIT_ACTIVE_LABEL:-working}"
+        "$(personal_cli)" destroy --remove --auto-approve > "$_pd_out" 2>&1
+        _pd_rc=$?
+        ui_spin_end
+        [ -n "${EXAKIT_LOG_FILE:-}" ] && cat "$_pd_out" >> "$EXAKIT_LOG_FILE"
+        if [ "$_pd_rc" -eq 0 ]; then
+            rm -f "$_pd_out"
+            return 0
+        fi
+        [ "$_pd_try" = 1 ] && grep -q "$PERSONAL_LOCKED_TEXT" "$_pd_out" && personal_unlock_stale || break
+        _pd_try=2
+    done
+    PERSONAL_DESTROY_ERROR="$(grep -i -E 'error|fail|cannot|could not|denied' "$_pd_out" | tail -1 | cut -c1-300)"
+    [ -n "$PERSONAL_DESTROY_ERROR" ] || PERSONAL_DESTROY_ERROR="$(grep -v '^[[:space:]]*$' "$_pd_out" | tail -1 | cut -c1-300)"
+    [ -n "$PERSONAL_DESTROY_ERROR" ] || PERSONAL_DESTROY_ERROR="nothing more"
+    rm -f "$_pd_out"
+    return 1
 }
 
 # personal_teardown [--data] — destroy the local deployment. An Exasol
@@ -3193,7 +4104,7 @@ personal_teardown() {
         # default. run_logged sends its output to the log, so that prompt is
         # invisible and the install just hangs forever waiting for input. The
         # user has already confirmed at the exakit uninstall level.
-        run_logged "$(personal_cli)" destroy --remove --auto-approve || warn "The launcher reported errors while destroying the deployment. What it said: exakit logs setup"
+        personal_destroy || warn "The launcher could not fully remove the deployment (it said: $PERSONAL_DESTROY_ERROR). If its folder $EXAKIT_PERSONAL_DEPLOY_DIR or a database process is still there, restart the computer and delete the folder."
     else
         info "No active deployment found"
     fi
@@ -3248,8 +4159,12 @@ personal_teardown_leftovers() {
                     _ptl_why="$(sed -n '/./{p;q;}' "${_ptl_errf:-/dev/null}" 2>/dev/null | cut -c1-160)"
                     if [ -n "$_ptl_why" ]; then _ptl_why="$_ptl_eng said: $_ptl_why"; else _ptl_why="$_ptl_eng refused: exit $_ptl_rc"; fi
                 fi
+                # Short enough for one terminal row: the full filter (the
+                # deployment id) wrapped onto a second line. It goes to the log.
+                # Twin of the same warning in runtime-personal.ps1.
+                command -v _exakit_log_file >/dev/null 2>&1 && _exakit_log_file "WARN  Container check for deployment $_ptl_id unanswered ($_ptl_why); check by hand: $_ptl_eng ps -a --filter name=$_ptl_id (or with sudo)"
                 EXAKIT_TEARDOWN_WARNINGS="${EXAKIT_TEARDOWN_WARNINGS:+$EXAKIT_TEARDOWN_WARNINGS
-}Could not ask $_ptl_eng whether the database's container is gone ($_ptl_why). Check by hand once $_ptl_eng answers: $_ptl_eng ps -a --filter name=$_ptl_id (if $_ptl_eng needs sudo here: sudo $_ptl_eng ps -a --filter name=$_ptl_id)"
+}Could not confirm the database container is gone ($_ptl_why). Check: $_ptl_eng ps -a (or sudo $_ptl_eng ps -a)"
             fi
             [ -n "$_ptl_errf" ] && rm -f "$_ptl_errf"
             for _ptl_name in $(printf '%s\n' "$_ptl_list" | \
@@ -3389,6 +4304,7 @@ personal_upgrade_backup() {
 }
 
 personal_update() {
+    if ! exakit_component_is_managed personal; then exakit_preserve_component personal; return 0; fi
     _mode="default"
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -3436,7 +4352,9 @@ personal_update() {
                 EXAKIT_PERSONAL_VERSION="$_latest"
                 EXAKIT_FORCE_COMPONENT_INSTALL=1
                 export EXAKIT_PERSONAL_VERSION EXAKIT_FORCE_COMPONENT_INSTALL
-                rm -f "$EXAKIT_PERSONAL_BIN"
+                # The working launcher stays until the new one is downloaded and
+                # verified: personal_install_launcher replaces it only then
+                # (audit LCY-06; deleting it first left none after a failed download).
                 personal_install_launcher
                 manifest_set runtime.launcher "$(personal_cli)"
                 manifest_set runtime.launcher_version "$EXAKIT_PERSONAL_VERSION"
@@ -3496,7 +4414,7 @@ personal_update() {
     EXAKIT_FORCE_COMPONENT_INSTALL=1
     export EXAKIT_PERSONAL_VERSION EXAKIT_FORCE_COMPONENT_INSTALL
     _pu_pw_before="$(read_credential personal_sys_password 2>/dev/null || true)"
-    rm -f "$EXAKIT_PERSONAL_BIN"
+    # The working launcher stays until the new one is verified (audit LCY-06).
     personal_install_launcher
     personal_record_manifest
     manifest_set desired.runtime.personal "$EXAKIT_PERSONAL_VERSION"

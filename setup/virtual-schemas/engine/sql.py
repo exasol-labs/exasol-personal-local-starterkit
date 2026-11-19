@@ -1,0 +1,461 @@
+"""The database session: pyexasol as the kit's administrator, secrets redacted.
+
+The administrator password is read from the file the manifest names
+(runtime.password_file) and never leaves this process. A source credential
+arrives on stdin and is written into the database only inside CREATE /
+ALTER CONNECTION over the encrypted session; every error raised while it is
+in play has it replaced by *** before anything prints or logs it. Every
+statement is written to the run's log (vslog) before it is sent, redacted
+there the same way.
+
+Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
+`connect(**kwargs)` returns an object with query/execute/close.
+"""
+
+import importlib.util
+import os
+import re
+
+import vslog
+
+MAX_ERROR = 600
+
+
+class DbError(Exception):
+    def __init__(self, message, kind="error"):
+        super().__init__(message)
+        self.kind = kind
+
+
+# Java missing from the database, in each database's words. No JAVA alias in
+# SCRIPT_LANGUAGES at all: "No usable script language container". Exasol
+# Personal 2.4 names JAVA=builtin_java on a fresh deployment, yet the Java
+# container's client is not in BucketFS until `exasol slc install java`, and a
+# Java script answers "The required executable '/exaudf/exaudfclient' does not
+# exist in BucketFS" (measured on the 2.4 VM and on Docker). Only that
+# executable, exactly: another file missing from BucketFS (exaudfclient_py3,
+# a script beside it) is not a missing Java. A Rust script runs the same
+# client; Lifecycle.language_kind reads the source's own language.
+NOJAVA = (r"No usable script language container|"
+          r"required executable '[^'\n]*/exaudfclient' does not exist in BucketFS")
+
+# An S3 request made with no region at all: the lakehouse engine builds the
+# endpoint from an empty region when the catalog vended S3 credentials and
+# --set region was not given (Unity's vended credentials carry none).
+NOREGION = r"s3\.\.amazonaws\.com"
+
+# Ordered: the first match names the failure. Messages are the JDBC drivers'
+# and Exasol's own; a generic failure stays "error" rather than guessing.
+_KINDS = (
+    ("nojava", NOJAVA),
+    # A driver naming a property its URL lacks (Simba: "Connection Refused:
+    # ... Required Connection Key(s)") is configuration, not the network.
+    ("error", r"Required Connection Key\(s\)"),
+    # Unity Catalog through the lakehouse engine: a metastore or schema closed
+    # to engines outside Databricks (it answers PERMISSION_DENIED, so this
+    # comes before "denied"), and a catalog-managed table this engine cannot
+    # read yet. Neither is a credential problem.
+    ("external", r"EXTERNAL[ _]USE[ _]SCHEMA|External Data Access|EXTERNAL_ACCESS_DISABLED"),
+    ("managed", r"catalog-managed table|Max catalog version is required"),
+    # The lakehouse engine's own words for a catalog that refused the login
+    # (HTTP 401) or the operation (HTTP 403), whichever catalog answered:
+    # "<what> request failed with HTTP <code>: <body>", where <what> is
+    # "catalog", "OAuth2 token" or "Unity Catalog <kind>" (lakehouse-engine-rs
+    # 0.57.3, catalog_http.rs). Measured: Polaris answers a wrong token 401
+    # with an empty body (under "failed to read the catalog config for
+    # warehouse ...", so this comes before "catalog"), a wrong OAuth client
+    # 401 unauthorized_client, open-source Unity Catalog 401 UNAUTHENTICATED.
+    # Lakekeeper's permission check says "answered HTTP <code>". Unity's 403
+    # for a schema closed to outside engines is "external", above.
+    ("auth", r"\b(?:catalog|OAuth2 token|Unity Catalog [a-z -]+) request failed with HTTP 401\b|"
+             r"\bOAuth2 token request failed with HTTP 400: .*\b(?:invalid|unauthorized)_client\b|"
+             r"Lakekeeper batch-check at \S+ answered HTTP 401\b"),
+    ("denied", r"\b(?:catalog|Unity Catalog [a-z -]+) request failed with HTTP 403\b|"
+               r"Lakekeeper batch-check at \S+ answered HTTP 403\b"),
+    # An Iceberg REST catalog or Unity Catalog without the namespace asked for.
+    ("schema_missing", r"NoSuchNamespaceException|NoSuchWarehouseException|SCHEMA_DOES_NOT_EXIST|"
+                       r"CATALOG_DOES_NOT_EXIST"),
+    # Object stores answer over HTTPS with their own codes (S3 measured live):
+    # a request signed by a clock too far off, a bucket in another region, a
+    # key that may not list or read - each has its own fix, so each is named.
+    ("clock", r"RequestTimeTooSkewed|difference between the request time and the current time is too large|"
+              r"Signature not yet current|Signature expired|Request date header too (old|new)"),
+    ("region", r"must be addressed using the specified endpoint|PermanentRedirect|"
+               r"AuthorizationHeaderMalformed.*region|the region '[\w-]+' is wrong|"
+               # object_store (the lakehouse engine) on S3's redirect to the bucket's region.
+               r"incorrectly configured region|x-amz-bucket-region|"
+               # ...and on vended S3 credentials with no region given: the
+               # endpoint is built with an empty region (measured live against
+               # Databricks on AWS: "GET https://s3..amazonaws.com/<bucket>/...").
+               + NOREGION),
+    ("nobucket", r"NoSuchBucket|The specified bucket does not exist|ContainerNotFound"),
+    ("denied", r"AccessDenied|not authorized to perform|AuthorizationPermissionMismatch|AuthorizationFailure|"
+               r"PERMISSION_DENIED"),
+    # A database that took the credentials and then refused a statement for a
+    # missing grant, in the driver's words (under Exasol's "JDBC-Client-Error:
+    # Failed to receive MetaData for the given statement: ..." or an adapter's
+    # "Caused by:"). Apart from "denied": an address filter refuses before any
+    # SQL runs, so this fix never names an IP to allow. Ahead of "tls" and
+    # "auth": a table name can carry their words (certificates, auth_log).
+    ("privilege", r"permission denied for \w|"                    # PostgreSQL: for table / schema / database ...
+                  r"command denied to user|"                       # MySQL 1142/1143: SELECT command denied to user
+                  r"permission was denied on|"                     # SQL Server 229/230: The SELECT permission was denied on
+                  r"ORA-01031|ORA-01045|ORA-41900|"                # Oracle: insufficient privileges; lacks CREATE
+                                                                   # SESSION privilege; 23ai: missing READ privilege on
+                  r"SQL access control error|Insufficient privileges to operate on|"   # Snowflake
+                  r"not authorized on \S+ to execute"),            # MongoDB code 13 (Unauthorized)
+    # Words that mean "no such object" and "no grant on it" alike: Oracle and
+    # Snowflake answer for an object the account may not see as if it did not
+    # exist, so the fix names both - never "denied" alone.
+    ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
+    # The database's Java sandbox refused the driver something (a file read,
+    # a socket) before it reached the source: pgjdbc says it so for any
+    # AccessControlException, whichever permission it was.
+    # An Iceberg REST catalog that does not know the warehouse it was given
+    # (measured: the catalog URL typed as the warehouse answered HTTP 400).
+    ("catalog", r"failed to read the catalog config for warehouse"),
+    ("sandbox", r"security policy has prevented the connection|AccessControlException"),
+    ("dns", r"UnknownHostException|Name or service not known|nodename nor servname|unable to resolve host"),
+    ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
+            r"trustAnchors parameter must be non-empty|"
+            r"Could not load trustJKS keystore"),            # MySQL Connector/J: verify with no CA on Exasol Personal
+    ("auth", r"password authentication failed|Access denied for user|Login failed for user|ORA-01017|"
+             r"Incorrect username or password|invalid username/password|authentication failed|"
+             r"JWT token is invalid|Programmatic access token is invalid|token has expired|"
+             r"signature we calculated does not match|InvalidAccessKeyId|Access Key Id you provided does not exist|"
+             r"security token included in the request is (invalid|expired)|ExpiredToken|"
+             r"Server failed to authenticate the request|AuthenticationFailed|"
+             r"Error getting access token for service account|"
+             # Databricks: the REST API (adapter) and the JDBC driver (loader).
+             r"Invalid access token|REST API answered HTTP 401|"
+             # An Iceberg REST catalog refusing the token or keys (the spec's error type).
+             r"NotAuthorizedException"),
+    # The lakehouse engine's object store refusing a read (opendal: "source:
+    # PermissionDenied (persistent) at read, context: { ... status: 403"): a
+    # key that may not read the files. summarize lifts S3's own code out of
+    # the answer, so a wrong secret (SignatureDoesNotMatch) is "auth" above.
+    ("denied", r"\bPermissionDenied \((?:persistent|temporary|permanent)\) at \w+"),
+    ("unreachable", r"Connection refused|connect timed out|The connection attempt failed|"
+                    r"Communications link failure|No route to host|Network is unreachable|"
+                    r"Connection timed out|ORA-12541|ORA-12170|TCP/IP connection to the host|"
+                    # The far end answered, but not as this database: a wrong
+                    # port or a proxy that drops the protocol. Measured live.
+                    r"ORA-17800|Got minus one from a read call|ORA-17002|IO Error: The Network Adapter|"
+                    r"unexpected pre-login response|Broken pipe|EOFException"),
+)
+
+
+# A connection string a message quotes ('jdbc:postgresql://...', 's3://...'). What it holds is the source's
+# address and settings, never why it failed - and with a CA in it (sslfactoryarg=-----BEGIN CERTIFICATE-----...)
+# its own words read as a certificate fault.
+_STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*(?:'|$)", re.I | re.S)
+_OPEN_STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*$", re.I | re.S)
+
+# Said when the database's message ends inside the connection string it quotes. A database message holds some
+# 2,000 characters, and a string with a CA certificate in it is longer (a 4096-bit root alone is 2.1 KB once
+# encoded), so the reason that follows the string is cut away before it reaches the kit (measured live: PostgreSQL
+# with verify and ISRG Root X1; the kit then read the string's own "CERTIFICATE" and called it a certificate fault).
+CUT = ("the database could not connect to the source, and its message was cut before the reason: the connection "
+       "string, with the CA certificate in it, is longer than a database message. To read the reason, connect once "
+       "with --set tls=require (it encrypts without checking the certificate) - the string is short then - fix what "
+       "it names, and connect again with the CA")
+
+
+def cut_in_string(message):
+    """True when a database message ends inside the connection string it quotes: the reason was cut away."""
+    text = re.sub(r"(?:\.\.\.)?\s*\(Session: \d+\)\s*$", "", str(message or "")).rstrip()
+    return bool(_OPEN_STRING.search(text))
+
+
+def classify(message):
+    text = _STRING.sub("'<connection string>'", message or "")
+    for kind, pattern in _KINDS:
+        if re.search(pattern, text, re.I):
+            return kind
+    return "error"
+
+
+def classify_raw(summary, raw):
+    """The kind of a database error: from its one-line summary, else from its
+    causes. An adapter can wrap the cause on a later line ("E-VSEXA-4: Unable
+    to create ... reader" over "Caused by: ...authentication failed"), and
+    the summary alone then reads as a generic failure. Only the cause lines
+    are read - a whole stack names classes (SSL..., TLS...) that would
+    misfile it."""
+    # No reason reached the kit: nothing in what is left names a class (its own advice mentions certificates).
+    if str(summary).startswith(CUT[:60]):
+        return "error"
+    kind = classify(summary)
+    if kind not in ("error", "unreachable"):
+        return kind
+    # A Java that cannot start says so wherever the wrapper puts it - past
+    # the summary's line, or past the cut to MAX_ERROR - and nothing reached
+    # the source, so no other class can be the answer.
+    if re.search(NOJAVA, str(raw), re.I):
+        return "nojava"
+    causes = classify("\n".join(l for l in str(raw).splitlines() if "Caused by" in l or re.search(r"Exception: ", l)))
+    if kind == "unreachable" and causes != "tls":
+        return kind
+    # MySQL's Connector/J reports a failed certificate check as
+    # "Communications link failure" and names the SSLHandshakeException only
+    # in a cause (measured on RDS MySQL 8.4): the server answered, so the
+    # fix is the certificate, not the firewall.
+    return causes
+
+
+def ident(name):
+    """A quoted identifier; the name is already validated, quotes doubled anyway."""
+    return '"%s"' % str(name).replace('"', '""')
+
+
+def literal(value):
+    return "'%s'" % str(value).replace("'", "''")
+
+
+def store_cause(text):
+    """An object store's own answer under an adapter failure, as one line.
+
+    Azure's SDK puts advice about logging the string to sign ahead of the
+    answer; the store's code and message are in the XML body under it
+    (measured: "Status code 403, "<?xml ...><Error><Code>..."). S3's SDK names
+    its exception (measured: "software.amazon.awssdk...S3Exception: The
+    request signature we calculated does not match ... (Service: S3, Status
+    Code: 403, ...)").
+    """
+    body = re.search(r'Status code (\d+), "[^<]*<\?xml[^>]*\?>\s*<Error><Code>(\w+)</Code><Message>([^<\n]*)', text)
+    if body:
+        names = [n for n in re.findall(r"(?:[\w$]+\.)*([A-Z][\w$]*Exception): ", text[:body.start()])
+                 if "ExaUDF" not in n]
+        detail = re.search(r"<AuthenticationErrorDetail>([^<\n]{1,200})</AuthenticationErrorDetail>", text)
+        return "%s%s: %s%s (HTTP %s)" % (names[-1] + ": " if names else "", body.group(2), body.group(3).strip(),
+                                         " " + detail.group(1).strip() if detail else "", body.group(1))
+    for line in text.splitlines():
+        cause = re.match(r"\s*(?:Caused by: )?software\.amazon\.awssdk\.(?:[\w$]+\.)*([A-Z][\w$]*(?:Exception|Error)): (.+)$",
+                         line)
+        if cause:
+            return _sdk_line(cause)
+    return None
+
+
+def rest_answer(line):
+    """A Lua adapter's failed REST call as the API's own answer. Measured
+    (Databricks 1.0.2): "E-VSDAB-5: HTTP request for URL '<url>' failed with
+    status 403 ('HTTP/1.1 403 Forbidden') and body '{"error_code":403,
+    "message":"Invalid access token. ..."}'" - the URL and JSON say less than
+    the message inside them."""
+    rest = re.match(r"(E-[A-Z]+-\d+): HTTP request for URL '[^']*' failed with status (\d+)\b.*?"
+                    r'"message"\s*:\s*"((?:[^"\\]|\\.)*)"', line)
+    if not rest:
+        return None
+    word = re.search(r'"error_code"\s*:\s*"([A-Z][A-Z_]*)"', line)
+    return "%s: the REST API answered HTTP %s%s: %s" % (rest.group(1), rest.group(2),
+                                                         " " + word.group(1) if word else "", rest.group(3))
+
+
+def thrift_answer(cause):
+    """The Databricks JDBC driver's HTTP failure as its code and message.
+    Measured (3.4.3, a revoked token): "DatabricksSQLException: Error while
+    receiving response from Thrift server. Request {TOpenSessionReq(...)},
+    Error {Failed to flush data to server: HTTP request failed by code: 403,
+    status line: ... Error message: Invalid access token. [ReqId: ...]}"."""
+    found = re.search(r"HTTP request failed by code: (\d+).*?Error message: ([^}]+)", cause.group(2))
+    if not found:
+        return None
+    return "%s: HTTP %s: %s" % (cause.group(1), found.group(1), found.group(2).strip())
+
+
+def _sdk_line(cause):
+    status = re.search(r"Status Code: (\d+)", cause.group(2))
+    detail = re.sub(r"\s*\((?:Service|SDK Attempt)[^)]*\)", "", cause.group(2)).strip()
+    return "%s: %s%s" % (cause.group(1).split("$")[0], detail, " (HTTP %s)" % status.group(1) if status else "")
+
+
+def opendal_answer(line):
+    """The lakehouse engine's object-store failure with S3's own answer.
+
+    Measured (lakehouse-engine-rs 0.57.3, a wrong static S3 secret on an
+    Iceberg REST catalog): "... source: PermissionDenied (persistent) at read,
+    context: { uri: ..., response: Parts { status: 403, ... headers: {...} },
+    service: s3, path: ..., range: 0- } => S3Error { code:
+    "SignatureDoesNotMatch", message: "The request signature we calculated
+    does not match ...", ... }" - some 1.3 KB, so the code S3 gave sits past
+    the cut to MAX_ERROR. The context is replaced by that answer; any other
+    line is returned as it is."""
+    found = re.search(r'\bS3Error \{ code: "(\w+)", message: "((?:[^"\\]|\\.)*)"', line)
+    if not found:
+        return line
+    status = re.search(r"\bstatus: (\d{3})\b", line)
+    head = line.split(", context: {", 1)[0] if ", context: {" in line else line[:found.start()].rstrip(" =>")
+    return "%s - caused by S3 %s: %s%s" % (head, found.group(1), found.group(2),
+                                          " (HTTP %s)" % status.group(1) if status else "")
+
+
+def summarize(text):
+    """One readable line out of Exasol's multi-line UDF error wrapper.
+
+    An adapter failure arrives as "VM error: F-UDF-CL-... com.exasol..." with a
+    Java stack under it; the line worth reading is the adapter's own coded
+    message (E-VSPG-3: ... Caused by: '...'). A document adapter's coded line
+    can be generic (E-VSD-102: Schema auto inference ... failed), so the
+    store's own answer under it is added. Anything else keeps its first
+    meaningful line.
+    """
+    text = str(text)
+    coded = re.search(r"(E-[A-Z]+-\d+:[^\n]*)", text)
+    store = store_cause(text)
+    if coded:
+        line = re.sub(r"\s*Known mitigations:\s*$", "", coded.group(1).strip())
+        line = rest_answer(line) or line
+        if store:
+            line = "%s - caused by %s" % (line, store)
+        return re.sub(r"\s+", " ", line).strip()
+    if store:
+        return re.sub(r"\s+", " ", store).strip()
+    # Any other SDK under the UDF wrapper: its first exception line.
+    for line in text.splitlines():
+        cause = re.match(r"\s*(?:Caused by: )?(?:[\w$]+\.)*([A-Z][\w$]*(?:Exception|Error)): (.+)$", line)
+        if cause and "ExaUDF" not in cause.group(1) and not cause.group(2).startswith("F-UDF"):
+            return re.sub(r"\s+", " ", thrift_answer(cause) or _sdk_line(cause)).strip()
+    # pyexasol's own wrapper: "(\n message => ...\n dsn => ...\n query => ...)".
+    # The message field is the error; the fields under it describe the session.
+    field = re.search(r"^\s*message\s*=>\s*(.+)$", text, re.M)
+    if field:
+        line, rest = field.group(1), text[field.end():]
+    else:
+        lines = [l.strip() for l in text.splitlines() if l.strip() and l.strip() not in ("(", ")")]
+        line = next((l for l in lines if not l.startswith("message")), lines[0] if lines else text)
+        rest = text[text.find(line) + len(line):] if line in text else ""
+    # A driver message that goes on past a colon is said whole: Snowflake's
+    # "SQL compilation error:" names the object on the next line, which
+    # pyexasol prints bare under the message field - not a field of its own,
+    # and not a stack frame.
+    more = next((l.strip() for l in rest.splitlines() if l.strip()), "")
+    if line.rstrip().endswith(":") and more and not re.match(r"\w+\s*=>|at [\w$.]+\(|\)$", more):
+        line = "%s %s" % (line, more)
+    if cut_in_string(line):
+        return CUT
+    return re.sub(r"\s+", " ", opendal_answer(line)).strip()
+
+
+def redact(text, secrets):
+    """A database error as one line a person may read - on the screen, in the
+    kit's log, in --json's error: every form of the run's secrets and every
+    credential shape gone (vslog.redact) BEFORE it is cut to MAX_ERROR, so a
+    cut never leaves part of a password standing. A text that cannot be
+    redacted is not shown at all."""
+    try:
+        text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
+        text = vslog.redact(text, secrets)
+        text = wallet(text)
+    except Exception:  # noqa: BLE001 - never the clear text
+        return "the database refused the statement (its message could not be made safe to show)"
+    return text[:MAX_ERROR]
+
+
+def wallet(text):
+    """An Oracle URL's embedded CA wallet (wallet_location=data:;base64,...,
+    some 2.6 KB) said as its size: the cause after it stays within MAX_ERROR
+    and on the screen."""
+    return re.sub(r"wallet_location=data:;base64,([A-Za-z0-9+/=]+)",
+                  lambda m: "wallet_location=data:<wallet, %d bytes>"
+                  % (len(m.group(1)) * 3 // 4 - m.group(1)[-2:].count("=")), text)
+
+
+class Database(object):
+    """The session. log is the run's vslog.RunLog: every statement is written
+    to it before it is sent, and the database's answer when it fails - both
+    redacted of the statement's secrets there."""
+    def __init__(self, backend, log=None):
+        self.backend = backend
+        self.log = log if log is not None else vslog.NULL
+
+    def query(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
+        try:
+            return self.backend.query(sql_text)
+        except Exception as error:     # the driver's own exception types vary by backend
+            raise self._failed(error, secrets) from None
+
+    def execute(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
+        try:
+            self.backend.execute(sql_text)
+        except Exception as error:
+            raise self._failed(error, secrets) from None
+
+    def _failed(self, error, secrets):
+        """The DbError for a driver's exception, logged. Raised `from None`:
+        the driver's own exception (its query => field holds the statement,
+        secret and all) never rides along to a traceback."""
+        # Every secret the run knows, not only this statement's own: a CREATE
+        # VIRTUAL SCHEMA carries none, yet its adapter can echo the credential
+        # (or a value derived from it) the CONNECTION holds.
+        try:
+            known = set(secrets) | set(self.log.secrets)
+        except Exception:  # noqa: BLE001 - never fewer than the statement's own
+            known = set(secrets)
+        message = redact(error, known)
+        try:
+            kind = classify_raw(message, error)
+        except Exception:  # noqa: BLE001 - a class is never worth the answer
+            kind = "error"
+        self.log.failed(message, kind, error, secrets)
+        return DbError(message, kind)
+
+    def close(self):
+        try:
+            self.backend.close()
+        except Exception:
+            pass
+
+
+class _Pyexasol(object):
+    def __init__(self, dsn, user, password):
+        # pyexasol's usage telemetry stays off unless the user set the
+        # variable, as everywhere else the kit opens it (marketplace/kit_telemetry.py).
+        os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
+        import pyexasol
+        import ssl
+        try:
+            self.conn = pyexasol.connect(dsn=dsn, user=user, password=password, encryption=True,
+                                         websocket_sslopt={"cert_reqs": ssl.CERT_NONE},
+                                         fetch_dict=True, compression=False, debug=False)
+        except Exception:
+            # A deployment configured without TLS: the kit's own validation
+            # (setup/lib/pyexasol.sh) falls back the same way.
+            self.conn = pyexasol.connect(dsn=dsn, user=user, password=password, encryption=False,
+                                         fetch_dict=True, debug=False)
+
+    def query(self, sql_text):
+        statement = self.conn.execute(sql_text)
+        if statement.result_type != "resultSet":
+            return []
+        return [{str(k).upper(): v for k, v in row.items()} for row in statement.fetchall()]
+
+    def execute(self, sql_text):
+        self.conn.execute(sql_text)
+
+    def close(self):
+        self.conn.close()
+
+
+def connect(dsn, user, password_file, log=None):
+    fake = os.environ.get("EXAKIT_VS_FAKE_DB")
+    if fake:
+        spec = importlib.util.spec_from_file_location("exakit_vs_fake_db", fake)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return Database(module.connect(dsn=dsn, user=user), log)
+    try:
+        with open(password_file, encoding="utf-8") as handle:
+            password = handle.read().strip()
+    except OSError as error:
+        raise DbError("the administrator password file could not be read: %s" % error, "error") from None
+    try:
+        backend = _Pyexasol(dsn, user, password)
+    except ImportError:
+        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error") from None
+    except Exception as error:
+        message = redact(error, [password])
+        raise DbError("the database did not accept a connection: %s" % message, "unreachable") from None
+    return Database(backend, log)

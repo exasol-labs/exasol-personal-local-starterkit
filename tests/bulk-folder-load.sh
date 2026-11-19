@@ -136,6 +136,7 @@ cat > "$SHAPES/bin/exapump" <<'STUB'
 # it received the user's bytes and not a copy.
 printf '%s\n' "$*" >> "$SHAPES_GOT/argv"
 [ "$1" = upload ] && cksum < "$2" >> "$SHAPES_GOT/hashes"
+[ "$1" = upload ] && cp "$2" "$SHAPES_GOT/received"
 exit 0
 STUB
 chmod +x "$SHAPES/bin/exapump"
@@ -155,6 +156,17 @@ check "a BOM+CRLF file is seen for what it is" ",|bom,crlf" "$(exakit_csv_inspec
 check "a ';' header selects the semicolon"   ";|"        "$(exakit_csv_inspect "$SHAPES/german.csv")"
 check "a tab header selects the tab"         "$TAB|"     "$(exakit_csv_inspect "$SHAPES/tabs.tsv")"
 check "a header with no rows is refused"     "1"         "$(exakit_csv_inspect "$SHAPES/shapes.csv" >/dev/null; echo $?)"
+# A COMMA IN THE HEADER of a ';' file made it load as comma-separated: the
+# header alone was read, and any comma won. The delimiter is now the one that
+# splits the header and the first records into the same number of fields.
+printf '"Name, first";Amount\n"Smith, J";12\n"Doe, A";7\n' > "$SHAPES/semi-quoted.csv"
+printf 'Betrag (EUR, netto);Datum;Notiz\n1,50;2026-01-01;x\n12;2026-01-02;y\n' > "$SHAPES/semi-prose.csv"
+printf 'Betrag (EUR, netto);Datum\n1,50;2026-01-01\n2,00;2026-01-02\n' > "$SHAPES/semi-tie.csv"
+printf 'id,note\n1,"a;b"\n2,"c;d"\n' > "$SHAPES/comma-quoted-semi.csv"
+check "a ';' file with a quoted comma in its header selects the semicolon" ";|" "$(exakit_csv_inspect "$SHAPES/semi-quoted.csv")"
+check "...and with an unquoted one, read from the rows"                  ";|" "$(exakit_csv_inspect "$SHAPES/semi-prose.csv")"
+check "a file both ',' and ';' split evenly is ';', named as a guess"   ";|ambiguous-delimiter" "$(exakit_csv_inspect "$SHAPES/semi-tie.csv")"
+check "a ',' file with a ';' inside quotes stays comma"                 ",|" "$(exakit_csv_inspect "$SHAPES/comma-quoted-semi.csv")"
 _before="$(cksum < "$SHAPES/windows.csv")"
 check "...and the file is byte-for-byte what it was" "$_before" "$(cksum < "$SHAPES/windows.csv")"
 
@@ -162,19 +174,76 @@ check "...and the file is byte-for-byte what it was" "$_before" "$(cksum < "$SHA
 _real_bin="$EXAKIT_EXAPUMP_BIN"; EXAKIT_EXAPUMP_BIN="$SHAPES/bin/exapump"
 : > "$SHAPES_GOT/argv"; : > "$SHAPES_GOT/hashes"
 _win="$( ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/windows.csv" T.WINDOWS ) 2>&1 )"
-has "exapump is handed the ORIGINAL path" "upload $SHAPES/windows.csv " "$(cat "$SHAPES_GOT/argv")"
-has "a CRLF file that loads is told what its last column now holds" "every value in the last column of T.WINDOWS ends in a carriage return" "$_win"
-check "...and the original bytes, CR and BOM included - no copy" "$(cksum < "$SHAPES/windows.csv")" "$(tail -1 "$SHAPES_GOT/hashes")"
+# WINDOWS LINE ENDINGS: exapump 0.14.0 has no row-separator option, so a CRLF
+# file failed on a numeric last column ("value='10.5<CR>'", seen live on
+# Windows 11) and loaded a CR into a text one. The kit sends an LF copy; the
+# user's file stays as it was.
+lacks "a CRLF file is not handed over as it is" "upload $SHAPES/windows.csv " "$(cat "$SHAPES_GOT/argv")"
+has "...but as a copy of the same name" "/windows.csv --table T.WINDOWS" "$(cat "$SHAPES_GOT/argv")"
+check "...whose records end in LF, the BOM kept" "$(printf '%sdatum,gesamt\n2026.01.01,7\n' "$BOM" | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+check "...and the user's file is byte-for-byte what it was" "$_before" "$(cksum < "$SHAPES/windows.csv")"
+lacks "...and no carriage-return warning is needed any more" "carriage return" "$_win"
+check "...and the copy is gone afterwards" "0" "$(ls -d "${TMPDIR:-/tmp}"/exakit-lf.* 2>/dev/null | wc -l | tr -d ' ')"
 lacks "...with no delimiter flag for a comma file" "--delimiter" "$(cat "$SHAPES_GOT/argv")"
+# A CRLF inside a quoted field is data, not a record end: it stays.
+printf 'id,note,amount\r\n1,"two\r\nlines",10.5\r\n2,"say ""hi""",7\r\n' > "$SHAPES/quoted.csv"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/quoted.csv" T.QUOTED ) >/dev/null 2>&1
+check "a CRLF inside quotes is kept, the record ends are made LF" \
+    "$(printf 'id,note,amount\n1,"two\r\nlines",10.5\n2,"say ""hi""",7\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+# A quote opens a field only at the start of one: an inch mark (27") in an
+# unquoted field is data, and every record after it still ends in LF (it kept
+# its CR when the quotes were merely counted per line).
+printf 'sku,product,qty\r\n1,27" monitor,4\r\n2,USB cable,10\r\n3,mouse,7\r\n' > "$SHAPES/inch.csv"
+_inch="$( ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/inch.csv" T.INCH ) 2>&1 )"
+check "an inch mark does not keep the later records' CR" \
+    "$(printf 'sku,product,qty\n1,27" monitor,4\n2,USB cable,10\n3,mouse,7\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+lacks "...and needs no carriage-return warning" "carriage return" "$_inch"
+# The field start is the file's own delimiter: in a tab file a quote after a
+# tab opens a field, so the CRLF inside it is data.
+printf 'id\tnote\r\n1\t"two\r\nlines"\r\n2\tx\r\n' > "$SHAPES/quoted-tab.tsv"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/quoted-tab.tsv" T.QTAB ) >/dev/null 2>&1
+check "a tab file's quoted CRLF is kept, its record ends made LF" \
+    "$(printf 'id\tnote\n1\t"two\r\nlines"\n2\tx\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+# A quote that never closes leaves CRLFs unconverted: the original goes over
+# and the carriage-return warning is still said.
+printf 'id,note\r\n1,"never closed\r\n2,x\r\n' > "$SHAPES/open.csv"
+: > "$SHAPES_GOT/argv"
+_open="$( ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/open.csv" T.OPEN ) 2>&1 )"
+has "a quote that never closes: the original goes over" "upload $SHAPES/open.csv " "$(cat "$SHAPES_GOT/argv")"
+has "...and the carriage-return warning stays" "carriage return" "$_open"
 _pln="$( ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/plain.csv" T.PLAIN ) 2>&1 )"
 lacks "a clean file gets no such warning" "carriage return" "$_pln"
 ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/german.csv" T.GERMAN ) >/dev/null 2>&1
 has "a ';' file is uploaded with exapump's own --delimiter ;" "--delimiter ;" "$(cat "$SHAPES_GOT/argv")"
+: > "$SHAPES_GOT/argv"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/semi-quoted.csv" T.SEMI ) >/dev/null 2>&1
+has "a ';' file with a comma in its header goes over with --delimiter ;" "--delimiter ;" "$(cat "$SHAPES_GOT/argv")"
 _hdr="$( ( EXAKIT_UPLOAD_QUIET=1 EXAKIT_UPLOAD_SOFT=1 exapump_upload "$SHAPES/shapes.csv" T.SHAPES ) 2>&1; echo "RC=$?" )"
 has "a header-only file is named, not sent to the engine" "has a header and no rows" "$_hdr"
 has "...as a soft failure" "RC=1" "$_hdr"
 lacks "...that never reached exapump" "shapes.csv" "$(cat "$SHAPES_GOT/argv")"
 check "no temporary copy of anything exists" "0" "$(ls -d "${TMPDIR:-/tmp}"/exakit-csv* 2>/dev/null | wc -l | tr -d ' ')"
+# A refused file must not leave an empty table behind (seen live on Windows:
+# STARTER_KIT.GA_CSV_TEST, 0 rows). exapump creates the table before the
+# import fails; the caller says the table was not there before.
+cat > "$SHAPES/bin/failpump" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SHAPES_GOT/argv"
+[ "$1" = upload ] && { echo "Error: SQL execution failed: Protocol error: ETL-3050: [Column=1 Row=0] [Transformation of value='x' failed - invalid character value for cast] (Session: 1)"; exit 1; }
+exit 0
+STUB
+chmod +x "$SHAPES/bin/failpump"
+EXAKIT_EXAPUMP_BIN="$SHAPES/bin/failpump"
+eval "_saved_listing() $(declare -f exakit_table_rows_listing | sed 1d)"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.GONE|0\n'; }
+: > "$SHAPES_GOT/argv"
+_gone="$( ( EXAKIT_UPLOAD_QUIET=1 EXAKIT_UPLOAD_TABLE_BEFORE=absent exapump_upload "$SHAPES/plain.csv" T.GONE ) 2>&1 )"
+has "a refused file's empty new table is dropped" "DROP TABLE IF EXISTS T.GONE" "$(cat "$SHAPES_GOT/argv")"
+has "...and the message says so" "no empty table left behind" "$_gone"
+: > "$SHAPES_GOT/argv"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/plain.csv" T.GONE ) >/dev/null 2>&1
+lacks "...but a table that was there before is left alone" "DROP TABLE" "$(cat "$SHAPES_GOT/argv")"
+eval "exakit_table_rows_listing() $(declare -f _saved_listing | sed 1d)"
 EXAKIT_EXAPUMP_BIN="$_real_bin"
 
 # The folder scan sees the same things, and says them.
@@ -230,10 +299,14 @@ LOADED="$WORK/loaded"
 : > "$LOADED"
 FAIL_ON=""
 exakit_ensure_schema()  { printf 'schema %s\n' "$1" >> "$LOADED"; return 0; }
+# The real uploader, kept for the number-format section at the end.
+eval "_real_exapump_upload() $(declare -f exapump_upload | sed 1d)"
 exapump_upload()        {
     if [ -n "$FAIL_ON" ] && [ "$(basename "$1")" = "$FAIL_ON" ]; then return 1; fi
     printf 'upload %s -> %s\n' "$(basename "$1")" "$2" >> "$LOADED"; return 0
 }
+# The real one, kept for the single-JSON section at the end.
+eval "_real_exakit_load_local_json() $(declare -f exakit_load_local_json | sed 1d)"
 exakit_load_local_json() {
     EXAKIT_LAST_LOAD_TARGET="$2"
     printf 'json %s -> %s\n' "$(basename "$1")" "$2" >> "$LOADED"; return 0
@@ -277,6 +350,13 @@ has "the failure names the file" "orders.parquet" "$OUT"
 check "...on a row that says it did not load" "1" \
     "$(printf '%s\n' "$OUT" | grep -c 'orders\.parquet.*not loaded')"
 has "and the rest are counted" "STARTER_KIT: 3 files loaded, 1 not loaded" "$OUT"
+# The installer asks for the names of the files that did not load, so its
+# closing note can name them (EXAKIT_LOCAL_FILE_NAMES); only the failed one.
+: > "$LOADED"
+_lfn="$(mktemp)"
+( EXAKIT_LOCAL_FILE_NAMES="$_lfn"; exakit_load_local_folder "$D" >/dev/null 2>&1 )
+check "...and the installer is told which file did not load" "orders.parquet" "$(tr '\n' ' ' < "$_lfn" | sed 's/ $//')"
+rm -f "$_lfn"
 FAIL_ON=""
 
 printf '\n== a file that will not load says why, and the rest still load ==\n'
@@ -346,20 +426,30 @@ OUT="$(EXAKIT_DATA_FILE="$D/customers.csv" EXAKIT_DATA_TABLE="STARTER_KIT.CUSTOM
     exakit_load_local_file 2>&1)"
 check "a file path still loads one file" "1" "$(grep -c '^upload ' "$LOADED")"
 has "...into the table it was given" "upload customers.csv -> STARTER_KIT.CUSTOMERS" "$(cat "$LOADED")"
+# Which delimiter is used is said, and when more than one fits, that is said too.
+printf '"Name, first";Amount\n"Smith, J";12\n' > "$WORK/semi-named.csv"
+OUT="$(EXAKIT_DATA_FILE="$WORK/semi-named.csv" EXAKIT_DATA_TABLE="STARTER_KIT.SEMI" exakit_load_local_file 2>&1)"
+has "a ';' file with a comma in its header is said to be semicolon-separated" "semi-named.csv is semicolon-separated" "$OUT"
+printf 'Betrag (EUR, netto);Datum\n1,50;2026-01-01\n' > "$WORK/semi-guess.csv"
+OUT="$(EXAKIT_DATA_FILE="$WORK/semi-guess.csv" EXAKIT_DATA_TABLE="STARTER_KIT.GUESS" exakit_load_local_file 2>&1)"
+has "...and a file two delimiters fit says which one it loads with" "semi-guess.csv fits more than one separator — loading it as semicolon-separated." "$OUT"
+OUT="$(EXAKIT_DATA_FILE="$D/customers.csv" EXAKIT_DATA_TABLE="STARTER_KIT.CUSTOMERS" exakit_load_local_file 2>&1)"
+lacks "...while a plain comma file says nothing about it" "separat" "$OUT"
 
 printf '\n== the CLI takes the path too ==\n'
 
 CLI="$(cat "$ROOT/setup/exakit")"
 has "data-load accepts a path argument" '_dl_path="$1"' "$CLI"
 has "a path pre-answers the local-data question" 'EXAKIT_DATA_FILE="$_dl_norm"' "$CLI"
-has "a missing path is refused" 'No such file or folder' "$CLI"
+has "a missing path is refused" 'No such file, folder or dataset' "$CLI"
+has "...unless it names a bundled dataset, which loads like EXAKIT_DATASETS" 'EXAKIT_DATASETS="$_dl_path"' "$CLI"
 HELP="$(cat "$ROOT/setup/help/exakit.json")"
 has "the help documents a folder" "A FOLDER is a bulk load" "$HELP"
 lacks "the help no longer documents a format variable" "EXAKIT_DATA_FORMATS" "$HELP"
 
 printf '\n== Windows loads JSON where the engine exists ==\n'
 
-# Get-JsonTablesEngineAsset publishes a build for windows/x86_64, so the add-on
+# The JSON Tables add-on publishes a build for windows/x86_64, so the add-on
 # is applicable, offered and installable there - but exapump.ps1 refused every
 # .json file unconditionally, with a message that contradicted itself by ending
 # "Windows x86_64 is supported; ARM64 is not built yet." The refusal outlived
@@ -417,10 +507,14 @@ printf '\n== a FATAL upload failure names the reason too ==\n'
 # the very same engine line into words.
 #
 # exapump_upload is stubbed further up this suite, and `die` exits the shell it
-# runs in, so the real function is exercised in a child bash: the engine fails,
-# and the logfile already holds its Error: line, which is the whole situation.
+# runs in, so the real function is exercised in a child bash: the engine fails
+# and writes its Error: line to the logfile, which is the whole situation. An
+# earlier, unrelated Error: line (the MCP write probe's) is already there: the
+# reason is this upload's own, never that one.
 FATAL_LOG="$WORK/fatal.log"
-cat > "$FATAL_LOG" <<'FATALLOG'
+FATAL_SAYS="$WORK/fatal.says"
+printf '%s\n' 'Error: Query execution failed: Protocol error: insufficient privileges for creating table (SQL state: 42500)' > "$FATAL_LOG"
+cat > "$FATAL_SAYS" <<'FATALLOG'
 Error: SQL execution failed: Protocol error: ETL-2107: Error while parsing row=412 (starting from 0) [CSV Parser found at byte 8 of 76 single field delimiter in a not enclosed field]
 FATALLOG
 
@@ -431,12 +525,11 @@ fatal_upload() { # fatal_upload <log-file> -> the message a doomed upload prints
         . "$1/setup/lib/ui.sh"
         . "$1/setup/lib/common.sh"
         . "$1/setup/lib/exapump.sh"
-        EXAKIT_LOG_FILE="$2"
-        # The layer below: the upload fails, and the engine has already said why
-        # in the logfile.
-        run_logged() { return 1; }
+        EXAKIT_LOG_FILE="$2"; SAYS="$4"
+        # The layer below: the upload fails, and the engine says why in the logfile.
+        run_logged() { cat "$SAYS" >> "$EXAKIT_LOG_FILE"; return 1; }
         exapump_upload "$3" "STARTER_KIT.SALES"
-    ' _ "$ROOT" "$1" "$D/sales.csv" 2>&1
+    ' _ "$ROOT" "$1" "$D/sales.csv" "$FATAL_SAYS" 2>&1
 }
 
 FATAL_OUT="$(fatal_upload "$FATAL_LOG" || true)"
@@ -447,12 +540,14 @@ has "...and names the file and the table it was going into" \
     "Could not load sales.csv into STARTER_KIT.SALES" "$FATAL_OUT"
 lacks "the fatal path no longer sends the reader to the log" "Upload failed:" "$FATAL_OUT"
 
-# The fallback survives: with nothing in the log to translate, inventing a
-# reason would be worse than the old wording.
-: > "$FATAL_LOG"
+# The fallback survives: when this upload wrote nothing to translate, inventing a
+# reason would be worse than the old wording - and an EARLIER failure's Error:
+# line (the MCP probe's, still in the log) is not this upload's reason.
+: > "$FATAL_SAYS"
 FATAL_BARE="$(fatal_upload "$FATAL_LOG" || true)"
 has "an untranslatable failure keeps the old wording" "Upload failed:" "$FATAL_BARE"
 lacks "...and invents no reason" "Could not load sales.csv" "$FATAL_BARE"
+lacks "...nor borrows an earlier failure's" "insufficient privileges" "$FATAL_BARE"
 
 # Both paths call the same translator, on both sides of the kit.
 FATAL_SH="$(cat "$ROOT/setup/lib/exapump.sh")"
@@ -462,9 +557,75 @@ has "the shell fatal path asks for the reason" \
 has "the twin asks for it on its fatal path too" \
     '$uploadWhy = Get-ExakitUploadFailureReason -Output $result.Output' "$FATAL_PS"
 has "...and puts it in the message it dies with" \
-    'Fail "Could not load $(Split-Path $Path -Leaf) into $Target - $uploadWhy"' "$FATAL_PS"
+    'Fail "Could not load $(Split-Path $Path -Leaf) into $Target - $uploadWhy$gone"' "$FATAL_PS"
 check "the twin asks on both paths, not one" "2" \
     "$(printf '%s\n' "$FATAL_PS" | grep -c 'Get-ExakitUploadFailureReason -Output $result.Output')"
+
+printf '\n== a stray double quote is named as one, not as a line break ==\n'
+
+# Seen live on Windows, with both line endings: an inch mark in an unquoted
+# field (1,27" monitor,4). "Field delimiter" is Exasol's name for the QUOTE
+# character, so ETL-2107's "single field delimiter in a not enclosed field" is
+# exactly that - and the kit told the reader to look for a line break or a comma
+# inside quotes, which the file does not have. The same engine words still read
+# as a line break when the file's quotes are in order, because they are.
+INCH="$WORK/inch"; mkdir -p "$INCH"
+printf 'id,item,qty\n1,27" monitor,4\n2,desk,1\n' > "$INCH/c_inch.csv"
+printf 'id,item,qty\r\n1,27" monitor,4\r\n2,desk,1\r\n' > "$INCH/c_inch_crlf.csv"
+printf 'id,item,qty\n1,"two\nlines",4\n2,"a ""quoted"" word",1\n' > "$INCH/c_break.csv"
+printf 'id;item\n1;"ok"\n2;5 foot 11" tall\n' > "$INCH/c_semi.csv"
+INCH_SAYS="$WORK/inch.says"
+cat > "$INCH_SAYS" <<'INCHLOG'
+Error: SQL execution failed: Protocol error: ETL-2107: Error while parsing row=0 (starting from 0) [CSV Parser found at byte 4 (starting with 1 at the beginning of the row) of 4 single field delimiter in a not enclosed field in file '001.csv'. Please check for unescaped field delimiters in data fields (they have to be escaped)] (Session: 1)
+INCHLOG
+INCH_WORDS='row 0 has a double quote (") inside a field that is not in quotes: put that field in quotes and double the quote (e.g. "27"" monitor")'
+EXAKIT_LOG_FILE="$WORK/inch.log"
+cp "$INCH_SAYS" "$EXAKIT_LOG_FILE"; EXAKIT_REASON_SINCE=0
+check "an inch mark in an unquoted field is called a double quote" \
+    "$INCH_WORDS" "$(exakit_upload_failure_reason "$INCH/c_inch.csv")"
+check "...with Windows line endings too" \
+    "$INCH_WORDS" "$(exakit_upload_failure_reason "$INCH/c_inch_crlf.csv")"
+check "...and in a ';' file" \
+    'row 0 has a double quote (") inside a field that is not in quotes: put that field in quotes and double the quote (e.g. "27"" monitor")' \
+    "$(exakit_upload_failure_reason "$INCH/c_semi.csv")"
+check "a file whose quotes are in order keeps the line-break reading" \
+    "row 0 has a line break or an unescaped comma inside a quoted field" \
+    "$(exakit_upload_failure_reason "$INCH/c_break.csv")"
+check "...and so does a call that names no file" \
+    "row 0 has a line break or an unescaped comma inside a quoted field" \
+    "$(exakit_upload_failure_reason)"
+EXAKIT_LOG_FILE="$WORK/test.log"
+
+# The whole sentence, through the real uploader: exapump fails with the live
+# message and leaves the empty table it created, which the kit drops.
+inch_upload() { # inch_upload <file> <table> -> what the doomed upload prints
+    : > "$WORK/inch.run.log"
+    EXAKIT_HOME="$WORK/home" EXAKIT_BIN_DIR="$WORK/bin" HOME="$WORK/fake-home" \
+    bash -c '
+        set -u
+        . "$1/setup/lib/ui.sh"
+        . "$1/setup/lib/common.sh"
+        . "$1/setup/lib/exapump.sh"
+        EXAKIT_LOG_FILE="$2"; SAYS="$3"; TABLE="$5"
+        run_logged() { cat "$SAYS" >> "$EXAKIT_LOG_FILE"; return 1; }
+        run_python() { return 1; }
+        exapump_cli() { printf "%s\n" true; }
+        exakit_table_rows_listing() { printf "EXAKIT.LISTING_ANSWERED|1\n%s|0\n" "$TABLE"; }
+        EXAKIT_UPLOAD_TABLE_BEFORE=absent exapump_upload "$4" "$TABLE"
+    ' _ "$ROOT" "$WORK/inch.run.log" "$INCH_SAYS" "$1" "$2" 2>&1
+}
+INCH_OUT="$(inch_upload "$INCH/c_inch.csv" STARTER_KIT.C_INCH || true)"
+has "the single-file load says it in one sentence" \
+    "Could not load c_inch.csv into STARTER_KIT.C_INCH - $INCH_WORDS, no empty table left behind" \
+    "$(printf '%s' "$INCH_OUT" | sed 's/ — / - /')"
+lacks "...and no longer sends the reader looking for a line break" "line break" "$INCH_OUT"
+INCH_OUT="$(inch_upload "$INCH/c_inch_crlf.csv" STARTER_KIT.C_INCH || true)"
+has "...for a Windows-ended file as well" "$INCH_WORDS" "$INCH_OUT"
+
+# The folder loop reads the reason in its own shell: it names the file too.
+FOLD_SH="$(cat "$ROOT/setup/lib/exapump.sh")"
+has "the folder loop names the file it is explaining" \
+    '_blf_why="$(exakit_upload_failure_reason "$_blf_path"' "$FOLD_SH"
 
 printf '\n== a second run of the same folder must not load it twice ==\n'
 
@@ -513,8 +674,21 @@ has "rows this kit did not load are a clash" "clash|$RCPT/sales.csv|99" "$(exaki
 # ...unless we said, before we started, that we were writing to it. That crumb
 # is the only thing separating "we were interrupted mid-file" from "this is
 # someone else's table", and it decides whether the rows get dropped.
-exakit_load_inflight_set "T.SALES"
+exakit_load_inflight_set "T.SALES" absent
 has "a table we were interrupted writing is resumed" "resume|$RCPT/sales.csv|99" "$(exakit_bulk_decide "$DPLAN" T)"
+exakit_load_inflight_set "T.SALES" 0
+has "...and so is one that was empty before" "resume|$RCPT/sales.csv|99" "$(exakit_bulk_decide "$DPLAN" T)"
+# DAT-01: a table that held rows before the interrupted write was being
+# APPENDED to. "resume" dropped it - the rows the kit never loaded with it -
+# under the default "skip", exit 0. Now it is a question, never a drop.
+exakit_load_inflight_set "T.SALES" 5000
+_d01="$(exakit_bulk_decide "$DPLAN" T 2>"$WORK/d01.err")"
+has "an interrupted APPEND is a clash, not a resume" "clash|$RCPT/sales.csv|99" "$_d01"
+has "...and says why it is left as it is" "already held 5000 rows: part of the file may be in it now" "$(cat "$WORK/d01.err")"
+has "...with the remedy" "EXAKIT_ON_EXISTING=replace" "$(cat "$WORK/d01.err")"
+# A crumb written by an older kit says nothing about before: not enough to drop.
+printf 'T.SALES\n' > "$RCPT/cache/load-inflight"
+has "an old crumb with no 'before' is a clash too" "clash|$RCPT/sales.csv|99" "$(exakit_bulk_decide "$DPLAN" T 2>/dev/null)"
 exakit_load_inflight_clear
 has "...and once the crumb is swept it is a clash again" "clash|$RCPT/sales.csv|99" "$(exakit_bulk_decide "$DPLAN" T)"
 
@@ -757,6 +931,79 @@ check "append over foreign rows loads" "0" "$SFRC"
 lacks "...and drops nothing" "DROP TABLE" "$(cat "$LOADED")"
 has "...and says which policy applied" "Appending to the 99 rows already in T.X (EXAKIT_ON_EXISTING=append)" "$SFO"
 
+# NEW-12: a file EDITED since this kit loaded it. The receipts match on
+# content, so it is not "already loaded" - and it was called "rows this kit did
+# not load", which made append look safe: every unchanged row then landed
+# twice. The receipt for the same path says what it is: the kit's own rows,
+# from the earlier version.
+sf_reset
+printf 'A\nb\n' > "$SF/x.csv"
+exakit_load_receipt_record "T.X" "$SF/x.csv" 1
+printf 'A\nb\nc\n' > "$SF/x.csv"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+has "the receipt keeps the file's full path" "	$(cd "$SF" && pwd -P)/x.csv" "$(cat "$SF/cache/load-receipts.tsv")"
+has "an edited file is recognised as this kit's own, changed" "x.csv|" "$(exakit_load_receipt_changed T.X "$SF/x.csv" 1)"
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "an edited file is not loaded over without an answer" "5" "$SFRC"
+has "...and says the rows are this kit's, from that file" "Not loaded: T.X holds the 1 row this kit loaded from x.csv on 20" "$SFO"
+has "...and that the file changed" "and the file has changed since." "$SFO"
+has "...with replace as the remedy and append named for what it does" \
+    "Load the new version with EXAKIT_ON_EXISTING=replace (drop and rebuild it); =append would add every row again on top of the old ones." "$SFO"
+lacks "...never \"did not load\"" "did not load" "$SFO"
+check "...and nothing reached the database" "0" "$(grep -c . "$LOADED")"
+# At a terminal: replace is offered first and is the default.
+eval "$(declare -f prompt_text | sed '1s/^prompt_text/_g2_real_prompt_text/')"
+_exakit_prompt_tty() { printf 'stdin\n'; }
+prompt_text() { printf '%s|%s\n' "$1" "$2" >> "$SF/asked"; printf '%s\n' "$2"; }
+: > "$SF/asked"
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+_exakit_prompt_tty() { printf ''; }
+check "at a terminal, Enter replaces the edited file's table" "0" "$SFRC"
+has "...the question offers replace first, default r" \
+    "That table: (r)eplace it with the new version, (a)ppend (adds every row again: unchanged rows end up twice), or (s)kip|r" "$(cat "$SF/asked")"
+has "...after saying what the table holds" "T.X holds the 1 row this kit loaded from x.csv on 20" "$SFO"
+has "...and the table is rebuilt" "DROP TABLE IF EXISTS T.X" "$(cat "$LOADED")"
+# Another file's rows in that table are still "no load record for this file".
+sf_reset
+printf 'z\n1\n' > "$SF/other.csv"
+exakit_load_receipt_record "T.X" "$SF/other.csv" 1
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "another file's rows: declined" "5" "$SFRC"
+has "...as rows with no load record for this file" "Not loaded: T.X already holds 1 row with no load record for this file" "$SFO"
+# A receipt from before paths were kept is matched by the file's name.
+sf_reset
+printf 'T.X\t3\tdeadbeef\t1\t1763500000\tx.csv\n' > "$SF/cache/load-receipts.tsv"
+has "an older receipt (no path) is matched by name" "x.csv|1763500000" "$(exakit_load_receipt_changed T.X "$SF/x.csv" 1)"
+check "...but not once the table holds other rows" "" "$(exakit_load_receipt_changed T.X "$SF/x.csv" 2)"
+# The folder: an edited file is named, and when every clash is one, replace
+# is first and the default.
+sf_reset
+exakit_load_receipt_record "T.X" "$SF/x.csv" 1
+printf 'A\nb\nc\nd\n' > "$SF/x.csv"
+_bac_err="$(exakit_bulk_ask_clashes "clash|$SF/x.csv|1" T "csv|X|$SF/x.csv" 2>&1 >/dev/null)"
+has "a folder names an edited file's rows as this kit's" "1 table in T already holding rows this kit loaded from an earlier version of the same file:" "$_bac_err"
+has "...and without a terminal points at replace" "Load the new versions with EXAKIT_ON_EXISTING=replace; =append would add every row again" "$_bac_err"
+check "...and skips" "skip" "$(exakit_bulk_ask_clashes "clash|$SF/x.csv|1" T "csv|X|$SF/x.csv" 2>/dev/null)"
+printf 'q\n1\n' > "$SF/q.csv"
+_bac_err="$(exakit_bulk_ask_clashes "clash|$SF/x.csv|1
+clash|$SF/q.csv|5" T "csv|X|$SF/x.csv
+csv|Q|$SF/q.csv" 2>&1 >/dev/null)"
+has "a mixed folder keeps the general question" "2 tables in T already holding rows this kit did not load:" "$_bac_err"
+has "...and marks the edited file" "x.csv ->" "$(printf '%s\n' "$_bac_err" | grep 'loaded by this kit from an earlier version of this file')"
+_exakit_prompt_tty() { printf 'stdin\n'; }
+: > "$SF/asked"
+check "at a terminal, Enter replaces every edited file's table" "replace" "$(exakit_bulk_ask_clashes "clash|$SF/x.csv|1" T "csv|X|$SF/x.csv" 2>/dev/null)"
+has "...asked with replace first" "Those files: (r)eplace each table with the new version, (a)ppend (adds every row again: unchanged rows end up twice), or (s)kip|r" "$(cat "$SF/asked")"
+# One file, a table holding rows another file loaded: the warning speaks of
+# this file, not of the kit - the kit may well have loaded those rows.
+_fac_err="$(exakit_file_ask_clash "STARTER_KIT.R_CSV" 4 2>&1 >/dev/null)"
+has "a single file's clash names this file" "STARTER_KIT.R_CSV already holds 4 rows that this file did not load." "$_fac_err"
+lacks "...not the kit" "this kit did not load" "$_fac_err"
+_exakit_prompt_tty() { printf ''; }
+eval "$(declare -f _g2_real_prompt_text | sed '1s/^_g2_real_prompt_text/prompt_text/')"
+printf 'A\nb\n' > "$SF/x.csv"
+
 # An EMPTY table, an ABSENT one and a database that cannot be asked all load,
 # exactly as the folder path decides for the same answers - and none of them
 # prints a policy line, because no rows were at stake.
@@ -785,18 +1032,25 @@ check "...and nothing was touched" "0" "$(grep -c . "$LOADED")"
 
 # Both callers of the loader read exit 5 as "declined", not as a failed step:
 # the installer must not write a failure note over the reader's own table.
-# The branch itself, lifted out of exakit_maybe_offer_data_load and run over a
-# loader that answers each status in turn. A grep for the `-eq 5` line passed
-# a mutant that booked the decline as a failure right under it; this does not.
-_ucs_branch="$(awk '/_data_has_local" = 1 \]; then/{p=1} p{print} p&&/^    fi$/{exit}' "$ROOT/setup/lib/common.sh")"
+# The branch itself - _exakit_offer_local_file, which both of the installer's
+# paths to a file call (the table's file row and EXAKIT_DATA_FILE beside a
+# dataset answer) - lifted out of common.sh and run over a loader that answers
+# each status in turn. A grep for the `-eq 5` line passed a mutant that booked
+# the decline as a failure right under it; this does not.
+_ucs_branch="$(awk '/^_exakit_offer_local_file\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
+# ...with the helper that books a failure, which keeps every reason.
+_ucs_fail="$(awk '/^_exakit_offer_fail\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
 check "the installer's local-load branch was lifted" "yes" "$(printf '%s' "$_ucs_branch" | grep -q '_local_status" -eq 5' && echo yes || echo no)"
+check "...and both installer paths to a file run it" "2" "$(grep -c '^ *_exakit_offer_local_file$' "$ROOT/setup/lib/common.sh")"
 _installer_books() { # _installer_books <loader exit status> -> "failed=<0|1> noted=<n> notes=<text>"
     bash -c '
-        _data_has_local=1; _data_failed=0; _data_notes=""; _noted=0
+        _data_failed=0; _data_notes=""; _noted=0
         exakit_load_local_file() { return '"$1"'; }
         exakit_note_failure() { _noted=$((_noted + 1)); }
         error() { :; }; printf() { command printf "$@"; }
+        '"$_ucs_fail"'
         '"$_ucs_branch"'
+        _exakit_offer_local_file
         command printf "failed=%s noted=%s notes=%s" "$_data_failed" "$_noted" "$(command printf "%s" "$_data_notes" | tr "\n" " ")"' 2>/dev/null
 }
 _b5="$(_installer_books 5)"
@@ -806,8 +1060,18 @@ has   "...naming the switch"                     "EXAKIT_ON_EXISTING=replace" "$
 _b3="$(_installer_books 3)"
 has   "a refused file (3) is not booked either"  "failed=0 noted=0" "$_b3"
 has   "...but is reported"                       "The local file was refused" "$_b3"
+# A file that did not load is the file, not the install, too: booking it said
+# "sample data is not installed" over loaded datasets and skipped the
+# marketplace offer.
 _b1="$(_installer_books 1)"
-has   "a real failure (1) is booked"             "failed=1 noted=1" "$_b1"
+has   "a file that did not load (1) is not booked" "failed=0 noted=0" "$_b1"
+has   "...but is reported, with the retry"       "did not load (reason above). Retry any time with: exakit data-load" "$_b1"
+# The Windows twin: the installer's helper says it and does not throw, so
+# Request-ExakitDataLoadOffer has no reason to book.
+_ps_olf="$(sed -n '/^function Invoke-ExakitOfferLocalFile/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
+has   "...on Windows too: the failure is a warning naming the file(s)" 'did not load (reason above).' "$_ps_olf"
+lacks "...and it never rethrows"                 'throw' "$_ps_olf"
+has   "...a folder's \"failed\" is said too"     '$failed = ($result -eq "failed")' "$_ps_olf"
 has   "a clean load (0) leaves no note"          "failed=0 noted=0 notes=" "$(_installer_books 0)"
 has "exakit data-load answers 5 for it" '_menu_status=5' "$BULK_SH"
 # The help says the rule covers one file too.
@@ -823,6 +1087,305 @@ done
 has "the twin reads the policy on the single-file path" 'return "declined"' "$BULK_PS"
 has "...and the Windows command answers 5 for it" 'if ($result -eq "declined") { $script:PendingExitCode = 5 }' "$BULK_PS"
 unset EXAKIT_DATA_FILE EXAKIT_DATA_TABLE
+
+printf '\n== a file name the database would misread still becomes a table ==\n'
+
+# exapump writes the target into its CREATE TABLE unquoted. 2025-01.csv gave
+# STARTER_KIT.2025_01 ("syntax error, unexpected UNSIGNED_NUMERIC_LITERAL_")
+# and ORDER.csv gave STARTER_KIT.ORDER ("table name not allowed since it is a
+# keyword: ORDER"), both seen on a live database: a folder of monthly exports
+# loaded nothing. The derived name is a plain identifier now, and said.
+check "a leading digit gets T_"       "T_2025_01" "$(exakit_table_name_from_path "$WORK/2025-01.csv")"
+check "a reserved word gets T_"       "T_ORDER"   "$(exakit_table_name_from_path "$WORK/ORDER.csv")"
+check "...whatever its case"          "T_USER"    "$(exakit_table_name_from_path "$WORK/user.csv")"
+check "...and for Parquet too"        "T_DATE"    "$(exakit_table_name_from_path "$WORK/date.parquet")"
+check "an ordinary name is untouched" "SALES"     "$(exakit_table_name_from_path "$WORK/sales.csv")"
+check "a name is cut at 128 characters" "128" \
+    "$(_n="$(exakit_table_name_from_path "$WORK/$(printf 'a%.0s' $(seq 1 200)).csv")"; printf '%s' "${#_n}")"
+exakit_validate_table_target "STARTER_KIT.ORDER"; check "a typed reserved table name is refused" "1" "$?"
+exakit_validate_table_target "2025.SALES";        check "...and a schema starting with a digit" "1" "$?"
+exakit_validate_table_target "STARTER_KIT.T_ORDER"; check "...while T_ORDER is fine" "0" "$?"
+has "the refusal says why" "ORDER is an SQL reserved word" "$(exakit_table_target_problem STARTER_KIT.ORDER)"
+
+NM="$WORK/names"; mkdir -p "$NM/cache"
+EXAKIT_CACHE_DIR="$NM/cache"
+printf 'a,b\n1,2\n' > "$NM/2025-01.csv"
+printf 'a,b\n3,4\n' > "$NM/ORDER.csv"
+: > "$LOADED"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\n'; }
+NMO="$( (EXAKIT_DATA_FILE="$NM/2025-01.csv" exakit_load_local_file) 2>&1 )"; NMRC=$?
+check "a single 2025-01.csv loads" "0" "$NMRC"
+has "...into T_2025_01" "upload 2025-01.csv -> STARTER_KIT.T_2025_01" "$(cat "$LOADED")"
+has "...and says the name it got" "2025-01.csv loads as T_2025_01" "$NMO"
+: > "$LOADED"
+NMO="$(exakit_load_local_folder "$NM" 2>&1)"; NMRC=$?
+check "a folder of such files loads" "0" "$NMRC"
+has "...ORDER.csv as T_ORDER" "upload ORDER.csv -> STARTER_KIT.T_ORDER" "$(cat "$LOADED")"
+has "...2025-01.csv as T_2025_01" "upload 2025-01.csv -> STARTER_KIT.T_2025_01" "$(cat "$LOADED")"
+has "...and the plan says why" "T_ goes in front of a name that starts with a digit" "$NMO"
+NMO="$( (EXAKIT_DATA_FILE="$NM/ORDER.csv" EXAKIT_DATA_TABLE="STARTER_KIT.ORDER" exakit_load_local_file) 2>&1 )"; NMRC=$?
+check "EXAKIT_DATA_TABLE naming a reserved word is refused" "1" "$NMRC"
+has "...with the reason" "ORDER is an SQL reserved word" "$NMO"
+# The JSON fan-out suffix is a part of a name, not a name: EVENTS_ORDER, not EVENTS_T_ORDER.
+check "a name part is not prefixed" "ORDER" "$(_exakit_name_part_from_path "$WORK/order.parquet")"
+
+printf '\n== a single file that fails leaves no empty table behind ==\n'
+eval "_saved_upload() $(declare -f exapump_upload | sed 1d)"
+exapump_upload() { printf 'before=%s\n' "${EXAKIT_UPLOAD_TABLE_BEFORE:-}" >> "$LOADED"; return 0; }
+: > "$LOADED"; rm -f "$NM/cache/load-receipts.tsv"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\n'; }
+( EXAKIT_DATA_FILE="$NM/2025-01.csv" exakit_load_local_file ) >/dev/null 2>&1
+has "a new table is announced as not there before" "before=absent" "$(cat "$LOADED")"
+: > "$LOADED"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nSTARTER_KIT.T_2025_01|0\n'; }
+( EXAKIT_DATA_FILE="$NM/2025-01.csv" exakit_load_local_file ) >/dev/null 2>&1
+check "...an existing empty one is not" "before=" "$(grep '^before=' "$LOADED")"
+eval "exapump_upload() $(declare -f _saved_upload | sed 1d)"
+
+printf '\n== one JSON file by name: named after the file, loaded once, failures said ==\n'
+
+# Three defects of the single-JSON path, all seen on a live Windows 11 install
+# or reproduced against the kit logic with the engine stubbed:
+#  - it appended on every run (rows 3, 6, 9; EXAKIT_ON_EXISTING ignored, no receipt);
+#  - its tables were named after the kit's temporary copy (GA_JSON_TEST_NORMALISED);
+#  - an engine that could not run was reported as "this JSON file could not be read".
+# The ingest engine is a stub that writes Parquet files the way the real one
+# names them (<stem>.parquet, <stem>.<array>[].parquet); the database is a
+# state file of TABLE|rows that the upload stub adds to and DROP takes from.
+eval "exakit_load_local_json() $(declare -f _real_exakit_load_local_json | sed 1d)"
+JS="$WORK/json1"; mkdir -p "$JS/cache"
+EXAKIT_CACHE_DIR="$JS/cache"
+printf '{\n  "id": 1,\n  "tags": ["a", "b"]\n}\n' > "$JS/ga_json_test.json"     # pretty-printed: the kit re-flows it
+JSTATE="$JS/state"; : > "$JSTATE"; export JSTATE
+cat > "$JS/engine" <<'STUB'
+#!/bin/sh
+[ -n "${FAKE_JT_FAIL:-}" ] && { echo "error: cannot execute the ingest engine: No such file or directory"; exit 127; }
+in=""; out=""
+while [ $# -gt 0 ]; do case "$1" in --input) in="$2"; shift ;; --output-dir) out="$2"; shift ;; esac; shift; done
+stem="$(basename "$in")"; stem="${stem%.*}"
+mkdir -p "$out" && : > "$out/$stem.parquet" && : > "$out/$stem.tags[].parquet"
+STUB
+chmod +x "$JS/engine"
+_exakit_json_tables_ensure() { return 0; }
+_exakit_json_tables_bin() { printf '%s\n' "$JS/engine"; }
+_exakit_json_tables_logged() { "$@"; }
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\n'; cat "$JSTATE"; }
+js_rows() { _r="$(grep "^$1|" "$JSTATE" | cut -d'|' -f2)"; printf '%s' "${_r:-0}"; }
+exapump_upload() {
+    printf 'upload %s -> %s\n' "$(basename "$1")" "$2" >> "$LOADED"
+    _n="$(js_rows "$2")"; grep -v "^$2|" "$JSTATE" > "$JSTATE.t"; printf '%s|%s\n' "$2" "$((_n + 1))" >> "$JSTATE.t"; mv "$JSTATE.t" "$JSTATE"
+}
+exakit_verify_loaded_table() { EXAKIT_LAST_VERIFIED_ROWS="$(js_rows "$1")"; }
+cat > "$WORK/fake-exapump" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DROPPED_LOG"
+case "$*" in *"DROP TABLE IF EXISTS "*) t="$(printf '%s' "$*" | sed 's/.*DROP TABLE IF EXISTS //; s/ .*//')"; grep -v "^$t|" "$JSTATE" > "$JSTATE.t"; mv "$JSTATE.t" "$JSTATE" ;; esac
+exit 0
+STUB
+chmod +x "$WORK/fake-exapump"
+js_run() { ( EXAKIT_DATA_FILE="$JS/ga_json_test.json" EXAKIT_DATA_TABLE="T.GA_JSON_TEST" exakit_load_local_file ) 2>&1; }
+
+: > "$LOADED"
+JO="$(js_run)"; JRC=$?
+check "a JSON file loads" "0" "$JRC"
+has "...and says Loaded with the tables it made (F-b: Windows said nothing, exit 5)" "into T.GA_JSON_TEST, T.GA_JSON_TEST_TAGS" "$JO"
+has "...its documents into the table named after the file" "upload normalised.parquet -> T.GA_JSON_TEST" "$(cat "$LOADED")"
+has "...its array into <table>_TAGS" "upload normalised.tags[].parquet -> T.GA_JSON_TEST_TAGS" "$(cat "$LOADED")"
+lacks "...not after the kit's temporary copy" "T.GA_JSON_TEST_NORMALISED" "$(cat "$LOADED")$JO"
+has "a receipt is written per table" "T.GA_JSON_TEST_TAGS	" "$(cat "$JS/cache/load-receipts.tsv" 2>/dev/null)"
+
+: > "$LOADED"
+JO="$(js_run)"; JRC=$?
+check "the same file again is recognised" "0" "$JRC"
+has "...and left as it is, naming its tables and the file" "T.GA_JSON_TEST, T.GA_JSON_TEST_TAGS already hold the 2 rows ga_json_test.json loaded" "$JO"
+lacks "...and no copy note for the file itself" "has the same content as" "$JO"
+check "...nothing is sent twice" "0" "$(grep -c '^upload' "$LOADED")"
+check "...and the rows did not double" "1" "$(js_rows T.GA_JSON_TEST)"
+
+# F-c (Windows 11 upgrade): a byte-identical copy matches the original's
+# receipts. The message named the copy as the file that made the tables.
+cp "$JS/ga_json_test.json" "$JS/ga_json_copy.json"
+: > "$LOADED"
+JO="$( ( EXAKIT_DATA_FILE="$JS/ga_json_copy.json" EXAKIT_DATA_TABLE="T.GA_JSON_COPY" exakit_load_local_file ) 2>&1 )"; JRC=$?
+check "a byte-identical copy is recognised as already loaded" "0" "$JRC"
+has "...naming the tables and the file that made them" "T.GA_JSON_TEST, T.GA_JSON_TEST_TAGS already hold the 2 rows ga_json_test.json loaded" "$JO"
+has "...and that the copy has the same content" "ga_json_copy.json has the same content as ga_json_test.json" "$JO"
+check "...nothing is sent" "0" "$(grep -c '^upload' "$LOADED")"
+rm -f "$JS/ga_json_copy.json"
+
+: > "$LOADED"
+JO="$( (EXAKIT_ON_EXISTING=replace js_run) 2>&1 )"; JRC=$?
+check "replace rebuilds it" "0" "$JRC"
+has "...dropping what it loaded before" "DROP TABLE IF EXISTS T.GA_JSON_TEST_TAGS" "$(cat "$LOADED")"
+check "...and the table holds one load, not two" "1" "$(js_rows T.GA_JSON_TEST)"
+
+: > "$LOADED"; rm -f "$JS/cache/load-receipts.tsv"; printf 'T.GA_JSON_TEST|40\n' > "$JSTATE"
+JO="$(js_run)"; JRC=$?
+check "rows this kit did not load are not loaded over, by default" "5" "$JRC"
+has "...and the refusal names the table" "Not loaded: T.GA_JSON_TEST already holds 40 rows" "$JO"
+check "...nothing was sent" "0" "$(grep -c '^upload' "$LOADED")"
+JO="$( (EXAKIT_ON_EXISTING=append js_run) 2>&1 )"; JRC=$?
+check "append loads on top" "0" "$JRC"
+lacks "...without a DROP" "DROP TABLE" "$(cat "$LOADED")"
+check "...on top of the 40" "41" "$(js_rows T.GA_JSON_TEST)"
+JO="$( (EXAKIT_ON_EXISTING=nonsense js_run) 2>&1 )"; JRC=$?
+check "an unusable EXAKIT_ON_EXISTING is refused for JSON too" "3" "$JRC"
+
+: > "$LOADED"; rm -f "$JS/cache/load-receipts.tsv"; : > "$JSTATE"
+EXAKIT_LOG_FILE="$WORK/json-fail.log"; : > "$EXAKIT_LOG_FILE"
+run_logged() { "$@" >> "$EXAKIT_LOG_FILE" 2>&1; }
+JO="$( (FAKE_JT_FAIL=1 js_run) 2>&1 )"; JRC=$?
+check "an engine that cannot run fails the load" "1" "$JRC"
+has "...and says it is the engine" "The JSON Tables engine could not load" "$JO"
+has "...with the engine's own words" "cannot execute the ingest engine" "$JO"
+has "...and the repair" "exakit update json-tables" "$JO"
+lacks "...without blaming a valid file" "It must be one JSON document" "$JO"
+
+printf '\n== an interrupted append is never resumed by dropping the table ==\n'
+
+# The folder loop writes in the crumb what the table held before it touched it,
+# so a later run knows whether the rows there are all its own. The upload stub
+# shows the crumb as the loop left it during the write.
+IR="$WORK/inter"; mkdir -p "$IR/cache"; EXAKIT_CACHE_DIR="$IR/cache"
+printf 'a,b\n1,2\n' > "$IR/sales.csv"
+exapump_upload() { printf 'upload %s -> %s crumb=%s\n' "$(basename "$1")" "$2" "$(cat "$IR/cache/load-inflight" 2>/dev/null)" >> "$LOADED"; return 0; }
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.SALES|5000\n'; }
+: > "$LOADED"
+( EXAKIT_SCHEMA=T EXAKIT_ON_EXISTING=append exakit_load_local_folder "$IR" ) >/dev/null 2>&1
+has "an append records the 5,000 rows that were there" "upload sales.csv -> T.SALES crumb=T.SALES|5000" "$(cat "$LOADED")"
+# ...then the run is killed mid-file: the crumb stays, the table holds 5,050.
+printf 'T.SALES|5000\n' > "$IR/cache/load-inflight"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.SALES|5050\n'; }
+: > "$LOADED"
+IRO="$( ( EXAKIT_SCHEMA=T exakit_load_local_folder "$IR" ) 2>&1 )"
+lacks "the next run drops nothing" "DROP TABLE" "$(cat "$LOADED")"
+lacks "...and loads nothing over it" "upload sales.csv" "$(cat "$LOADED")"
+lacks "...and does not call it half-loaded and reload from scratch" "reloading from scratch" "$IRO"
+has "...but says what happened" "An interrupted run was adding sales.csv to T.SALES" "$IRO"
+# A table that was absent before the interrupted write is resumed, as before.
+printf 'T.SALES|absent\n' > "$IR/cache/load-inflight"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.SALES|50\n'; }
+: > "$LOADED"
+IRO="$( ( EXAKIT_SCHEMA=T exakit_load_local_folder "$IR" ) 2>&1 )"
+has "a table that was absent before is still resumed" "DROP TABLE IF EXISTS T.SALES" "$(cat "$LOADED")"
+has "...and the file loaded again" "upload sales.csv -> T.SALES crumb=T.SALES|absent" "$(cat "$LOADED")"
+
+printf '\n== German number formats never load as wrong numbers ==\n'
+
+# DAT-04, seen on a live database: exapump read Menge 1.234 / 12.500 as DOUBLE
+# 1.234 / 12.5 and "Beleg Nr." 0000001237 and PLZ 01067 as 1237 and 1067, under
+# a verified row count and a green check. Those columns are created as text,
+# from exapump's own dry-run schema, before exapump loads into the table.
+eval "exapump_upload() $(declare -f _real_exapump_upload | sed 1d)"
+GN="$WORK/german"; mkdir -p "$GN"
+printf 'Beleg Nr.;Menge;Betrag;Ort\n0000001237;1.234;1.234,56;Bonn\n4500001234;12.500;99,00;Ulm\n' > "$GN/sap.csv"
+printf 'id,amount\n1,1.234\n2,12.5\n' > "$GN/plain.csv"
+cat > "$GN/gpump" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$GN_LOG"
+case "$*" in
+    sql*EXA_ALL_COLUMNS*) printf '%b\n' "$GN_COLS" ;;
+    upload*--dry-run*) cat <<'DDL'
+Columns:
+  "Beleg Nr.": DECIMAL(36,0)
+  "Menge": DOUBLE
+
+CREATE TABLE T.SAP (
+    "Beleg Nr." DECIMAL(36,0),
+    "Menge" DOUBLE,
+    "Betrag" VARCHAR(2000000),
+    "Ort" VARCHAR(2000000)
+);
+DDL
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$GN/gpump"
+GN_LOG="$GN/argv"; export GN_LOG GN_COLS
+exapump_cli() { printf '%s\n' "$GN/gpump"; }
+check "csv_guard names the columns that would load as wrong numbers" "2" \
+    "$(run_python "$ROOT/setup/lib/csv_guard.py" numbers "$GN/sap.csv" ';' | grep -c .)"
+check "...and none in a comma file whose dots are decimals" "0" \
+    "$(run_python "$ROOT/setup/lib/csv_guard.py" numbers "$GN/plain.csv" ',' | grep -c . || true)"
+: > "$GN_LOG"; GN_COLS='EXAKIT.COLUMNS_ANSWERED|0|'
+GNO="$( (EXAKIT_NUMBER_GUARD=1 exapump_upload "$GN/sap.csv" T.SAP) 2>&1 )"; GNRC=$?
+check "a German export loads" "0" "$GNRC"
+has "...into a table created first" "sql -p starter-kit CREATE TABLE T.SAP (" "$(cat "$GN_LOG")"
+has "...the leading-zero column as text" '"Beleg Nr." VARCHAR(2000000)' "$(cat "$GN_LOG")"
+has "...and the thousands-dot column as text" '"Menge" VARCHAR(2000000)' "$(cat "$GN_LOG")"
+check "...created before the upload" "yes" \
+    "$(_c="$(grep -n 'CREATE TABLE' "$GN_LOG" | cut -d: -f1)"; _u="$(grep -n '^upload' "$GN_LOG" | grep -v dry-run | cut -d: -f1)"; [ -n "$_c" ] && [ -n "$_u" ] && [ "$_c" -lt "$_u" ] && echo yes || echo no)"
+has "the reader is told which columns were kept as text" "Kept as text in T.SAP" "$GNO"
+has "...and why" "leading zeros (0000001237) would be dropped" "$GNO"
+: > "$GN_LOG"; GN_COLS='EXAKIT.COLUMNS_ANSWERED|0|\nEXAKIT_COL|1|DECIMAL(36,0)\nEXAKIT_COL|2|DOUBLE\n"EXAKIT_COL|3|VARCHAR(2000000) UTF8"'
+GNO="$( (EXAKIT_NUMBER_GUARD=1 exapump_upload "$GN/sap.csv" T.SAP) 2>&1 )"; GNRC=$?
+check "a table that exists with such a column as a number is refused" "1" "$GNRC"
+has "...naming the column and its type" 'column "Menge" is DOUBLE' "$GNO"
+has "...with the remedy" "EXAKIT_ON_EXISTING=replace" "$GNO"
+check "...and nothing is uploaded" "0" "$(grep '^upload' "$GN_LOG" | grep -vc dry-run || true)"
+: > "$GN_LOG"
+( exapump_upload "$GN/sap.csv" T.SAP ) >/dev/null 2>&1
+check "a bundled dataset's upload (no guard) is untouched" "0" "$(grep -c EXA_ALL_COLUMNS "$GN_LOG" || true)"
+
+printf '\n== one JSON file with the engine missing says it is installing it ==\n'
+
+# MCX-01: `exakit data-load <file>.json` with JSON Tables not installed installed
+# the engine (about a minute) with nothing on screen: the install's output goes
+# to the log, which silences every spinner inside it, and only a folder load had
+# a bar to say it. Run on a real pty (a spinner draws only on a terminal), with
+# the real marketplace install around a stubbed add-on install. The add-on
+# install's own bar-end used to stop the caller's spinner too, leaving its last
+# frame frozen on screen with the cursor hidden.
+JM="$WORK/jsonmissing"; mkdir -p "$JM"
+cat > "$JM/run.sh" <<JMEOF
+ROOT="$ROOT"; W="$JM/w"; rm -rf "\$W"; mkdir -p "\$W/h" "\$W/k" "\$W/b"
+HOME="\$W/h"; EXAKIT_HOME="\$W/k"; EXAKIT_BIN_DIR="\$W/b"; export HOME
+. "\$ROOT/setup/lib/ui.sh"; . "\$ROOT/setup/lib/common.sh"; . "\$ROOT/setup/lib/exapump.sh"
+EXAKIT_LOG_FILE="\$W/log"; : > "\$EXAKIT_LOG_FILE"
+_exakit_json_tables_load_module() { return 0; }
+_exakit_json_tables_ready() { [ -f "\$W/ready" ]; }
+_exakit_addon_applicable() { return 0; }
+json_tables_install() { run_logged sleep 1; : > "\$W/ready"; }
+exakit_record_ownership() { :; }
+exakit_install_addon_skills() { :; }
+exakit_file_already_landed() { :; }
+prompt_text() { printf '%s\n' "\$2"; }
+_exakit_json_tables_bin() { printf '%s\n' "\$W/no-engine"; }
+printf '{"id": 1}\n' > "\$W/orders.json"
+if [ "\${1:-}" = ensure ]; then _exakit_json_tables_ensure; echo "JM-ENSURED=\$?"; exit 0; fi
+EXAKIT_DATA_FILE="\$W/orders.json" EXAKIT_DATA_TABLE="T.ORDERS" exakit_load_local_file
+echo "JM-RC=\$?"
+JMEOF
+JM_PTY="none"
+if command -v script >/dev/null 2>&1; then
+    if script -q /dev/null /bin/echo probe </dev/null >/dev/null 2>&1; then JM_PTY="bsd"
+    elif script -q -c "/bin/echo probe" /dev/null </dev/null >/dev/null 2>&1; then JM_PTY="util-linux"
+    fi
+fi
+jm_run() { # jm_run <pty|plain> [ensure]: the screen, escape codes removed
+    case "$1|$JM_PTY" in
+        pty\|bsd)        LC_ALL=en_US.UTF-8 TERM=xterm-256color script -q /dev/null bash "$JM/run.sh" ${2:-} </dev/null ;;
+        pty\|util-linux) LC_ALL=C.UTF-8 TERM=xterm-256color script -q -c "bash $JM/run.sh ${2:-}" /dev/null </dev/null ;;
+        plain\|*)        bash "$JM/run.sh" ${2:-} </dev/null ;;
+    esac 2>&1 | LC_ALL=C tr '\r' '\n' | LC_ALL=C sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'
+}
+if [ "$JM_PTY" = none ]; then
+    printf '  skip no script(1) for a pty here\n'
+else
+    JMO="$(jm_run pty)"
+    has "a JSON file with no engine says it is installing it" "Installing the JSON engine (" "$JMO"
+    has "...the load carries on after it" "JM-RC=1" "$JMO"
+    # The next line printed after the install starts on a clean row: the
+    # spinner's last frame is not left behind with it glued on.
+    JMO="$(jm_run pty ensure)"
+    has "...the install ends" "JM-ENSURED=0" "$JMO"
+    lacks "...with its spinner cleared, not frozen beside the next line" "s)JM-ENSURED" "$JMO"
+    lacks "...and no line of its own is left behind" "Installing add-on" "$JMO"
+fi
+JMO="$(jm_run plain)"
+lacks "off a terminal there is no spinner text" "Installing the JSON engine" "$JMO"
+has "...and the load still runs" "JM-RC=1" "$JMO"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

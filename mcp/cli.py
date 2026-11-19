@@ -112,6 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         choices=list(SETUP_CLIENT_IDS),
         help="One or more concrete MCP clients to register the add-on endpoints with.",
     )
+    addon_parser.add_argument(
+        "--connected",
+        action="store_true",
+        help=(
+            "Register with the clients that are already connected (detected on this "
+            "machine, with the kit's exasol entry in place) instead of --clients. This "
+            "is what an add-on install runs: it never creates a config for a client "
+            "the user did not connect."
+        ),
+    )
     discover_parser = subparsers.add_parser(
         "discover-clients",
         help="Report, per supported MCP client, whether it is installed on this machine and whether a managed config already exists.",
@@ -183,10 +193,12 @@ def _discover_clients(args: argparse.Namespace) -> int:
 
 
 def _record_entry_name(record: dict) -> str:
+    """The server a record is the kit's entry for (exasol, dash-server): its own name, also when the entry was
+    written under "<name>-starter-kit" beside a user's entry of the same name."""
     metadata = record.get("metadata") or {}
     if not isinstance(metadata, dict):
         return "exasol"
-    return str(metadata.get("entry_name", "exasol"))
+    return str(metadata.get("server", metadata.get("entry_name", "exasol")))
 
 
 def _connected_clients(
@@ -301,6 +313,26 @@ def _register_addon_servers(args: argparse.Namespace) -> int:
             )
             print(json.dumps(payload, indent=2, sort_keys=True))
             return 0
+        if getattr(args, "connected", False):
+            repository = ManifestRepository(RuntimePaths(runtime_root), filesystem)
+            clients = _connected_clients(repository, AdapterRegistry(), environment)
+            payload["selected_clients"] = clients
+            if not clients:
+                payload.update(
+                    {
+                        "status": OperationStatus.NO_CHANGE.value,
+                        "summary": "No AI client is connected yet.",
+                        "dash_server": {
+                            "server_name": definition.name,
+                            "url": definition.url,
+                            "status": OperationStatus.NO_CHANGE.value,
+                            "configured_clients": [],
+                            "skipped_clients": [],
+                        },
+                    }
+                )
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                return 0
         subsystem = MCPAccessSubsystem(environment=environment, filesystem=filesystem)
         dash = _register_dash_server(
             subsystem=subsystem,
@@ -407,19 +439,19 @@ def _permanent_setup(
 ) -> dict:
     context = context_loader.load(runtime_root)
     subsystem = MCPAccessSubsystem(environment=environment, filesystem=filesystem)
-    result = subsystem.execute(
-        {
-            "operation": "configure",
-            "target_clients": clients,
-            "deployment_mode": "stdio",
-            "runtime_root": str(runtime_root),
-            "server_definition": to_primitive(context.server_definition),
-            "credential_reference": {"kind": "inline_env", "name": "EXA_PASSWORD"},
-            "dsn_reference": {"kind": "literal", "value": context.dsn},
-            "create_snapshot": True,
-            "validate_after_apply": True,
-        }
-    )
+    request = {
+        "operation": "configure",
+        "target_clients": clients,
+        # http: the launcher's MCP sidecar, whose client entries carry a URL and
+        # no credential at all (Claude Desktop's is the stdio bridge to that URL).
+        "deployment_mode": context.server_definition.transport.value,
+        "runtime_root": str(runtime_root),
+        "server_definition": to_primitive(context.server_definition),
+        "dsn_reference": {"kind": "literal", "value": context.dsn},
+        "create_snapshot": True,
+        "validate_after_apply": True,
+    }
+    result = subsystem.execute(request)
     payload = result.to_dict()
     payload.update(
         {
@@ -607,18 +639,16 @@ def _setup_findings(payload: dict) -> list[dict]:
 
 
 def _doctor_stages() -> list[str]:
-    """The doctor's stage list, including the one that actually starts the server.
+    """The doctor's stage list, including the one that actually talks to the server.
 
-    `server_launch` is a live probe: it spawns the configured command and speaks
-    MCP to it. That is the whole point — every other stage inspects paperwork, so
-    a client whose entry was present and well-formed reported "connected" while
-    the server behind it could not start at all (a missing uvx, a package that
-    will not resolve), which is a healthy doctor report and an AI client with no
-    Exasol tools in it.
+    `server_launch` is a live probe: it speaks MCP to the sidecar at its URL.
+    That is the whole point — every other stage inspects paperwork, so a client
+    whose entry was present and well-formed reported "connected" while the
+    server behind it did not answer, which is a healthy doctor report and an AI
+    client with no Exasol tools in it.
 
-    It costs a subprocess and, on a cold uvx cache, a download. Set
-    EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where that is unacceptable —
-    an offline machine, or a suite that must not reach the network.
+    Set EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where a live request is
+    unacceptable, such as a suite that must not reach a server.
     """
     stages = list(OperationRequest.stages)
     if os.environ.get("EXAKIT_MCP_SKIP_SERVER_PROBE") == "1":
@@ -657,12 +687,13 @@ def _build_operation_request(
         # nobody has touched since an update moved the pinned server version on
         # reads as perfectly consistent and doctor reports success. It is an input
         # to a comparison on both paths; the read-only paths never apply it.
-        request["deployment_mode"] = "stdio"
+        request["deployment_mode"] = context.server_definition.transport.value
         request["server_definition"] = to_primitive(context.server_definition)
     if operation == "doctor":
         request["stages"] = _doctor_stages()
     if operation == "repair":
-        request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
+        # As configure does: snapshot first, validate after. No credential: the
+        # entries hold the sidecar's URL, never the read-only user's password.
         request["validate_after_apply"] = True
         request["create_snapshot"] = True
     if operation == "restore":

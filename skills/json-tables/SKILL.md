@@ -1,7 +1,7 @@
 ---
 name: json-tables
 addon: json-tables
-description: Load JSON-shaped data into the local Exasol database with the JSON Tables add-on, which shreds nested JSON into relational tables — covering why exapump alone cannot load JSON, how the add-on is offered automatically during a data load, and the fact that its ingest engine ships prebuilt so no Rust toolchain is ever needed. Triggers — "load a JSON file into Exasol", "import JSON data", "exapump will not take my .json", "install JSON Tables", "exasol-json-tables", "flatten nested JSON into tables", "do I need Rust for this".
+description: Load JSON-shaped data into the local Exasol database with the JSON Tables add-on, which shreds nested JSON into relational tables — covering why exapump alone cannot load JSON, how the add-on is offered automatically during a data load, the fact that its ingest engine ships prebuilt so no Rust toolchain is ever needed, and querying a wrapped surface with JSON paths on any connection with no session setup. Triggers — "load a JSON file into Exasol", "import JSON data", "exapump will not take my .json", "install JSON Tables", "exasol-json-tables", "flatten nested JSON into tables", "do I need Rust for this", "query JSON paths in SQL", "exasol-json-tables wrap", "JVS-PATH-ERROR", "do I need ALTER SESSION for JSON Tables".
 ---
 
 # JSON Tables — JSON into Exasol
@@ -90,6 +90,48 @@ the user actually loaded into. Report the real names back to the user with a
 sample query — `exakit sql "SELECT * FROM STARTER_KIT.<table> LIMIT 5"` — rather
 than telling them the load succeeded and leaving them to find it.
 
+## Querying with JSON syntax — after a wrap
+
+An ingest gives relational tables (one per nesting level, joined by id). A
+**wrap** adds a JSON-friendly surface over them in a wrapper schema — dotted
+paths (`"customer.address.city"`), array access (`"tags[LAST]"`), iteration and
+`TO_JSON(*)`:
+
+```bash
+exasol-json-tables ingest-and-wrap --input <file.json> ...   # or: wrap install / wrap deploy
+```
+
+When a wrap succeeds through the kit's launcher, the kit rebuilds its JSON
+Tables module for every wrapper in the database and registers it with the kit's
+SQL preprocessor framework. From then on **JSON queries work on every
+connection, for every user — the MCP tools included — with no session setup**:
+
+```bash
+exakit sql 'SELECT "order_id", "customer.address.city" FROM ORDERS_VIEW."orders" ORDER BY 1'
+```
+
+In Windows PowerShell 5.1, use `exakit sql --file <path>` or pipe the statement in: PowerShell drops the double quotes inside a native command's argument (`exakit sql --help` says the same).
+
+- **Never run the `ALTER SESSION SET SQL_PREPROCESSOR_SCRIPT = ...` that
+  `exasol-json-tables` prints as its next step** (its `activationSql` and
+  "session-scoped" warnings are upstream's advice for a database without the
+  framework). On this kit it would take the framework, and every other add-on's
+  module, out of that session.
+- Only a statement that **names a wrapper schema** is treated as a JSON query;
+  every other statement reaches the database unchanged.
+- A JSON query JSON Tables cannot answer — a mistyped field, a path through a
+  derived table — fails with JSON Tables' own message, for example
+  `JVS-PATH-ERROR: "customer.nmae": Field "nmae" is not visible on object path
+  "customer"`. Read it and fix the path; `exasol-json-tables describe wrapper`
+  lists the real fields.
+- A JSON query fails with `object "customer.name" not found` instead: the
+  module is not registered (the framework is not active, or the database's
+  slot holds the user's own preprocessor). `exakit update` registers it once
+  the framework is in place.
+- A database user created after the module was registered gets JSON queries
+  after the next `exakit update`, which refreshes the framework's rule
+  resolution for every user.
+
 ## No Rust toolchain, ever
 
 This is the fact users most need reassuring about. Upstream, the tool is a
@@ -135,7 +177,11 @@ exakit uninstall                 # selectable on its own
 - **Never tell the user to install Rust** to make this work. If ingest fails,
   the fix is `exakit update`, not a toolchain.
 - **Do not bypass the kit's launcher** to run the upstream CLI directly — the
-  `cargo` shim it sets up is what lets the CLI find the prebuilt engine.
+  `cargo` shim it sets up is what lets the CLI find the prebuilt engine, and a
+  wrap run through it is what makes the new wrapper's JSON syntax work on every
+  connection.
+- **Never switch the session's preprocessor** for JSON syntax, whatever the
+  tool's own output says: no `ALTER SESSION SET SQL_PREPROCESSOR_SCRIPT`.
 - **Loading data writes to the database.** Confirm the target schema and table
   with the user first; uploads default to the `STARTER_KIT` schema.
 - **Do not invent** `exasol-json-tables` subcommands or flags. Run `--help`.

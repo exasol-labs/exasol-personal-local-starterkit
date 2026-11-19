@@ -6,10 +6,10 @@
 # other agent harnesses set), Windows PowerShell 5.1 wrote EF BB BF ahead of
 # `$Sql | & $bin sql -p ...` even with a BOM-less $OutputEncoding, and Exasol
 # rejected the statement ("'<U+FEFF>' character is not allowed within unquoted
-# identifier"); mcp-doctor then reported bad admin credentials. Both pipe
-# sites (Invoke-ExapumpAdminSql in mcp.ps1, Invoke-ExasolSchedulerSql in
-# exasol-scheduler.ps1) now also set [Console]::InputEncoding BOM-less around
-# the pipe and restore it afterwards.
+# identifier"); mcp-doctor then reported bad admin credentials. The stdin
+# site (Invoke-ExapumpAdminSql in mcp.ps1) sets [Console]::InputEncoding
+# BOM-less around the call and restores it afterwards. The scheduler's SQL
+# runs from the Python marketplace now, so it has no PowerShell pipe.
 #
 # Static half: both functions set it and restore it in finally (AST).
 # Behavioural half: the real functions, extracted by AST, pipe "SELECT 1" into
@@ -29,8 +29,7 @@ function Check($label, $condition, $detail) {
 }
 
 $sites = @(
-    @{ File = "setup/lib/mcp.ps1"; Name = "Invoke-ExapumpAdminSql" },
-    @{ File = "setup/lib/exasol-scheduler.ps1"; Name = "Invoke-ExasolSchedulerSql" }
+    @{ File = "setup/lib/mcp.ps1"; Name = "Invoke-ExapumpAdminSql" }
 )
 
 function Get-FunctionAst([string]$File, [string]$Name) {
@@ -48,7 +47,7 @@ foreach ($site in $sites) {
     $sets = @($fn.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         $n.Left.Extent.Text -eq '[Console]::InputEncoding' }, $true))
-    $bomless = @($sets | Where-Object { $_.Right.Extent.Text -match 'UTF8Encoding\(\s*\$false\s*\)' })
+    $bomless = @($sets | Where-Object { $_.Right.Extent.Text -match 'UTF8Encoding(\(\s*\$false\s*\)|\s+\$false)' })
     Check "$($site.Name) sets [Console]::InputEncoding to UTF8Encoding(`$false)" ($bomless.Count -ge 1) "assignments: $(@($sets | ForEach-Object { $_.Extent.Text }) -join ' | ')"
     $tries = @($fn.FindAll({ param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally }, $true))
     $restored = $false
@@ -56,15 +55,12 @@ foreach ($site in $sites) {
         $inFinally = @($t.Finally.FindAll({ param($n)
             $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
             $n.Left.Extent.Text -eq '[Console]::InputEncoding' -and
-            $n.Right.Extent.Text -match '\$previousConsoleInput' }, $true))
+            $n.Right.Extent.Text -match '\$previous(ConsoleInput|InputEncoding)' }, $true))
         if ($inFinally.Count -ge 1) { $restored = $true }
     }
-    Check "$($site.Name) restores [Console]::InputEncoding in a finally" $restored "no restore of `$previousConsoleInput inside a finally block"
-    $outEnc = @($fn.FindAll({ param($n)
-        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
-        $n.Left.Extent.Text -eq '$OutputEncoding' -and
-        $n.Right.Extent.Text -match 'UTF8Encoding\(\s*\$false\s*\)' }, $true))
-    Check "$($site.Name) still sets a BOM-less `$OutputEncoding" ($outEnc.Count -ge 1) "missing"
+    Check "$($site.Name) restores [Console]::InputEncoding in a finally" $restored "no restore of the previous input encoding inside a finally block"
+    # No $OutputEncoding check: the SQL goes to exapump's stdin as UTF-8 bytes
+    # (#52), not through a PowerShell pipe, so $OutputEncoding never applies.
 }
 
 # --- behavioural: the first bytes exapump receives ---------------------------
@@ -133,12 +129,6 @@ foreach ($condition in $conditions) {
         Check "Invoke-ExapumpAdminSql, $($condition): stdin starts 53 45 4C" ($hex -eq "53 45 4C") "first bytes: $hex"
         Check "Invoke-ExapumpAdminSql, $($condition): no EF BB BF" (-not $hex.StartsWith("EF BB BF")) "first bytes: $hex"
         Check "Invoke-ExapumpAdminSql, $($condition): reports success" ($r.Success -eq $true) "output: $($r.Output)"
-
-        Remove-Item -Force -ErrorAction SilentlyContinue $got
-        $r = Invoke-ExasolSchedulerSql -Sql "SELECT 1"
-        $hex = Get-FirstHex
-        Check "Invoke-ExasolSchedulerSql, $($condition): stdin starts 53 45 4C" ($hex -eq "53 45 4C") "first bytes: $hex"
-        Check "Invoke-ExasolSchedulerSql, $($condition): reports success" ($r.Success -eq $true) "output: $($r.Output)"
 
         $inputAfter = $null
         try { $inputAfter = [Console]::InputEncoding.WebName } catch { }

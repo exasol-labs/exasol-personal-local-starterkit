@@ -199,7 +199,7 @@ class JsonConfigAdapter(ClientAdapter):
         servers[server_definition.name] = entry
         return RenderResult(
             path=inspection.path,
-            content=json.dumps(document, indent=2, sort_keys=True) + "\n",
+            content=json.dumps(document, indent=2, ensure_ascii=False) + "\n",
             managed_hash=sha256_json(entry),
             entry_name=server_definition.name,
         )
@@ -212,7 +212,7 @@ class JsonConfigAdapter(ClientAdapter):
             if not servers:
                 document.pop(self._top_level_key, None)
         remove_file = not document
-        content = None if remove_file else json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = None if remove_file else json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

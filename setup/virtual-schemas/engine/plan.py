@@ -1,0 +1,939 @@
+"""Definitions, input validation and the plan shown before anything changes.
+
+A connector's definition (connectors/<id>/connector.json) is data: its
+inputs, pinned artifacts, loader registration, JDBC URL template, TLS modes
+and virtual schema properties. Everything a user types is validated here by
+kind before it reaches a template, and the templates only ever see validated
+values - nothing a user types is interpolated into SQL unchecked.
+"""
+
+import base64
+import copy
+import difflib
+import ipaddress
+import json
+import os
+import platform
+import re
+
+import document
+import tlsca
+
+KINDS = {
+    "host": re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+                       r"|^\d{1,3}(\.\d{1,3}){3}$|^\[?[0-9A-Fa-f:]+\]?$"),
+    "name": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_$.-]{0,127}$"),
+    "account": re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"),
+    "text": re.compile(r"^[^\x00-\x1f'\"\\]{1,128}$"),
+    # No dots: a dotted bucket's virtual-hosted name (a.b.s3.<region>.amazonaws.com)
+    # does not match the S3 certificate, and path-style access is not offered.
+    "s3-bucket": re.compile(r"^(?!xn--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"),
+    "aws-region": re.compile(r"^[a-z]{2}(-gov)?-[a-z]+-\d{1,2}$"),
+    "aws-key-id": document.KEY_ID,
+    "azure-account": document.AZURE_ACCOUNT,
+    "azure-container": document.AZURE_CONTAINER,
+    # Host list, path and options only: the credentials go into the CONNECTION.
+    "mongodb-uri": re.compile(r"^mongodb(\+srv)?://[A-Za-z0-9.,:\[\]_-]+(/[A-Za-z0-9._~%&=?,:/+-]*)?$"),
+    "mongo-name": re.compile(r"^[^\x00-\x1f'\"\\$/\s]{1,120}$"),
+    # The adapter puts these into a REST query string unencoded and the path
+    # into the JDBC URL, so neither may carry & # ? ; or a quote.
+    # Glue database names: letters, digits, _ and -; no dot (one database is
+    # one NAMESPACE, and the engine refuses a dotted one).
+    "glue-database": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,254}$"),
+    "databricks-name": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,254}$"),
+    "databricks-http-path": re.compile(r"^/sql/1\.0/warehouses/[A-Za-z0-9]{1,64}$|^/sql/protocolv1/o/\d{1,20}/[A-Za-z0-9-]{1,64}$"),
+    # The lakehouse engine over an Iceberg REST catalog or Unity Catalog. These
+    # go into the CONNECTION's JSON and the NAMESPACE property, never a URL.
+    "iceberg-namespace": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,254}(\.[A-Za-z0-9_][A-Za-z0-9_-]{0,254}){0,3}$"),
+    "unity-namespace": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,254}\.[A-Za-z0-9_][A-Za-z0-9_-]{0,254}$"),
+    "warehouse": re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:/=+@~-]{0,511}$"),
+    # An S3-compatible store's region is any short name (MinIO: us-east-1).
+    "storage-region": re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$"),
+    "access-key": re.compile(r"^[A-Za-z0-9_.+/=-]{3,128}$"),
+    # The lakehouse connector's own (connectors/lakehouse): a Glue catalog's
+    # owning account, an OAuth client of the catalog and the scope it asks for.
+    "aws-account-id": re.compile(r"^\d{12}$"),
+    "oauth-client-id": re.compile(r"^[A-Za-z0-9_.@:/+=~-]{1,256}$"),
+    "oauth-scope": re.compile(r"^[A-Za-z0-9_.:/=+-]+( [A-Za-z0-9_.:/=+-]+){0,15}$"),
+}
+
+# A lakehouse folder of files with no catalog (catalog=none): an S3 prefix or an
+# ADLS Gen2 folder, read where it lies (CATALOG_KIND DIRECT_STORAGE).
+S3_PATH = re.compile(r"^s3://((?!xn--)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9])(/[A-Za-z0-9!_.*'()/=+-]*)?$")
+ABFSS_PATH = re.compile(r"^abfss://((?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9])@([a-z0-9]{3,24})\.dfs\.core\.windows\.net"
+                        r"(/[A-Za-z0-9!_.*'()/=+-]*)?$")
+
+# URL inputs (check_url): a catalog may be plain http on this computer or a
+# private network; a workspace is https only; a storage endpoint has no path.
+URL_KINDS = ("catalog-url", "https-url", "endpoint-url")
+URL = re.compile(r"^(https?)://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?(/[A-Za-z0-9._~%/+:=-]*)?$", re.I)
+PRIVATE_SUFFIXES = (".internal", ".local", ".lan", ".home.arpa")
+SHARED_ADDRESS = ipaddress.ip_network("100.64.0.0/10")   # carrier-grade NAT, Tailscale
+
+
+def machine_arch():
+    """The CPU architecture the database runs on - Exasol Personal runs on the
+    host's (an arm64 Mac runs an aarch64 VM). EXAKIT_VS_ARCH overrides it."""
+    arch = (os.environ.get("EXAKIT_VS_ARCH") or platform.machine()).lower()
+    return {"arm64": "aarch64", "aarch64": "aarch64", "amd64": "x86_64", "x86_64": "x86_64"}.get(arch, arch)
+
+
+def resolve_arch(pin):
+    """A pin with per-architecture assets, as the one for this machine."""
+    if not pin or "arch" not in pin:
+        return pin
+    arch = machine_arch()
+    if arch not in pin["arch"]:
+        raise PlanError("this connector has no build for %s (only %s)" % (arch, ", ".join(sorted(pin["arch"]))))
+    flat = {k: v for k, v in pin.items() if k != "arch"}
+    flat.update(pin["arch"][arch])
+    return flat
+
+
+# Inside the database, loopback is the database's own runtime. Measured on
+# Exasol Personal (macOS): a UDF reaches the internet, the Mac as 192.168.64.1
+# (its resolver's address) and host.containers.internal - which there is the
+# launcher's Linux VM, not the Mac. On Linux Podman it is the host itself.
+#
+# ON DOCKER IT IS NOT PODMAN'S NAME. From Exasol Personal 2.4 a deployment on
+# Linux, WSL or Windows may run on Docker, where host.containers.internal does
+# not exist. The launcher starts the database container on its own bridge
+# network (exasol-db-<id>-services) with no --add-host, so host.docker.internal
+# resolves only where the Docker installation itself provides it (Docker
+# Desktop does; a plain Docker Engine on Linux does not), and without it the
+# address of this computer is that bridge's gateway, which the kit does not
+# know. Measured on Docker Desktop: host.docker.internal is 192.168.65.254
+# inside the database, so the advice names that.
+LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "localhost.localdomain")
+THIS_COMPUTER = {
+    "podman": "on macOS 192.168.64.1, on Linux and WSL host.containers.internal",
+    "docker": "on Docker host.docker.internal (192.168.65.254 on Docker Desktop)",
+}
+
+# The engine the kit recorded for the deployment (manifest runtime.engine,
+# kit 0.2.4+), read once per run by use_engine. A nano record names the OLD
+# database's engine and is ignored: one whose runtime.container key is there
+# at all, null included, as the shell's manifest_get reads it ("null" is not
+# empty); only "" is no container. Without a usable record, this run's choice
+# (EXAKIT_PERSONAL_ENGINE, which the bridges pass on: an install that has
+# not recorded it yet), then Podman - every deployment before kit 0.2.4. The
+# same order as the shells' personal_slc_dns_engine and
+# Get-PersonalSlcDnsEngine, so the fix --json names and the bridge's own line
+# agree.
+ENGINE = "podman"
+
+
+def on_macos():
+    """macOS: the database is in the launcher's VM, on its Podman, whatever a
+    record says - as the shell repair takes it. EXAKIT_VS_OS overrides the
+    platform (Darwin, Linux, Windows), as EXAKIT_VS_ARCH does the CPU."""
+    return (os.environ.get("EXAKIT_VS_OS") or platform.system()).lower() == "darwin"
+
+
+def recorded_engine(kit_home):
+    engine = None
+    try:
+        with open(os.path.join(kit_home, "manifest.json"), encoding="utf-8-sig") as handle:
+            runtime = json.load(handle).get("runtime")
+        if isinstance(runtime, dict) and not ("container" in runtime and runtime["container"] != ""):
+            engine = runtime.get("engine")
+    except (OSError, ValueError, AttributeError, TypeError):
+        engine = None
+    if engine not in ("docker", "podman"):
+        engine = os.environ.get("EXAKIT_PERSONAL_ENGINE", "")
+    return "docker" if engine == "docker" else "podman"
+
+
+def use_engine(kit_home):
+    global ENGINE
+    ENGINE = "podman" if on_macos() else recorded_engine(kit_home)
+
+
+def this_computer():
+    """Where a source on this computer is, as the database sees it."""
+    return THIS_COMPUTER.get(ENGINE, THIS_COMPUTER["podman"])
+
+
+def loopback_advice():
+    return ("host=localhost would be the database itself, not this computer. For a source running on this "
+            "computer use the address the database sees it at - %s - and make the source listen on that "
+            "interface, not only on 127.0.0.1" % this_computer())
+
+
+def host_scope(host):
+    """'loopback' (inside the database: the database itself), 'private' (this
+    computer as the database sees it, or a private network) or 'public'."""
+    bare = host.strip("[]").lower().rstrip(".")
+    if bare in LOOPBACK:
+        return "loopback"
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        # A single-label name or a private suffix (host.containers.internal,
+        # host.docker.internal) is not on the internet; any other name is taken to be.
+        return "private" if "." not in bare or bare.endswith(PRIVATE_SUFFIXES) else "public"
+    if ip.is_loopback or ip.is_unspecified:
+        return "loopback"
+    if ip.is_private or ip.is_link_local or (ip.version == 4 and ip in SHARED_ADDRESS):
+        return "private"
+    return "public"
+
+
+def check_url(name, raw, kind):
+    """A URL input as (normalized URL, None) or (None, the problem). A bare
+    host is https: plain http is only ever the user's explicit choice, and
+    only towards this computer or a private network."""
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@", raw):
+        return None, ("%s carries credentials (user:password@): the key and the secret go into the CONNECTION, "
+                      "the secret on standard input" % name)
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", raw):
+        raw = "https://" + raw
+    m = URL.match(raw)
+    example = "https://minio.example.com:9000" if kind == "endpoint-url" else "https://catalog.example.com[:port][/path]"
+    if not m:
+        return None, "%s must be a URL such as %s, not %r" % (name, example, raw)
+    scheme, host, port, path = m.group(1).lower(), m.group(2).strip("[]").lower(), m.group(3), (m.group(4) or "").rstrip("/")
+    if not KINDS["host"].match(host):
+        return None, "%s has a host that is not valid: %r" % (name, host)
+    if port and not 0 < int(port) < 65536:
+        return None, "%s has a port that is not a port number: %s" % (name, port)
+    if kind == "endpoint-url" and path:
+        return None, "%s is a scheme, host and port only (e.g. %s), without a path" % (name, example)
+    scope = host_scope(host)
+    if scope == "loopback":
+        return None, ("%s points at %s, which inside the database is the database itself, not this computer. %s"
+                      % (name, host, loopback_advice().split(". ", 1)[1]))
+    if scheme == "http" and kind == "https-url":
+        return None, "%s must use https: the token would cross the network unencrypted" % name
+    if scheme == "http" and scope == "public":
+        return None, ("%s is plain http to %s, a public host: the credential and the rows would cross the internet "
+                      "unencrypted - use https. Plain http is accepted only for this computer (%s) or a private "
+                      "network" % (name, host, this_computer()))
+    netloc = "[%s]" % host if ":" in host else host
+    return "%s://%s%s%s" % (scheme, netloc, ":" + port if port else "", path), None
+
+
+def plain_http(connector, values):
+    """Does any URL input of this source use plain http?"""
+    return any(spec["kind"] in URL_KINDS and str(values.get(spec["name"], "")).startswith("http://")
+               for spec in connector.get("inputs", []))
+
+
+class PlanError(Exception):
+    """Input the plan refuses. remedy and command, when given, are the fix in
+    words and the one exakit command that is the fix (--json carries them);
+    said is the FAIL line, the message unless the fix belongs in it."""
+    def __init__(self, message, code=2, choices=None, remedy=None, command=None, said=None):
+        super().__init__(message)
+        self.code = code
+        self.choices = choices or []
+        self.remedy = remedy
+        self.command = command
+        self.said = said or message
+
+
+class Definitions(object):
+    def __init__(self, root):
+        self.root = root
+        self.catalog = self._load("catalog.json")
+
+    def _load(self, *parts):
+        with open(os.path.join(self.root, *parts), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def entries(self):
+        return list(self.catalog["connectors"])
+
+    def entry(self, connector_id):
+        for item in self.entries():
+            if item["id"] == connector_id:
+                return item
+        raise PlanError("unknown connector %s" % connector_id)
+
+    def connector(self, connector_id, values=None):
+        """The connector's definition. One with settings (lakehouse) is the
+        whole document without values, and the one combination's flat
+        connector (specialize) with them - a source's recorded inputs, or the
+        values validate_inputs returned."""
+        doc = self._load("connectors", connector_id, "connector.json")
+        if doc.get("adapter") and "arch" in doc["adapter"]:
+            doc["adapter"] = resolve_arch(doc["adapter"])
+        if values is not None and doc.get("settings"):
+            return specialize(doc, values)
+        return doc
+
+    def profile(self, profile_id):
+        return self._load("profiles", profile_id, "profile.json")
+
+    def resolve(self, query):
+        """A connector id from a name, an id or an alias; ambiguity is refused with the choices."""
+        q = re.sub(r"[\s_]+", "-", (query or "").strip().lower())
+        if not q:
+            raise PlanError("name a source to connect, for example: exakit connect postgresql",
+                            choices=[e["id"] for e in self.entries()],
+                            remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                            command="exakit source catalog")
+        exact = [e for e in self.entries()
+                 if q in [e["id"], e["name"].lower().replace(" ", "-")] + [a.lower() for a in e.get("aliases", [])]]
+        if len(exact) == 1:
+            return exact[0]["id"]
+        partial = [e for e in self.entries()
+                   if any(q in key for key in [e["id"], e["name"].lower()] + e.get("aliases", []))]
+        if len(partial) == 1:
+            return partial[0]["id"]
+        if len(partial) > 1:
+            raise PlanError("%s matches more than one source" % query, choices=[e["id"] for e in partial],
+                            remedy="name one of the choices exactly")
+        keys = {}
+        for e in self.entries():
+            for key in [e["id"], e["name"].lower()] + e.get("aliases", []):
+                keys[key] = e["id"]
+        close = difflib.get_close_matches(q, list(keys), n=3, cutoff=0.6)
+        raise PlanError("no source matches %s" % query, choices=sorted(set(keys[c] for c in close))
+                        or [e["id"] for e in self.entries()],
+                        remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                        command="exakit source catalog")
+
+
+def objects(name, connector=None):
+    upper = name.upper()
+    # A native adapter's entry point is bound to its script name, so its
+    # sources share one script under that name (Profile D).
+    script = (connector or {}).get("shared_adapter") or "ADAPTER_%s" % upper
+    return {"connection": "EXAKIT_SRC_%s" % upper, "schema": "VS_%s" % upper,
+            "script_schema": "EXAKIT_VS", "script": script}
+
+
+def mongo_auth_source(uri):
+    """The refusal for a MongoDB URI whose authSource is not admin, else None.
+    exasol-mongodb-vs 0.1.3 signs in against admin whatever the URI says (the
+    CONNECTION's user and password replace any authSource), so a reader defined
+    in another database could never log in: said now, not as a refused login at
+    connect. Never quotes the value - it may come from a pasted string."""
+    from urllib.parse import unquote
+    for segment in str(uri).partition("?")[2].split("&"):
+        key, _, value = segment.partition("=")
+        if unquote(key).strip().lower() == "authsource" and unquote(value).strip() not in ("", "admin"):
+            return ("the MongoDB adapter always signs in against the admin database, so an authSource other than "
+                    "admin cannot work: make the reader a user of admin and drop authSource or set it to admin")
+    return None
+
+
+def check_value(spec, raw):
+    """One input's value checked by its kind: (value, None), or (None, the problem).
+
+    validate_inputs applies it to every input; the terminal form asks it about
+    one answer at a time (cli.py field), so a wrong value is said where it was
+    typed, in the same words a scripted connect would get."""
+    name, kind = spec["name"], spec["kind"]
+    raw = str(raw).strip()
+    if kind == "port":
+        if not raw.isdigit() or not 0 < int(raw) < 65536:
+            return None, "%s must be a port number, not %r" % (name, raw)
+    elif kind == "choice":
+        if raw not in spec["choices"]:
+            return None, "%s must be one of %s, not %r" % (name, ", ".join(spec["choices"]), raw)
+    elif kind == "ca-file":
+        raw = os.path.abspath(os.path.expanduser(raw))
+        try:
+            tlsca.certificates(raw)
+        except tlsca.CaError as error:
+            return None, str(error)
+    elif kind == "edml":
+        raw = os.path.abspath(os.path.expanduser(raw))
+        try:
+            document.load_mappings(raw)
+        except document.DocumentError as error:
+            return None, str(error)
+    elif kind == "warehouse" and re.match(r"^https?://", raw, re.I):
+        # Measured: the catalog URL typed here failed deep in the UDF (HTTP 400,
+        # "not a valid name"). A storage location (s3://bucket/) stays: the
+        # Iceberg REST reference catalog and MinIO setups take one.
+        return None, ("warehouse is the catalog's name (e.g. exakit_uc for Databricks, the catalog name for "
+                      "Polaris), not a URL - the URL goes in catalog_url")
+    elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
+        return None, ("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
+                      "and the password on standard input, so the database keeps it hidden")
+    elif kind in URL_KINDS:
+        raw, problem = check_url(name, raw, kind)
+        if problem:
+            return None, problem
+    elif kind == "storage-path":
+        raw, problem = check_storage_path(name, raw)
+        if problem:
+            return None, problem
+    elif kind == "unity-namespace" and not KINDS[kind].match(raw):
+        return None, "%s must be catalog.schema, e.g. main.sales (not %r)" % (name, raw)
+    elif kind == "s3-bucket" and "." in raw:
+        return None, ("bucket %s has dots: its HTTPS name does not match the S3 certificate, and the kit "
+                      "reads only over verified HTTPS" % raw)
+    elif kind in KINDS and not KINDS[kind].match(raw):
+        return None, "%s=%r is not a valid %s" % (name, raw, kind)
+    if kind == "aws-region" and raw.startswith("cn-"):
+        return None, "the China regions use other endpoints, which this connector does not reach"
+    if kind == "mongodb-uri" and mongo_auth_source(raw):
+        return None, mongo_auth_source(raw)
+    if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
+        return None, loopback_advice()
+    if kind == "host":
+        # Stored bare; jdbc_url adds the brackets an IPv6 literal needs in
+        # a URL, and the route probe resolves the bare form.
+        raw = raw.strip("[]")
+    return (raw.upper() if spec.get("upper") else raw), None
+
+
+def draft_value(raw):
+    """A drafted mapping's value: (None, None) for a mapping path, ("", None) for
+    auto (the whole bucket or container), ("auto:<folder>/", None) for one folder,
+    or (None, the problem)."""
+    text = str(raw).strip()
+    if text.lower() == "auto":
+        return "", None
+    if not text.lower().startswith("auto:"):
+        return None, None
+    folder = text[5:].strip().lstrip("/")
+    if not folder:
+        return "", None
+    if "://" in folder or ".." in folder.split("/") or re.search(r"[*?\[\]\\]", folder):
+        return None, "mapping=auto:<folder>/ names a folder inside the bucket, e.g. auto:data/ (got %s)" % folder
+    return "auto:" + folder.rstrip("/") + "/", None
+
+
+def draft_prefix(connector, values):
+    """None when the source's mapping is a path (or it takes none); else the
+    folder the draft lists, "" for the whole bucket or container."""
+    if not any(s["kind"] == "edml" and s.get("draft") for s in connector["inputs"]):
+        return None
+    mapping = values.get("mapping") or ""
+    if not mapping:
+        return ""
+    return mapping[5:] if mapping.startswith("auto:") else None
+
+
+def check_storage_path(name, raw):
+    """A folder of files with no catalog: (s3://bucket/prefix/ or
+    abfss://container@account.dfs.core.windows.net/prefix/, None), always
+    ending in /, or (None, the problem)."""
+    text = raw.strip()
+    low = text.lower()
+    if low.startswith(("s3a://", "s3n://")):
+        text = "s3://" + text.split("://", 1)[1]
+        low = text.lower()
+    if low.startswith("s3://"):
+        m = S3_PATH.match(text)
+        if not m:
+            return None, ("%s must be an S3 folder such as s3://bucket/prefix/ (a bucket name is lower case "
+                          "letters, digits and -), not %r" % (name, raw))
+        if "." in m.group(1):
+            return None, ("bucket %s has dots: its HTTPS name does not match the S3 certificate, and the kit "
+                          "reads only over verified HTTPS" % m.group(1))
+    elif low.startswith("abfss://"):
+        if not ABFSS_PATH.match(text):
+            return None, ("%s must be an ADLS Gen2 folder such as abfss://container@account.dfs.core.windows.net/"
+                          "prefix/, not %r" % (name, raw))
+    elif low.startswith(("gs://", "gcs://")):
+        return None, "Google Cloud Storage is not supported yet: the folder must be on S3 (s3://) or Azure (abfss://)"
+    else:
+        return None, ("%s must be s3://bucket/prefix/ or abfss://container@account.dfs.core.windows.net/prefix/, "
+                      "not %r" % (name, raw))
+    return text.rstrip("/") + "/", None
+
+
+def storage_path_parts(path):
+    """{"scheme": s3|azure, "bucket"|"container", "account"} of a checked folder path."""
+    m = S3_PATH.match(path or "")
+    if m:
+        return {"scheme": "s3", "bucket": m.group(1)}
+    m = ABFSS_PATH.match(path or "")
+    if m:
+        return {"scheme": "azure", "container": m.group(1), "account": m.group(2)}
+    return {}
+
+
+# --- settings: one connector, several combinations (connectors/lakehouse) -----
+#
+# A connector with "settings" is one connector whose inputs depend on the
+# values of a few choices (lakehouse: catalog, files, login). choose_settings
+# reads them from what was given (defaults and inference applied, the
+# combination checked); specialize lays the chosen catalog's "variants" over
+# the document and keeps the inputs whose "when" matches, so everything after
+# it - the plan, the credential, the virtual schema's properties, the form -
+# sees one ordinary flat connector. A source records its settings with its
+# other inputs, so Definitions.connector(id, recorded inputs) is its own
+# combination again.
+
+def applies(when, chosen):
+    """Does an input (or a setting) with this `when` belong to these settings?"""
+    return all(chosen.get(key) in allowed for key, allowed in (when or {}).items())
+
+
+def setting_labels(connector, key):
+    return {c["value"]: c["label"] for c in connector["settings"][key]["choices"]}
+
+
+def valid_files(connector, catalog):
+    return list(connector["settings"]["files"]["valid"].get(catalog, []))
+
+
+def combination_remedy(connector, catalog):
+    files = valid_files(connector, catalog)
+    labels = setting_labels(connector, "files")
+    if len(files) == 1:
+        return "catalog=%s takes files=%s (%s) only: leave --set files out or give --set files=%s" % (
+            catalog, files[0], labels[files[0]], files[0])
+    return "for catalog=%s give --set files=<%s> (%s)" % (
+        catalog, "|".join(files), "; ".join("%s: %s" % (f, labels[f]) for f in files))
+
+
+def choose_settings(connector, given, partial=False):
+    """The settings of a source from given: {catalog, files[, login]}.
+
+    catalog is given, or inferred from the inputs given when they belong to one
+    catalog only (catalog_url: iceberg-rest, workspace_url: unity, database:
+    glue, path: none). files defaults per catalog (none: by the path's scheme,
+    abfss:// is azure); login defaults to token where it applies. An invalid
+    combination is a PlanError (kind input) whose remedy names the valid files
+    values. partial: a missing catalog is not an error - {} comes back (the
+    form asks for it first)."""
+    settings = connector["settings"]
+    catalogs = [c["value"] for c in settings["catalog"]["choices"] if not c.get("disabled")]
+    raw = str(given.get("catalog") or "").strip().lower()
+    if not raw:
+        inferred = sorted(set(v for k, v in settings["catalog"].get("infer", {}).items()
+                              if str(given.get(k) or "").strip()))
+        if len(inferred) == 1:
+            raw = inferred[0]
+        elif partial and not inferred:
+            return {}
+        elif inferred:
+            raise PlanError("the inputs given belong to more than one catalog (%s)" % ", ".join(inferred),
+                            remedy="give the catalog with --set catalog=<%s>" % "|".join(inferred))
+        else:
+            raise PlanError("catalog is required (%s)" % ", ".join(
+                "%s: %s" % (c["value"], c["label"]) for c in settings["catalog"]["choices"]),
+                remedy="give it with --set catalog=<%s>" % "|".join(catalogs))
+    if raw not in catalogs:
+        raise PlanError("catalog must be one of %s, not %r" % (", ".join(catalogs), raw),
+                        remedy="give it with --set catalog=<%s>" % "|".join(catalogs))
+    chosen = {"catalog": raw}
+    files = settings["files"]
+    choices = [c["value"] for c in files["choices"]]
+    fraw = str(given.get("files") or "").strip().lower()
+    if not fraw:
+        fraw = files["default"][raw]
+        if raw == "none" and str(given.get("path") or "").strip().lower().startswith("abfss://"):
+            fraw = "azure"
+    if fraw not in choices:
+        raise PlanError("files must be one of %s, not %r" % (", ".join(valid_files(connector, raw)), fraw),
+                        remedy=combination_remedy(connector, raw))
+    disabled = [c for c in files["choices"] if c["value"] == fraw and c.get("disabled")]
+    if disabled:
+        raise PlanError("files=%s: %s" % (fraw, disabled[0]["label"]), remedy=combination_remedy(connector, raw))
+    if fraw not in valid_files(connector, raw):
+        raise PlanError("files=%s (%s) does not go with catalog=%s (%s)" % (
+            fraw, setting_labels(connector, "files")[fraw], raw, setting_labels(connector, "catalog")[raw]),
+            remedy=combination_remedy(connector, raw))
+    chosen["files"] = fraw
+    login = settings.get("login")
+    if login:
+        lraw = str(given.get("login") or "").strip().lower()
+        logins = [c["value"] for c in login["choices"]]
+        if applies(login.get("when"), chosen):
+            lraw = lraw or login["default"]
+            if lraw not in logins:
+                raise PlanError("login must be one of %s, not %r" % (", ".join(logins), lraw),
+                                remedy="give it with --set login=<%s>" % "|".join(logins))
+            chosen["login"] = lraw
+        elif lraw:
+            raise PlanError("login is for a catalog that signs in (%s), not catalog=%s" % (
+                ", ".join(login["when"]["catalog"]), raw),
+                remedy="leave --set login out: %s" % ("the AWS secret key is the credential" if raw == "glue"
+                                                       else "the storage secret is the credential"))
+    return chosen
+
+
+def combination_label(connector, chosen):
+    """"Lakehouse · Iceberg REST catalog · Azure ADLS Gen2": a combination's name."""
+    head = connector["name"].split(" (")[0]
+    parts = [head]
+    for key in ("catalog", "files"):
+        if chosen.get(key):
+            parts.append(setting_labels(connector, key).get(chosen[key], chosen[key]))
+    return " \u00b7 ".join(parts)
+
+
+def specialize(connector, values):
+    """The flat connector of one combination: the chosen catalog's variant laid
+    over the document, the settings as choice inputs first (files' choices the
+    catalog's valid ones), then the inputs whose `when` matches - each once, in
+    the document's order. With no catalog among values, the inputs are the
+    catalog setting alone (what the form asks first)."""
+    settings = connector["settings"]
+    chosen = {k: str(values.get(k)) for k in settings if values.get(k)}
+    doc = {k: copy.deepcopy(v) for k, v in connector.items()
+           if k not in ("settings", "variants", "inputs") and not k.startswith("_")}
+    doc.update(copy.deepcopy(connector.get("variants", {}).get(chosen.get("catalog"), {})))
+    fields = []
+    for key, spec in settings.items():
+        if not applies(spec.get("when"), chosen):
+            continue
+        if key != "catalog" and "catalog" not in chosen:
+            continue
+        options = [c for c in spec["choices"] if not c.get("disabled")]
+        if key == "files":
+            options = [c for c in options if c["value"] in spec["valid"].get(chosen["catalog"], [])]
+        default = spec.get("default", "")
+        if isinstance(default, dict):
+            default = default.get(chosen.get("catalog"), "")
+        field = {"name": key, "label": spec["label"], "kind": "choice", "required": True, "setting": True,
+                 "choices": [c["value"] for c in options], "choice_labels": [c["label"] for c in options],
+                 # Display only: the arrow-key question and a hint beside each choice.
+                 "question": spec.get("question", ""), "choice_hints": [c.get("hint", "") for c in options],
+                 "disabled": [c["label"] for c in spec["choices"] if c.get("disabled")]}
+        if default:
+            field["default"] = default
+        fields.append(field)
+    inputs = []
+    if "catalog" in chosen and "files" in chosen:
+        for spec in connector["inputs"]:
+            if applies(spec.get("when"), chosen):
+                inputs.append({k: copy.deepcopy(v) for k, v in spec.items() if k != "when"})
+    doc["inputs"] = fields + inputs
+    doc["settings_chosen"] = chosen
+    doc["label"] = combination_label(connector, chosen)
+    if chosen.get("catalog") == "none":
+        parts = storage_path_parts(str(values.get("path") or ""))
+        if parts.get("scheme") == "azure":
+            doc["host"] = "%s.dfs.core.windows.net" % parts["account"]
+        elif parts.get("scheme") == "s3" and not values.get("endpoint") and values.get("region"):
+            doc["host"] = "%s.s3.%s.amazonaws.com" % (parts["bucket"], values["region"])
+        else:
+            # An S3-compatible endpoint is a URL input: reached_hosts has it.
+            doc["host"] = ""
+    return doc
+
+
+def validate_inputs(connector, given):
+    """Defaults applied, every value checked by kind; secrets are not taken here.
+    A connector with settings: the settings chosen first (choose_settings), then
+    the inputs of that combination only, the settings among the values."""
+    if connector.get("settings"):
+        chosen = choose_settings(connector, given)
+        flat = specialize(connector, dict(given, **chosen))
+        values = _validate_flat(flat, dict(given, **chosen))
+        if chosen["catalog"] == "none":
+            scheme = storage_path_parts(values.get("path", "")).get("scheme")
+            if scheme and scheme != chosen["files"]:
+                raise PlanError("path %s is on %s, but files=%s" % (
+                    values["path"], "Azure (abfss://)" if scheme == "azure" else "S3 (s3://)", chosen["files"]),
+                    remedy="give --set files=%s for this path, or a %s path" % (
+                        scheme, "s3://bucket/prefix/" if chosen["files"] == "s3" else
+                        "abfss://container@account.dfs.core.windows.net/prefix/"))
+        return values
+    return _validate_flat(connector, given)
+
+
+def _validate_flat(connector, given):
+    values, problems = {}, []
+    known = {spec["name"] for spec in connector["inputs"]}
+    secrets = {spec["name"] for spec in connector["inputs"] if spec["kind"] in ("secret", "secret-file")}
+    for key in given:
+        if key in secrets:
+            # Refused, never dropped: a credential on the command line is
+            # readable by every local user, and dropping it would let a
+            # command "succeed" without the credential it was given.
+            problems.append("%s is a credential and is never taken with --set (other users can read the command "
+                            "line): give it with --password-file <file> or --password-stdin" % key)
+        elif key not in known:
+            if connector.get("settings_chosen"):
+                problems.append("%s is not an input of %s with %s (its inputs: %s)" % (
+                    key, connector["id"], ", ".join("%s=%s" % kv for kv in connector["settings_chosen"].items()),
+                    ", ".join(sorted(known - secrets - set(connector["settings_chosen"])))))
+            else:
+                problems.append("%s is not an input of %s (inputs: %s)" % (key, connector["id"], ", ".join(sorted(known))))
+    for spec in connector["inputs"]:
+        name, kind = spec["name"], spec["kind"]
+        if kind in ("secret", "secret-file"):
+            continue
+        raw = given.get(name)
+        if kind == "edml" and spec.get("draft") and raw is not None:
+            # auto (or empty): drafted at connect; auto:<folder>/ drafts from that folder only.
+            value, problem = draft_value(raw)
+            if problem:
+                problems.append(problem)
+                continue
+            if value is not None:
+                if value:
+                    values[name] = value
+                continue
+        if raw is None or raw == "":
+            if "default" in spec:
+                raw = spec["default"]
+            elif spec.get("required") and not spec.get("or_in_credential_file"):
+                problems.append("%s is required (%s)" % (name, spec.get("label", name)))
+                continue
+            else:
+                # or_in_credential_file: the form asks for it (required there),
+                # a script may leave it to the credential file instead; a
+                # secret that holds no key ID is refused before anything is
+                # downloaded (document._aws_keys, in the connect's first step).
+                continue
+        value, problem = check_value(spec, raw)
+        if problem:
+            problems.append(problem)
+            continue
+        values[name] = value
+    if values.get("ca") and values.get("tls", "verify") != "verify":
+        # A CA only means something to a check; with require or disable it
+        # would read as protection that is not there.
+        problems.append("ca is used to verify the server, so it needs tls=verify (not %s)" % values["tls"])
+    if problems:
+        raise PlanError("; ".join(problems))
+    return values
+
+
+def secret_input(connector):
+    """The connector's credential input: the one --password-file and
+    --password-stdin carry (never the second, storage_secret)."""
+    for spec in connector["inputs"]:
+        if spec["kind"] in ("secret", "secret-file") and spec["name"] != STORAGE_SECRET:
+            return spec
+    return None
+
+
+# The second secret of a combination that has two (lakehouse: a catalog login
+# plus S3 or Azure keys): --storage-secret-file, or asked hidden.
+STORAGE_SECRET = "storage_secret"
+
+
+def storage_secret_input(connector):
+    return next((s for s in connector.get("inputs", []) if s["name"] == STORAGE_SECRET), None)
+
+
+def source_host(connector, values):
+    if connector.get("host_from"):
+        # The host of a URL input (a catalog's): the route check probes it.
+        m = URL.match(str(values.get(connector["host_from"], "")))
+        return m.group(2).strip("[]") if m else ""
+    template = connector.get("host") or "{host}"
+    try:
+        return template.format(**values)
+    except KeyError:
+        return ""
+
+
+def reached_hosts(connector, values):
+    """Every host a source is reached at, as given: its host (a template's, or
+    the host of the URL input it names), the host of any other URL input (a
+    storage endpoint) and each host of a MongoDB URI. Empty when it names none."""
+    hosts = [source_host(connector, values)]
+    for spec in connector.get("inputs", []):
+        raw = str(values.get(spec["name"]) or "")
+        if not raw:
+            continue
+        if spec["kind"] in URL_KINDS:
+            m = URL.match(raw)
+            if m:
+                hosts.append(m.group(2))
+        elif spec["kind"] == "mongodb-uri":
+            for item in raw.split("://", 1)[-1].split("/", 1)[0].split(","):
+                hosts.append(item[1:item.find("]")] if item.startswith("[") else item.split(":", 1)[0])
+    seen = []
+    for host in hosts:
+        host = host.strip("[]")
+        if host and host not in seen:
+            seen.append(host)
+    return seen
+
+
+def public_host(connector, values):
+    """The first host of this source that is on the internet, or None when every
+    one is this computer or a private network (host_scope). A source on the
+    internet sees the database's traffic come from this computer's public IP, so
+    that is the address its firewall or IP access list must allow.
+
+    One rule for every connector, read from its connector.json: the hosts a
+    host-based source names, and the fixed host a cloud store's template builds
+    (S3, Azure, Snowflake, BigQuery, Glue) - all public. An Iceberg REST catalog
+    or an S3-compatible endpoint on this computer or a private network is not;
+    one with no endpoint is judged by its catalog alone, since the storage it
+    vends is not known before it is asked."""
+    for host in reached_hosts(connector, values):
+        if host_scope(host) == "public":
+            return host
+    return None
+
+
+def source_port(connector, values):
+    if connector.get("host_from"):
+        m = URL.match(str(values.get(connector["host_from"], "")))
+        if m and m.group(3):
+            return int(m.group(3))
+        return 80 if m and m.group(1).lower() == "http" else 443
+    return int(values.get("port") or 443)
+
+
+def jdbc_url(connector, values, extra=None):
+    """The source's JDBC URL. extra["ca_pem"] is the one certificate chosen
+    from the `ca` input (tlsca.choose); with it, verify trusts that CA."""
+    fields = dict(values)
+    if ":" in fields.get("host", ""):
+        fields["host"] = "[%s]" % fields["host"]
+    fields.update(extra or {})
+    if connector.get("tls"):
+        if fields.get("ca_pem") and connector.get("tls_ca"):
+            if connector.get("ca_encoding") == "base64-bundle":
+                # The whole bundle, base64: ojdbc 23 reads a PEM wallet from a
+                # data: URI (wallet_location=data:;base64,...), trust-only.
+                value = base64.b64encode(fields["ca_pem"].encode("ascii")).decode("ascii")
+            else:
+                value = tlsca.url_value(fields["ca_pem"])
+            fields["tls"] = connector["tls_ca"].format(**dict(fields, ca_pem=value))
+        elif fields.get("truststore") and connector.get("tls_truststore"):
+            fields["tls"] = connector["tls_truststore"].format(**fields)
+        elif fields.get("ca_pem") and connector.get("tls_class"):
+            fields["tls"] = connector["tls_class"].format(tls_arg=tlsca.class_arg(values["host"], fields["ca_pem"]))
+        else:
+            fields["tls"] = connector["tls"][values.get("tls", "verify")].format(**fields)
+    # An optional input adds its parameter only when given ({opt_<input>} in
+    # the template): an empty role= would ask the driver for a role named "".
+    for key, fragment in (connector.get("url_optional") or {}).items():
+        fields["opt_" + key] = fragment.format(**fields) if fields.get(key) else ""
+    return connector["url"].format(**fields)
+
+
+def languages(connector, values, profile):
+    """The language containers a connect of this source runs in the database:
+    rust for a native adapter, java for a Java adapter and for the kit's own
+    Java probes (the route check of a source with a host, the staged-file wait
+    of a profile that needs DNS). The terminal flow installs the missing ones
+    before its table, so no row has to fail for one."""
+    slc = profile.get("slc") or {}
+    needs = []
+    if slc.get("language") == "rust":
+        needs.append("rust")
+    if slc.get("language") != "rust" or slc.get("needs_dns") or source_host(connector, values):
+        needs.append("java")
+    return needs
+
+
+def tls_warning(connector, values):
+    if plain_http(connector, values):
+        return ("plain http: the catalog token or storage keys and the rows cross the network unencrypted "
+                "(accepted for this computer or a private network only)")
+    mode = values.get("tls")
+    if mode == "require":
+        return "TLS encrypts the connection but does NOT check the server's identity"
+    if mode == "disable":
+        return "TLS is off: credentials and rows cross the network unencrypted"
+    if mode == "verify" and not values.get("ca") and any(s["kind"] == "ca-file" for s in connector["inputs"]):
+        # Measured on Exasol Personal 2.4: the JDBC loader has an empty Java
+        # trust store, so verify without a CA fails later on "trustAnchors"
+        # (MySQL: "Could not load trustJKS keystore from null").
+        return ("tls=verify needs a CA file here: the database's JDBC loader has no CA store of its own, so "
+                "without one the connect fails on trustAnchors - give the CA as PEM with --set ca=<file>, for a "
+                "public CA too (its root, e.g. ISRG Root X1%s)"
+                % ("; SQL Server: the root plus its intermediates" if connector["id"] == "sqlserver" else ""))
+    return None
+
+
+def describe(defs, connector_id, name, values, runtime, cache, store):
+    """The plan, as data: what is downloaded, staged, created - before any of it happens."""
+    connector = defs.connector(connector_id, values)
+    entry = defs.entry(connector_id)
+    names = objects(name, connector)
+    profile = defs.profile(connector["profile"])
+    downloads = []
+    for role in ("adapter", "trust", "driver"):
+        pin = connector.get(role)
+        if not pin:
+            continue
+        downloads.append({"role": role, "asset": pin["asset"], "version": pin["version"], "bytes": pin["size"],
+                          "cached": cache.has(pin), "license": pin["license"]})
+    if profile["slc"]["language"] == "rust":
+        steps = ["verify the Rust language container in the database (exakit connect installs it with your "
+                 "consent: %s %s, one restart)" % (profile["slc"]["custom"]["upstream"], profile["slc"]["custom"]["version"])]
+    else:
+        steps = ["verify Java and its DNS in the database (resolve %s)" % (source_host(connector, values) or "the source")]
+    if connector.get("etl"):
+        steps.append("register loader driver %s" % connector["etl"]["drivername"])
+    try:
+        count = len(tlsca.certificates(values["ca"])) if values.get("ca") else 0
+    except tlsca.CaError:
+        # A reconnect's recorded CA file, gone since: the certificate kept
+        # with the source when it connected is used instead (a first connect
+        # was refused for it by validate_inputs).
+        count = None
+        steps.append("trust the CA kept with the source when it connected (from %s)" % values["ca"])
+    if count:
+        if connector.get("tls_truststore"):
+            how = "%d certificate%s, for the adapter and the loader" % (count, "" if count == 1 else "s")
+        elif connector.get("ca_encoding") == "base64-bundle":
+            how = "%d certificate%s, kept inside the connection" % (count, "" if count == 1 else "s")
+        elif connector.get("tls_class"):
+            how = "%d certificate%s, verified against the host name" % (count, "" if count == 1 else "s")
+        elif count == 1:
+            how = "1 certificate"
+        else:
+            how = ("%d certificates; a verified handshake from this computer picks the one that signs %s"
+                   % (count, source_host(connector, values)))
+        steps.append("trust the CA in %s for this source only (%s)" % (values["ca"], how))
+    prefix = draft_prefix(connector, values)
+    if values.get("mapping") or prefix is not None:
+        if prefix is not None:
+            steps += ["draft the mapping from the %s%s with the credential (one table per folder and file type, "
+                      "written to %s), then stage it" % (connector.get("store", "bucket"),
+                                                         " folder %s" % prefix if prefix else "",
+                                                         os.path.join(store.path(name), "edml"))]
+        else:
+            tables = document.load_mappings(values["mapping"])
+            steps += ["stage the mapping from %s (%d mapped table%s: %s)" % (values["mapping"], len(tables),
+                                                                    "" if len(tables) == 1 else "s",
+                                                                    ", ".join(t["table"] for t in tables))]
+        steps += ["create CONNECTION %s (the credential as JSON, inside the database only)" % names["connection"],
+                  "create adapter script %s.%s and its import script %s.%s"
+                  % (names["script_schema"], names["script"], names["script_schema"], connector["import_script"]),
+                  "create virtual schema %s" % names["schema"],
+                  "verify every table with a bounded read"]
+    elif profile["adapter_script"].get("language") == "LUA":
+        steps += ["create CONNECTION %s (the token as its password, inside the database only)" % names["connection"],
+                  "create Lua adapter script %s.%s: upstream's file unchanged, plus the kit's check of the REST "
+                  "API's certificate and host name against the pinned CA bundle (upstream turns it off)"
+                  % (names["script_schema"], names["script"]),
+                  "create virtual schema %s" % names["schema"],
+                  "verify metadata and one bounded read"]
+    elif connector.get("companions"):
+        steps += ["create CONNECTION %s%s" % (names["connection"], " (the credential as JSON, inside the database only)"
+                                              if connector.get("credential") else ""),
+                  "create adapter script %s.%s and its scripts %s (shared by every %s)"
+                  % (names["script_schema"], names["script"],
+                     ", ".join("%s.%s" % (names["script_schema"], s["name"]) for s in connector["companions"]),
+                     connector.get("shared_by") or "%s source" % connector["name"]),
+                  "create virtual schema %s" % names["schema"],
+                  "verify metadata and one bounded read"]
+    elif connector.get("shared_adapter"):
+        steps += ["create CONNECTION %s" % names["connection"],
+                  "create adapter script %s.%s and its scan UDF %s.%s (shared by every %s source)"
+                  % (names["script_schema"], names["script"], names["script_schema"], connector["import_script"],
+                     connector["name"]),
+                  "create virtual schema %s" % names["schema"],
+                  "verify metadata and one bounded read"]
+    else:
+        steps += ["create CONNECTION %s" % names["connection"],
+                  "create adapter script %s.%s" % (names["script_schema"], names["script"]),
+                  "create virtual schema %s" % names["schema"],
+                  "verify metadata and one bounded read"]
+    plan = {
+        "connector": connector_id, "name": name, "tier": entry["tier"], "status": entry["status"],
+        "connector_name": connector.get("label") or entry["name"],
+        "objects": names, "downloads": downloads, "steps": steps,
+        "download_bytes": sum(d["bytes"] for d in downloads if not d["cached"]),
+        "exposure": "the kit's MCP read-only user can read every table of %s (SELECT ANY TABLE)" % names["schema"],
+        "languages": languages(connector, values, profile),
+        "restart": False,
+        "warnings": [w for w in [tls_warning(connector, values), entry.get("caveat")] if w],
+        "gate": entry.get("gate") if entry["status"] == "gated" else None,
+    }
+    if store.exists(name):
+        plan["existing"] = store.status(name).get("status", "unknown")
+    return plan

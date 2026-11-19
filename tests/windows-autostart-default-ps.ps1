@@ -32,7 +32,28 @@ Reset '{"manifest_version": 1, "runtime": {"type": "personal"}}'
 Enable-ExakitAutostartDefault
 Check "autostart.enabled"        "True" ("" + (Get-ExakitManifestValue "autostart.enabled"))
 Check "Startup entry written"    "True" ("" + (Test-Path $entry))
-Check "  it starts the database" "True" ("" + ((Get-Content $entry -Raw) -match 'exasol\.exe" start'))
+# OSX-03 / LIN-01 on Windows: the kit's own start, which repairs the language
+# containers' DNS, not the bare launcher, which never did.
+Check "  it runs the kit's start for the database" "True" ("" + ((Get-Content $entry -Raw) -match 'kit[\\/]setup[\\/]exakit\.ps1" start database'))
+Check "  not the bare launcher" "False" ("" + ((Get-Content $entry -Raw) -match 'exasol\.exe" start'))
+Check "  minimised, through powershell (a .cmd would leave cmd /K open)" "True" ("" + ((Get-Content $entry -Raw) -match 'start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File '))
+
+Write-Host "exakit update rewrites a Startup entry an earlier kit wrote (Update-ExakitAutostartEntries)"
+Reset '{"manifest_version": 1, "runtime": {"type": "personal"}, "autostart": {"enabled": true}}'
+New-Item -ItemType Directory -Force -Path $startup | Out-Null
+Set-Content -Path $entry -Value ("@echo off`r`nstart `"`" /min `"" + (Get-PersonalCli) + "`" start`r`n") -NoNewline
+Update-ExakitAutostartEntries
+Check "  the old entry now runs the kit's start" "True" ("" + ((Get-Content $entry -Raw).Contains('" start database')))
+Check "  and no longer the bare launcher" "False" ("" + ((Get-Content $entry -Raw) -match 'exasol\.exe" start'))
+$before = (Get-Item $entry).LastWriteTimeUtc
+Start-Sleep -Milliseconds 1100
+Update-ExakitAutostartEntries
+Check "  a current entry is left as it is" "True" ("" + ((Get-Item $entry).LastWriteTimeUtc -eq $before))
+Remove-Item -Force $entry
+Update-ExakitAutostartEntries
+Check "  no entry (autostart off) stays no entry" "False" ("" + (Test-Path $entry))
+$cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "  exakit update calls it" "True" ("" + $cliText.Contains('try { Update-ExakitAutostartEntries }'))
 
 Write-Host "an earlier 'exakit autostart off' (user_set) is kept"
 Reset '{"manifest_version": 1, "runtime": {"type": "personal"}, "autostart": {"enabled": false, "user_set": true}}'
@@ -67,6 +88,108 @@ $en = [regex]::Match($cli, '(?s)\r?\nfunction Enable-ExakitAutostart \{.*?\r?\n\
 $dis = [regex]::Match($cli, '(?s)\r?\nfunction Disable-ExakitAutostart \{.*?\r?\n\}').Value
 Check "Enable-ExakitAutostart marks user_set"  "True" ("" + $en.Contains('Set-ExakitManifestValue "autostart.user_set" $true'))
 Check "Disable-ExakitAutostart marks user_set" "True" ("" + $dis.Contains('Set-ExakitManifestValue "autostart.user_set" $true'))
+
+Write-Host "the install's closing line says the kit is connected to the AI clients (Get-ExakitReadyLineText)"
+$ready = "Exasol starterkit is ready and connected to your AI clients. Ask them about your data."
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["claude_desktop"]}}}}'
+Check "one client: the connected sentence" $ready (Get-ExakitReadyLineText)
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["codex", "claude_code", "vscode_copilot"]}}}}'
+Check "three clients: the same sentence" $ready (Get-ExakitReadyLineText)
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["claude_code", "claude_desktop", "codex", "cursor", "vscode_copilot", "gemini_cli"]}}}}'
+Check "six clients: the same sentence" $ready (Get-ExakitReadyLineText)
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": []}}}}'
+Check "no client: the plain line" "Your starter kit is ready to use." (Get-ExakitReadyLineText)
+
+# WNX-01: an add-on's hook (service.py autostart-command) answers its argv one
+# item per line - Dash Server five, the Scheduler one. The entry writer took a
+# [string], so five items threw a binding error (exakit autostart ended red, and
+# exakit update stopped at Dash Server), and one item was written unquoted,
+# which runs C:\Users\John for a profile folder with a space. Last section: it
+# replaces the service registry with test add-ons.
+Write-Host "an add-on's Startup entry: its argv as one quoted command line (WNX-01)"
+$savedProfile = $env:USERPROFILE
+$script:LogFile = Join-Path $work "exakit.log"
+$script:TestIds = @()
+$script:DashArgv = @()
+$script:SchedArgv = @()
+function Invoke-TestDashAutostart { $script:DashArgv }
+function Invoke-TestSchedAutostart { $script:SchedArgv }
+function Invoke-TestBrokenAutostart { throw "service.py autostart-command failed" }
+function Get-ExakitServiceIds { return $script:TestIds }
+function Get-ExakitMarketplaceAddon {
+    param([string]$Id)
+    $fn = @{ "dash-server" = "Invoke-TestDashAutostart"; "exasol-scheduler" = "Invoke-TestSchedAutostart"; "broken" = "Invoke-TestBrokenAutostart" }[$Id]
+    if (-not $fn) { return $null }
+    return [pscustomobject]@{ Id = $Id; AutostartFn = $fn }
+}
+$script:Warned = @()
+function Warn2([string]$Msg) { $script:Warned += $Msg }
+function RunLine([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return "(no entry)" }
+    return [regex]::Match([System.IO.File]::ReadAllText($path), '(?m)^start "" /min .*$').Value.TrimEnd()
+}
+function TryRegister([string]$id) {
+    try { return ("" + (Register-ExakitAutostart -Id $id)) } catch { return "threw: $_" }
+}
+$dashEntry = Join-Path $startup "com.exasol.exakit.dash-server.cmd"
+$schedEntry = Join-Path $startup "com.exasol.exakit.exasol-scheduler.cmd"
+$brokenEntry = Join-Path $startup "com.exasol.exakit.broken.cmd"
+
+Reset '{"manifest_version": 1, "runtime": {"type": "personal"}, "autostart": {"enabled": true}}'
+$env:USERPROFILE = "C:\Users\John Doe"
+$script:DashArgv = @("C:\Users\John Doe\.exasol-starter-kit\marketplace\dash-server\bin\dash-server.exe", "--host", "127.0.0.1", "--port", "5100")
+$script:SchedArgv = @("C:\Users\John Doe\.exasol-starter-kit\bin\exasol-scheduler.cmd")
+$dashWant = 'start "" /min "%USERPROFILE%\.exasol-starter-kit\marketplace\dash-server\bin\dash-server.exe" "--host" "127.0.0.1" "--port" "5100"'
+$schedWant = 'start "" /min "%USERPROFILE%\.exasol-starter-kit\bin\exasol-scheduler.cmd"'
+Check "Dash Server (5 items): the entry is written" "True" (TryRegister "dash-server")
+Check "  every item quoted, in order" $dashWant (RunLine $dashEntry)
+Check "Scheduler (1 item) under a profile with a space: written" "True" (TryRegister "exasol-scheduler")
+Check "  the path quoted (not C:\Users\John)" $schedWant (RunLine $schedEntry)
+
+Write-Host "  a non-ASCII profile, and & % ( ) in a path"
+$nonAscii = "C:\Users\Jos" + [char]0x00E9 + " M" + [char]0x00FC + "ller"
+$env:USERPROFILE = $nonAscii
+$script:SchedArgv = @("$nonAscii\.exasol-starter-kit\bin\exasol-scheduler.cmd", "D:\R&D (x86)\100%\jobs")
+Check "non-ASCII profile: written" "True" (TryRegister "exasol-scheduler")
+Check "  folded into %USERPROFILE%, specials kept as text" 'start "" /min "%USERPROFILE%\.exasol-starter-kit\bin\exasol-scheduler.cmd" "D:\R&D (x86)\100%%\jobs"' (RunLine $schedEntry)
+$nonAsciiBytes = @([System.IO.File]::ReadAllBytes($schedEntry) | Where-Object { $_ -gt 127 }).Count
+Check "  the entry's bytes are ASCII" "0" ("" + $nonAsciiBytes)
+
+Write-Host "exakit update: one add-on failing does not skip the others (Update-ExakitAutostartEntries)"
+Reset '{"manifest_version": 1, "runtime": {"type": "personal"}, "autostart": {"enabled": true}}'
+$env:USERPROFILE = "C:\Users\John Doe"
+$script:SchedArgv = @("C:\Users\John Doe\.exasol-starter-kit\bin\exasol-scheduler.cmd")
+$script:TestIds = @("database", "dash-server", "broken", "exasol-scheduler")
+New-Item -ItemType Directory -Force -Path $startup | Out-Null
+[void](Register-ExakitAutostart -Id "database")
+# Stale entries: Dash Server on an older port, a broken add-on, and the
+# Scheduler line the regression wrote (unquoted).
+Set-Content -Path $dashEntry -Value ("@echo off`r`nstart `"`" /min `"%USERPROFILE%\.exasol-starter-kit\marketplace\dash-server\bin\dash-server.exe`" `"--host`" `"127.0.0.1`" `"--port`" `"5099`"`r`n") -NoNewline
+Set-Content -Path $brokenEntry -Value "@echo off`r`nstart `"`" /min `"old`"`r`n" -NoNewline
+Set-Content -Path $schedEntry -Value "@echo off`r`nstart `"`" /min %USERPROFILE%\.exasol-starter-kit\bin\exasol-scheduler.cmd`r`n" -NoNewline
+$script:Warned = @()
+$threw = ""
+try { Update-ExakitAutostartEntries } catch { $threw = "$_" }
+Check "  the walk does not throw" "" $threw
+Check "  Dash Server's entry is refreshed" $dashWant (RunLine $dashEntry)
+Check "  the Scheduler's entry, after the failing add-on, is refreshed" $schedWant (RunLine $schedEntry)
+Check "  the failing add-on's entry is left as it was" 'start "" /min "old"' (RunLine $brokenEntry)
+Check "  the user is told which one failed" "True" ("" + (@($script:Warned | Where-Object { $_ -like "broken:*exakit autostart" }).Count -eq 1))
+Check "  and only that one" "1" ("" + @($script:Warned).Count)
+$logText = ""
+if (Test-Path -LiteralPath $script:LogFile) { $logText = Get-Content -Raw -LiteralPath $script:LogFile }
+Check "  the failure is logged with its reason" "True" ("" + $logText.Contains("broken: Startup entry refresh failed: service.py autostart-command failed"))
+
+Write-Host "  an entry the add-on's own install wrote (no rem lines) is current"
+$script:TestIds = @("exasol-scheduler")
+Set-Content -Path $schedEntry -Value ("@echo off`r`n" + $schedWant + "`r`n") -NoNewline
+$before = (Get-Item $schedEntry).LastWriteTimeUtc
+Start-Sleep -Milliseconds 1100
+$script:Warned = @()
+Update-ExakitAutostartEntries
+Check "  left as it is" "True" ("" + ((Get-Item $schedEntry).LastWriteTimeUtc -eq $before))
+Check "  no warning" "0" ("" + @($script:Warned).Count)
+$env:USERPROFILE = $savedProfile
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""

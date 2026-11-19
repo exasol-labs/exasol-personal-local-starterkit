@@ -22,7 +22,8 @@ $script:ExapumpBinPath = if ($env:EXAKIT_EXAPUMP_BIN) { $env:EXAKIT_EXAPUMP_BIN 
 # the former and nothing passes --config or EXAPUMP_CONFIG, so on a domain
 # machine with a redirected home the kit wrote H:\.exapump\config.toml while the
 # binary read C:\Users\<you>\.exapump\config.toml and reported no such profile.
-$script:ExapumpConfigPath = Join-Path (Get-ExakitProfileHome) ".exapump\config.toml"
+$script:ExapumpConfigPath = Join-Path $script:ExakitHome "exapump\config.toml"
+$env:EXAPUMP_CONFIG = $script:ExapumpConfigPath
 
 # Test-ExapumpSucceeded - decide whether an exapump invocation succeeded.
 #
@@ -147,7 +148,7 @@ function Get-ExapumpAssetName {
 # Twin of exapump_expected_sha256 in exapump.sh.
 function Get-ExapumpExpectedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
-    $advertised = Get-ExakitVersionsValue -Path "components.exapump.version"
+    $advertised = Get-ExakitVersionsPin -Path "components.exapump.version"   # the kit copy's pin (SEC-13)
     if ($advertised -and $advertised -eq $script:ExapumpVersion) {
         # The asset name is exapump-<version>-<os>-<arch>.exe, and versions.json
         # keys its digests by that same <os>-<arch> token.
@@ -155,7 +156,7 @@ function Get-ExapumpExpectedSha256 {
         $prefix = "exapump-$($script:ExapumpVersion)-"
         if ($platform.StartsWith($prefix)) { $platform = $platform.Substring($prefix.Length) }
         if ($platform.EndsWith(".exe")) { $platform = $platform.Substring(0, $platform.Length - 4) }
-        $digest = Get-ExakitVersionsValue -Path "components.exapump.sha256.$platform"
+        $digest = Get-ExakitVersionsPin -Path "components.exapump.sha256.$platform"
         if ($digest -and $digest -match '^[0-9a-f]{64}$') { return $digest }
     }
     $digest = Get-ExapumpPinnedSha256 $AssetName
@@ -170,6 +171,7 @@ function Get-ExapumpExpectedSha256 {
 function Get-ExapumpPinnedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
     switch ($AssetName) {
+        "exapump-0.14.0-windows-x86_64.exe" { return "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4" }
         "exapump-0.13.0-windows-x86_64.exe" { return "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838" }
         "exapump-0.11.2-windows-x86_64.exe" { return "8a2e8199a94f1b21782e4c68179948bfa43217c82c9b9b2a25eaec4532305237" }
         default { return $null }
@@ -239,15 +241,21 @@ function Install-Exapump {
             } catch { } finally {
                 $ErrorActionPreference = $previousEAP
             }
-            if ($have -and $have -ne $script:ExapumpVersion -and $existing -eq $script:ExapumpBinPath) {
+            Set-ExakitReusedOwnership "exapump" $existing
+            if ((Test-ExakitComponentManaged "exapump") -and $have -and $have -ne $script:ExapumpVersion -and $existing -eq $script:ExapumpBinPath) {
                 Info "exapump $have is installed; this kit ships $($script:ExapumpVersion) - replacing it"
                 Remove-Item -Force $existing -ErrorAction SilentlyContinue
             } else {
                 Ok "exapump already installed: $existing"
                 Set-ExapumpManifest
+                if ($have) { Set-ExakitManifestValue "components.exapump.version" $have }
                 return
             }
         } else {
+            Set-ExakitReusedOwnership "exapump" $existing
+            if (-not (Test-ExakitComponentManaged "exapump")) {
+                Fail "The user-owned exapump cannot run. Repair it outside the kit; it was not replaced."
+            }
             Warn2 "Existing exapump binary does not run (interrupted download?) - reinstalling"
             Remove-Item -Force $existing -ErrorAction SilentlyContinue
         }
@@ -297,6 +305,7 @@ function Install-Exapump {
 
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
     Move-Item -Force $tmp $script:ExapumpBinPath
+    Set-ExakitComponentOwnership "exapump" "kit" $script:ExapumpBinPath
     Confirm-ExakitOnPath $script:BinDir
     # Smoke-test the freshly installed binary BEFORE reporting success - the twin
     # of exapump_verify_runs, which the sh side has always had and this side
@@ -423,7 +432,8 @@ function New-ExapumpProfile {
     }
 
     New-Item -ItemType Directory -Force -Path (Split-Path $script:ExapumpConfigPath -Parent) | Out-Null
-    Set-ExapumpTomlSection -ConfigPath $script:ExapumpConfigPath -Profile $script:ExapumpProfile -Host_ $host_ -Port $port -User $user -Password $password
+    # The kit's own database: its recorded TLS pin goes in the profile (SEC-14).
+    Set-ExapumpTomlSection -ConfigPath $script:ExapumpConfigPath -Profile $script:ExapumpProfile -Host_ $host_ -Port $port -User $user -Password $password -Fingerprint (Get-ExakitTlsFingerprint)
     Protect-ExakitFile $script:ExapumpConfigPath
     Set-ExakitManifestValue "components.exapump.profile" $script:ExapumpProfile
     OkStep "Connection profile [$($script:ExapumpProfile)] written to $(Get-ExakitTilde $script:ExapumpConfigPath)"
@@ -462,7 +472,10 @@ function Format-TomlString {
 
 # Set-ExapumpTomlSection - replace/append a [profile] section in a TOML file,
 # preserving every other section. Atomic write (temp file + rename) so an
-# interrupted run never truncates a config that may hold other profiles.
+# interrupted run never truncates a config that may hold other profiles. With
+# -Fingerprint (the kit's recorded TLS pin, lowercase hex: exapump compares it
+# case-sensitively) the profile refuses any certificate but that one (SEC-14);
+# without one it is the old unpinned profile. Twin of exapump_write_profile.
 function Set-ExapumpTomlSection {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -471,7 +484,8 @@ function Set-ExapumpTomlSection {
         [Parameter(Mandatory)][string]$Port,
         [Parameter(Mandatory)][string]$User,
         [Parameter(Mandatory)][string]$Password,
-        [string]$Schema = ""
+        [string]$Schema = "",
+        [string]$Fingerprint = ""
     )
     $content = ""
     if (Test-Path $ConfigPath) { $content = Get-Content $ConfigPath -Raw }
@@ -487,6 +501,7 @@ function Set-ExapumpTomlSection {
     if ($Schema) { $lines += "schema = $(Format-TomlString $Schema)" }
     $lines += "tls = true"
     $lines += "validate_certificate = false"
+    if ($Fingerprint) { $lines += "certificate_fingerprint = $(Format-TomlString $Fingerprint)" }
     $section = ($lines -join "`n") + "`n"
 
     $escapedProfile = [regex]::Escape($Profile)
@@ -726,6 +741,64 @@ function Invoke-ExapumpSqlFileCapture {
     return @{ Output = $out; ExitCode = $code; Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
 }
 
+# Invoke-ExapumpSqlText <sql> [-Json] - run SQL text with exapump on the kit's
+# profile, the text on stdin and never on the command line: a CONNECTION or
+# USER secret there is readable in the process list (and in process-creation
+# audit logs) for as long as the statement runs, even when it came from a file.
+# Bytes, for the BOM reasons above Invoke-ExapumpSqlFileCapture. Stdout and
+# stderr come back apart, and Output joins them in the order exapump writes
+# them for one statement: its status line, the rows, then its summary line.
+# Twin of the here-string in cmd_sql (setup/exakit).
+function Invoke-ExapumpSqlText {
+    param([Parameter(Mandatory)][string]$Sql, [switch]$Json)
+    $stdout = ""
+    $stderr = ""
+    $code = 1
+    $previousInputEncoding = $null
+    try {
+        try {
+            $previousInputEncoding = [Console]::InputEncoding
+            [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+        } catch { $previousInputEncoding = $null }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = Get-ExapumpCli
+        $psi.Arguments = "sql -p `"$($script:ExapumpProfile)`""
+        if ($Json) { $psi.Arguments += " -f json" }
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Sql + "`n")
+        $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        $proc.StandardInput.Close()
+        $proc.WaitForExit()
+        $stdout = "" + $stdoutTask.Result
+        $stderr = "" + $stderrTask.Result
+        $code = $proc.ExitCode
+    } catch {
+        $stderr = "$_"
+    } finally {
+        if ($previousInputEncoding) {
+            try { [Console]::InputEncoding = $previousInputEncoding } catch { }
+        }
+    }
+    $errLines = @(($stderr -split "`r?`n") | Where-Object { $_ -ne "" })
+    $outLines = @(($stdout -split "`r?`n") | Where-Object { $_ -ne "" })
+    $tail = @()
+    if ($errLines.Count -gt 0 -and $errLines[$errLines.Count - 1] -match '^\d+ statements? executed') {
+        $tail = @($errLines[$errLines.Count - 1])
+        if ($errLines.Count -gt 1) { $errLines = @($errLines[0..($errLines.Count - 2)]) } else { $errLines = @() }
+    }
+    $out = (@($errLines) + @($outLines) + @($tail)) -join "`n"
+    return @{ Stdout = $stdout; Stderr = $stderr; Output = $out; ExitCode = $code
+              Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
+}
+
 function Invoke-ExapumpSqlFile {
     param([Parameter(Mandatory)][string]$Path, [string]$Description = "")
     if (-not $Description) { $Description = Split-Path $Path -Leaf }
@@ -761,6 +834,66 @@ $script:ExakitUploadQuiet = $false
 # exakit_upload_failure_reason in exapump.sh.
 $script:ExakitUploadReason = ""
 
+# Test-ExakitCsvStrayQuote -Path <file> - true when the first quoting fault in
+# a CSV is a double quote inside a field that did not open with one
+# (1,27" monitor,4). The quotes are followed the way the CSV grammar does: a
+# quote opens a field only at its start, "" inside a quoted field is one quote,
+# and a quoted field may run over several lines - so a line break inside quotes
+# is NOT a fault here. Read only after a failed load; lines without a quote are
+# skipped, and it stops after two million lines with no verdict. Twin of
+# exakit_csv_stray_quote in exapump.sh.
+function Test-ExakitCsvStrayQuote {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    if ([System.IO.Path]::GetFileName($Path).ToLowerInvariant() -match '\.(gz|bz2|zst|xz)$') { return $false }
+    $delim = ","
+    try { $delim = [string](Get-ExakitCsvInspection -Path $Path).Delimiter } catch { $delim = "," }
+    if (-not $delim) { $delim = "," }
+    $d = $delim[0]
+    $q = [char]34
+    $reader = $null
+    try {
+        # $true: a byte-order mark is read as one and dropped, not taken as data.
+        $reader = New-Object System.IO.StreamReader((Resolve-Path -LiteralPath $Path).ProviderPath, $true)
+        $inq = $false
+        $n = 0
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $n++
+            if ($n -gt 2000000) { return $false }
+            if (-not $inq -and $line.IndexOf($q) -lt 0) { continue }
+            $fs = -not $inq
+            $cl = $false
+            for ($i = 0; $i -lt $line.Length; $i++) {
+                $c = $line[$i]
+                if ($inq) {
+                    if ($c -eq $q) {
+                        if ($i + 1 -lt $line.Length -and $line[$i + 1] -eq $q) { $i++; continue }
+                        $inq = $false
+                        $cl = $true
+                    }
+                    continue
+                }
+                if ($cl) {
+                    $cl = $false
+                    if ($c -eq $d) { $fs = $true; continue }
+                    return $false
+                }
+                if ($c -eq $d) { $fs = $true; continue }
+                if ($c -eq $q) {
+                    if ($fs) { $inq = $true; $fs = $false; continue }
+                    return $true
+                }
+                $fs = $false
+            }
+        }
+    } catch {
+        return $false
+    } finally {
+        if ($reader) { $reader.Dispose() }
+    }
+    return $false
+}
+
 # Get-ExakitUploadFailureReason - why an upload failed, in words.
 #
 # The engine says something genuinely useful and the kit was throwing it away,
@@ -768,7 +901,9 @@ $script:ExakitUploadReason = ""
 # answer. Only the shapes worth translating are translated; anything else is
 # passed through trimmed, because a slightly long engine message beats none.
 function Get-ExakitUploadFailureReason {
-    param([string[]]$Output = @())
+    # -Path (optional): the file that failed, read only to tell a stray double
+    # quote from a line break inside a quoted field (Test-ExakitCsvStrayQuote).
+    param([string[]]$Output = @(), [string]$Path = "")
     $line = @($Output | Where-Object { $_ -like "Error: *" } | Select-Object -Last 1)
     if ($line.Count -eq 0) { return "" }
     $text = [string]$line[0]
@@ -780,6 +915,13 @@ function Get-ExakitUploadFailureReason {
     if ($m.Success) { $row = $m.Groups[1].Value }
     if ($text -like "*not enclosed field*") {
         if (-not $row) { $row = "?" }
+        # "Field delimiter" is Exasol's name for the QUOTE character, so the
+        # same words also mean a " in a field that did not open with one - an
+        # inch mark, 27" monitor. Which of the two it is, the file itself says.
+        # Twin of the same branch in exakit_upload_failure_reason.
+        if ($Path -and (Test-ExakitCsvStrayQuote -Path $Path)) {
+            return ('row ' + $row + ' has a double quote (") inside a field that is not in quotes: put that field in quotes and double the quote (e.g. "27"" monitor")')
+        }
         return "row $row has a line break or an unescaped comma inside a quoted field"
     }
     if ($text -like "*<CR>*") {
@@ -825,6 +967,81 @@ function Get-ExakitUploadFailureReason {
     return $out
 }
 
+# Test-ExakitCsvNumberGuard - a user's CSV must never load as WRONG NUMBERS
+# under a green check. exapump infers each column's type and has no option for
+# a decimal comma, a thousands separator or a type: a German export's 1.234
+# loaded as 1.234, 12.500 as 12.5, and 0000001237 / the postcode 01067 as 1237
+# and 1067 (seen on a live database). csv_guard.py names the columns holding
+# such values; any of them exapump would make a number is created as text, in
+# a table the kit creates from exapump's own inferred schema. A table that
+# already exists with such a column as a number is refused. $false with
+# $script:ExakitGuardReason to refuse; $script:ExakitGuardNote says what was
+# kept as text. Twin of exakit_csv_number_guard.
+function Test-ExakitCsvNumberGuard {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Target, [string]$Delimiter = ",")
+    $script:ExakitGuardNote = ""; $script:ExakitGuardReason = ""
+    $delimArg = $Delimiter; if ($Delimiter -eq "`t") { $delimArg = "tab" }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-guard-$([guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $num = Invoke-ExakitPythonFile -Path $script:ExakitCsvGuardScript -Arguments @("numbers", $Path, $delimArg)
+        $suspects = @($num.Lines | Where-Object { $_ -match '^\d+\t' })
+        if ($num.Code -ne 0 -or $suspects.Count -eq 0) { return $true }
+        $parts = $Target.Split('.', 2)
+        $schemaUc = $parts[0].ToUpperInvariant(); $tableUc = $parts[1].ToUpperInvariant()
+        $q = Invoke-Exapump @("sql", "-p", $script:ExapumpProfile,
+            "SELECT 'EXAKIT.COLUMNS_ANSWERED|0|' AS C FROM DUAL UNION ALL SELECT 'EXAKIT_COL|' || COLUMN_ORDINAL_POSITION || '|' || COLUMN_TYPE FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '$schemaUc' AND COLUMN_TABLE = '$tableUc'")
+        $cols = @(("" + $q.Output) -split "`r?`n" | ForEach-Object { $_.Replace('"', '') } | Where-Object { $_ -match '^EXAKIT[._]' })
+        # The database could not be asked: the upload will say why it cannot load.
+        if (-not ($cols -match '^EXAKIT\.COLUMNS_ANSWERED')) { return $true }
+        $existing = @($cols | Where-Object { $_.StartsWith("EXAKIT_COL|") })
+        if ($existing.Count -gt 0) {
+            # The table is there already: its own types decide.
+            $bad = @()
+            foreach ($line in $suspects) {
+                $f = $line.Split("`t", 3)
+                $hit = @($existing | Where-Object { $_.StartsWith("EXAKIT_COL|$($f[0])|") })
+                if ($hit.Count -eq 0) { continue }
+                $type = ($hit[0].Split('|', 3)[2] -split ' ')[0]
+                if ($type -notmatch '^(VARCHAR|CHAR)') { $bad += "column `"$($f[1])`" is $type and $($f[2])" }
+            }
+            if ($bad.Count -eq 0) { return $true }
+            $script:ExakitGuardReason = "$Target already exists and its $($bad -join '; ') - loading would store wrong numbers. Load it into a new table, or rebuild this one with `$env:EXAKIT_ON_EXISTING = 'replace'."
+            return $false
+        }
+        $dryArgs = @("upload", $Path, "--table", $Target, "--dry-run")
+        if ($Delimiter -ne ",") { $dryArgs += @("--delimiter", $Delimiter) }
+        $dry = Invoke-Exapump $dryArgs
+        $dryFile = Join-Path $tmp "dry"; $numFile = Join-Path $tmp "numbers"; $ddlFile = Join-Path $tmp "ddl.sql"
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($dryFile, "" + $dry.Output, $utf8)
+        [System.IO.File]::WriteAllText($numFile, (($suspects -join "`n") + "`n"), $utf8)
+        $ddl = $null
+        if ($dry.Success) { $ddl = Invoke-ExakitPythonFile -Path $script:ExakitCsvGuardScript -Arguments @("ddl", $dryFile, $numFile, $ddlFile) }
+        if (-not $dry.Success -or $null -eq $ddl -or $ddl.Code -ne 0) {
+            $script:ExakitGuardReason = "it holds values that would load as wrong numbers (leading zeros, or a dot as thousands separator), and the column types exapump would use could not be read to keep them as text"
+            return $false
+        }
+        if (-not (Test-Path -LiteralPath $ddlFile)) { return $true }
+        # One line: a Windows command line carries it more safely than several.
+        $create = Invoke-Exapump @("sql", "-p", $script:ExapumpProfile, ([System.IO.File]::ReadAllText($ddlFile)).Trim().Replace("`r", "").Replace("`n", " "))
+        if (-not $create.Success) {
+            $script:ExakitGuardReason = "it holds values that would load as wrong numbers, and $Target could not be created with those columns as text"
+            return $false
+        }
+        $said = @()
+        foreach ($line in @($ddl.Lines | Where-Object { $_ })) { $f = $line.Split("`t", 2); $said += "`"$($f[0])`" ($($f[1]))" }
+        $script:ExakitGuardNote = $said -join ", "
+        Write-ExakitLog "INFO" "$Target created with text columns: $($script:ExakitGuardNote)"
+        return $true
+    } catch {
+        Write-ExakitLog "WARN" "number check skipped for $(Split-Path $Path -Leaf): $($_.Exception.Message)"
+        return $true
+    } finally {
+        Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-ExapumpUpload {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Target, [switch]$Soft)
     if (-not (Test-Path -LiteralPath $Path) -or (Get-Item -LiteralPath $Path).Length -eq 0) {
@@ -837,6 +1054,7 @@ function Invoke-ExapumpUpload {
     # object to is remembered so the failure reason can name it.
     $uploadArgs = @("upload", $Path, "--table", $Target, "-p", $script:ExapumpProfile)
     $script:ExakitCsvFlags = ""
+    $csvDelimiter = ","
     if ((Get-ExakitDataFileKind $Path) -eq "csv") {
         $look = Get-ExakitCsvInspection -Path $Path
         if ($look.HeaderOnly) {
@@ -845,18 +1063,65 @@ function Invoke-ExapumpUpload {
         }
         $script:ExakitCsvFlags = $look.Flags
         if ($look.Flags) { Write-ExakitLog "INFO" "$(Split-Path $Path -Leaf) has: $($look.Flags)" }
+        # Named, not the raw tab: a tab in a native argument is not quoted
+        # reliably by Windows PowerShell 5.1.
+        if ($look.Delimiter -eq "`t") { $csvDelimiter = "tab" } else { $csvDelimiter = $look.Delimiter }
         if ($look.Delimiter -ne ",") { $uploadArgs += @("--delimiter", $look.Delimiter) }
     }
-    $result = Invoke-Exapump $uploadArgs
-    if (-not $result.Success -and (Test-ExakitUploadCutShort -Output $result.Output)) {
-        # A cut transfer is recovered here too, not only in the dataset batch:
-        # a user's own file crosses the same import connection. Only a cut the
-        # output SAYS, as in the twin, which reads this attempt from the log.
-        $delim = ","
-        if ($uploadArgs -contains "--delimiter") { $delim = $uploadArgs[[array]::IndexOf($uploadArgs, "--delimiter") + 1] }
-        $rec = Invoke-ExakitUploadRecovery -Path $Path -Target $Target -Delimiter $delim `
-            -ExitCode $result.ExitCode -Output $result.Output
-        $result = @{ Output = $rec.Output; ExitCode = $result.ExitCode; Success = [bool]$rec.Success }
+    # WINDOWS LINE ENDINGS ARE MADE LF, IN A COPY. exapump 0.14.0 has no
+    # row-separator option and its IMPORT expects LF, so a file saved by Excel
+    # or Notepad failed the whole load when its last column was a number
+    # ("Transformation of value='10.5<CR>' failed") and loaded a carriage
+    # return into every value when it was text. The user's file is never
+    # touched: a temporary copy with each record's CRLF made LF goes over
+    # instead (a CRLF inside a quoted field is data and stays). Without Python,
+    # or when a quoted field never closes (csv_guard exits 3), the original goes
+    # over and the CRLF warning stays. Twin of the same step in exapump_upload.
+    $source = $Path
+    $lfDir = $null
+    if (("," + $script:ExakitCsvFlags + ",") -like "*,crlf,*") {
+        try {
+            $lfDir = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-lf-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Force -Path $lfDir | Out-Null
+            $lfCopy = Join-Path $lfDir (Split-Path $Path -Leaf)
+            $py = Invoke-ExakitPythonFile -Path $script:ExakitCsvGuardScript -Arguments @("lf", $Path, $lfCopy, $csvDelimiter)
+            if ($py.Code -eq 0 -and (Test-Path -LiteralPath $lfCopy)) {
+                $source = $lfCopy
+                $uploadArgs[1] = $lfCopy
+                $script:ExakitCsvFlags = (@($script:ExakitCsvFlags.Split(',') | Where-Object { $_ -and $_ -ne "crlf" }) -join ",")
+                Write-ExakitLog "INFO" "$(Split-Path $Path -Leaf): Windows line endings made LF in a temporary copy for the load"
+            }
+        } catch {
+            Write-ExakitLog "WARN" "line endings left as they are in $(Split-Path $Path -Leaf): $($_.Exception.Message)"
+        }
+    }
+    try {
+        # A user's own file ($script:ExakitNumberGuard; a bundled dataset brings
+        # its own DDL) never loads as wrong numbers: see Test-ExakitCsvNumberGuard.
+        $script:ExakitGuardNote = ""
+        if ($script:ExakitNumberGuard -and (Get-ExakitDataFileKind $Path) -eq "csv") {
+            $guardDelim = ","
+            if ($uploadArgs -contains "--delimiter") { $guardDelim = $uploadArgs[[array]::IndexOf($uploadArgs, "--delimiter") + 1] }
+            if (-not (Test-ExakitCsvNumberGuard -Path $source -Target $Target -Delimiter $guardDelim)) {
+                Write-ExakitLog "REFUSE" "$(Split-Path $Path -Leaf) -> ${Target}: $($script:ExakitGuardReason)"
+                $script:ExakitUploadReason = $script:ExakitGuardReason
+                if ($Soft) { return $false }
+                Fail "Could not load $(Split-Path $Path -Leaf) into $Target - $($script:ExakitGuardReason)"
+            }
+        }
+        $result = Invoke-Exapump $uploadArgs
+        if (-not $result.Success -and (Test-ExakitUploadCutShort -Output $result.Output)) {
+            # A cut transfer is recovered here too, not only in the dataset batch:
+            # a user's own file crosses the same import connection. Only a cut the
+            # output SAYS, as in the twin, which reads this attempt from the log.
+            $delim = ","
+            if ($uploadArgs -contains "--delimiter") { $delim = $uploadArgs[[array]::IndexOf($uploadArgs, "--delimiter") + 1] }
+            $rec = Invoke-ExakitUploadRecovery -Path $source -Target $Target -Delimiter $delim `
+                -ExitCode $result.ExitCode -Output $result.Output
+            $result = @{ Output = $rec.Output; ExitCode = $result.ExitCode; Success = [bool]$rec.Success }
+        }
+    } finally {
+        if ($lfDir) { Remove-Item -Recurse -Force -LiteralPath $lfDir -ErrorAction SilentlyContinue }
     }
     if (-not $result.Success) {
         # -Soft: a bulk folder load must not lose the other thirty-nine files to
@@ -869,7 +1134,7 @@ function Invoke-ExapumpUpload {
         # news twice, the loud way first. The REASON is kept, so that caller can
         # put it in its own line instead of sending the reader to a logfile.
         if ($Soft) {
-            $script:ExakitUploadReason = Get-ExakitUploadFailureReason -Output $result.Output
+            $script:ExakitUploadReason = Get-ExakitUploadFailureReason -Output $result.Output -Path $Path
             return $false
         }
         Write-ExapumpOutput -Output $result.Output
@@ -880,14 +1145,25 @@ function Invoke-ExapumpUpload {
         # does know that fault is the one the soft path above already calls, so
         # the FATAL outcome was the one getting the worse message. Same reason,
         # same words, on both paths. Twin of exapump_upload in exapump.sh.
-        $uploadWhy = Get-ExakitUploadFailureReason -Output $result.Output
-        if ($uploadWhy) { Fail "Could not load $(Split-Path $Path -Leaf) into $Target - $uploadWhy" }
+        $uploadWhy = Get-ExakitUploadFailureReason -Output $result.Output -Path $Path
+        # exapump CREATES the table before it imports a row, so a refused file
+        # left an empty table behind. The caller says when the table was not
+        # there before ($script:ExakitUploadTableBefore = "absent"); only then
+        # is it ours to drop. Twin of EXAKIT_UPLOAD_TABLE_BEFORE.
+        $gone = ""
+        if ($script:ExakitUploadTableBefore -eq "absent") {
+            try { $gone = Remove-ExakitPhantomTable -Target $Target -RowsBefore "absent" } catch { $gone = "" }
+        }
+        if ($uploadWhy) { Fail "Could not load $(Split-Path $Path -Leaf) into $Target - $uploadWhy$gone" }
         # "Upload failed:" on purpose - the "Could not load X into Y" form on
         # the line above is reserved for the branch that HAS the reason and
         # appends it. Same distinction as the shell twin.
         Fail "Upload failed: $Path -> $Target. What exapump said is in the log: exakit logs setup. Check the database is up with: exakit status"
     }
     if (-not $script:ExakitUploadQuiet) { Ok "$(Split-Path $Path -Leaf) loaded" }
+    if ($script:ExakitGuardNote -and -not $script:ExakitGuardQuiet) {
+        Warn2 "Kept as text in $Target, not loaded as wrong numbers: $($script:ExakitGuardNote). Convert in SQL when needed, e.g. TO_NUMBER(REPLACE(col, '.', '')) for a thousands dot."
+    }
     # A CRLF file whose last column is text LOADS - with a carriage return on
     # every value in that column, because exapump set no row separator and the
     # database took the CR as data. A bridge that will not rewrite the file
@@ -1361,7 +1637,11 @@ function Get-ExapumpRowCountMany {
     return $counts
 }
 
-function Get-ExakitTableName {
+# Get-ExakitNamePart - the file's name as letters, digits and underscores,
+# upper case, nothing else decided. A part of a name (the suffix a JSON
+# document's arrays add to its base table) needs no more than this. Twin of
+# _exakit_name_part_from_path.
+function Get-ExakitNamePart {
     param([Parameter(Mandatory)][string]$Path)
     $base = (Split-Path $Path -Leaf) -replace '\?.*$', ''
     $base = [System.IO.Path]::GetFileNameWithoutExtension($base)
@@ -1369,9 +1649,76 @@ function Get-ExakitTableName {
     # ConvertTo-UpperInvariantString instead of acting as the operator.
     $table = ((ConvertTo-UpperInvariantString $base) -replace '[^A-Z0-9_]', '_')
     $table = ($table -replace '^_+', '') -replace '_+$', ''
-    $table = $table -replace '_{2,}', '_'
+    return ($table -replace '_{2,}', '_')
+}
+
+function Get-ExakitTableName {
+    param([Parameter(Mandatory)][string]$Path)
+    $table = Get-ExakitNamePart $Path
     if (-not $table) { return "MY_TABLE" }
+    # A NAME EXASOL TAKES WITHOUT QUOTES. exapump writes the target into its
+    # CREATE TABLE unquoted, so 2025-01.csv (a regular identifier starts with
+    # a letter), ORDER.csv, user.csv and date.parquet (reserved words) never
+    # loaded. T_ in front makes each a plain name. Twin of
+    # exakit_table_name_from_path.
+    if ($table -match '^[0-9]') { $table = "T_$table" }
+    if (Test-ExakitSqlReserved $table) { $table = "T_$table" }
+    # Exasol's identifier limit.
+    if ($table.Length -gt 128) { $table = $table.Substring(0, 128) -replace '_+$', '' }
     return $table
+}
+
+# The reserved words, tools/exasol_reserved_words.txt in the kit: read once.
+$script:ExakitCsvGuardScript = Join-Path $PSScriptRoot "csv_guard.py"
+$script:ExakitUploadTableBefore = ""
+$script:ExakitNumberGuard = $false
+$script:ExakitGuardQuiet = $false
+$script:ExakitGuardNote = ""
+$script:ExakitGuardReason = ""
+$script:ExakitReservedWordsFile = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "tools") "exasol_reserved_words.txt"
+$script:ExakitReservedWords = $null
+function Test-ExakitSqlReserved {
+    param([string]$Name)
+    if ($null -eq $script:ExakitReservedWords) {
+        $set = @{}
+        try {
+            if (Test-Path -LiteralPath $script:ExakitReservedWordsFile) {
+                foreach ($line in (Get-Content -LiteralPath $script:ExakitReservedWordsFile)) {
+                    $w = ("" + $line).Trim()
+                    if ($w -and -not $w.StartsWith("#")) { $set[$w.ToUpperInvariant()] = $true }
+                }
+            }
+        } catch { }
+        $script:ExakitReservedWords = $set
+    }
+    if (-not $Name) { return $false }
+    return $script:ExakitReservedWords.ContainsKey($Name.ToUpperInvariant())
+}
+
+# Get-ExakitIdentifierProblem - why the database would not take NAME unquoted,
+# in words, or "" when it would. Twin of exakit_identifier_problem.
+function Get-ExakitIdentifierProblem {
+    param([string]$Name)
+    if (-not $Name) { return "it is empty" }
+    if ($Name -notmatch '^[A-Za-z0-9_]+$') { return "only letters, numbers and underscores can be used" }
+    if ($Name -notmatch '^[A-Za-z]') { return "$Name does not start with a letter" }
+    if (Test-ExakitSqlReserved $Name) { return "$($Name.ToUpperInvariant()) is an SQL reserved word" }
+    if ($Name.Length -gt 128) { return "it is longer than 128 characters" }
+    return ""
+}
+
+# Get-ExakitTableTargetProblem - the sentence a refused target is warned with.
+# Twin of exakit_table_target_problem.
+function Get-ExakitTableTargetProblem {
+    param([string]$Target)
+    if ($Target -notmatch '^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$') {
+        return "Target table must look like SCHEMA.TABLE and use letters, numbers, or underscores."
+    }
+    $parts = $Target -split '\.', 2
+    $why = Get-ExakitIdentifierProblem $parts[0]
+    if (-not $why) { $why = Get-ExakitIdentifierProblem $parts[1] }
+    if (-not $why) { return "" }
+    return "Target table $Target cannot be used: $why. Each part must start with a letter and not be an SQL reserved word (put T_ in front, e.g. T_ORDER)."
 }
 
 # THE PROFILE, NOT $HOME - the same distinction Get-ExakitProfileHome exists to
@@ -1395,6 +1742,9 @@ function Get-ExakitNormalizedPath {
 function Test-ExakitTableTarget {
     param([Parameter(Mandatory)][string]$Target)
     if ($Target -notmatch '^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$') { return $false }
+    # exapump puts the name into its CREATE TABLE unquoted: a part the
+    # database would read as something else (2025_01, ORDER) cannot load.
+    if (Get-ExakitTableTargetProblem $Target) { return $false }
     return $true
 }
 
@@ -1469,7 +1819,7 @@ function Request-ExakitOptionalVerification {
 # Get-ExakitDataFileKind <path> - csv | parquet | json | unknown, from the
 # name. Twin of exakit_data_file_kind in exapump.sh. A JSON file needs the
 # ingest engine rather than exapump, which is why it is named separately:
-# Windows x86_64 runs that engine (see Get-JsonTablesEngineAsset), so the kind
+# Windows x86_64 runs that engine, so the kind
 # routes the file, and only a machine with no published engine refuses it.
 function Get-ExakitDataFileKind {
     param([Parameter(Mandatory)][string]$Path)
@@ -1533,17 +1883,87 @@ function Get-ExakitCsvInspection {
         $head = $first.TrimEnd("`r")
         $second = $null
         if (-not $reader.EndOfStream) { $second = $reader.ReadLine() }
+        # The first records too: the delimiter is read from them and the header.
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add($head)
+        if ($null -ne $second) { $lines.Add($second) }
+        while ($lines.Count -lt 50 -and -not $reader.EndOfStream) { $lines.Add($reader.ReadLine()) }
     } finally { $stream.Dispose() }
     if (-not $second) { $result.HeaderOnly = $true; return $result }
-    if ("$head" -notmatch ',') {
-        if ("$head" -match ';') { $result.Delimiter = ";" }
-        elseif ("$head" -match "`t") { $result.Delimiter = "`t" }
-    }
+    # The delimiter is the one that splits the header AND the first records
+    # into the same number of fields (Get-ExakitCsvDelimiter). A header-only
+    # rule read "Betrag (EUR, netto);Datum" as comma-separated and loaded
+    # wrong columns and wrong numbers with no error.
+    $pick = Get-ExakitCsvDelimiter -Lines $lines.ToArray()
+    $result.Delimiter = $pick.Substring(0, 1)
     $flags = @()
     if ($bom) { $flags += "bom" }
     if ($crlf) { $flags += "crlf" }
+    if ($pick.EndsWith("?")) { $flags += "ambiguous-delimiter" }
     $result.Flags = ($flags -join ",")
     return $result
+}
+
+# Get-ExakitCsvDelimiter -Lines <string[]> - which of ',' ';' and a tab
+# separates the fields, read from the header and the first nine records. For
+# each candidate the delimiters outside quotes are counted per record (a quote
+# opens a field only at the start of one, and a quoted line break does not end
+# the record). A candidate is consistent when the header has at least one and
+# every record has the same count. The consistent candidate with the most
+# fields wins. On a tie the comma loses: a comma file with the same number of
+# semicolons on every line is rare, a semicolon file with a comma in the header
+# and one decimal comma per row is the export this rule is for. With none
+# consistent, the one with the most fields in the header wins, a tie going to
+# the comma, then the semicolon (the old header-only order). Returns the
+# delimiter, followed by "?" when more than one candidate fits. Twin of
+# exakit_csv_delimiter in exapump.sh.
+function Get-ExakitCsvDelimiter {
+    param([string[]]$Lines)
+    $quote = [char]'"'
+    $cands = @([char]',', [char]';', [char]"`t")
+    $hdr = @(-1, -1, -1); $good = @($false, $false, $false)
+    for ($k = 0; $k -lt 3; $k++) {
+        $d = $cands[$k]
+        $inq = $false; $fs = $true; $cnt = 0; $recs = 0; $h = -1; $ok = $true
+        foreach ($line in $Lines) {
+            if ($recs -ge 10) { break }
+            $s = "" + $line
+            if ($s.EndsWith("`r")) { $s = $s.Substring(0, $s.Length - 1) }
+            if (-not $inq -and $s.Length -eq 0) { continue }
+            for ($j = 0; $j -lt $s.Length; $j++) {
+                $c = $s[$j]
+                if ($inq) {
+                    if ($c -eq $quote) {
+                        if ($j + 1 -lt $s.Length -and $s[$j + 1] -eq $quote) { $j++ } else { $inq = $false }
+                    }
+                } elseif ($c -eq $quote -and $fs) {
+                    $inq = $true
+                } elseif ($c -eq $d) {
+                    $cnt++; $fs = $true; continue
+                }
+                $fs = $false
+            }
+            if ($inq) { continue }
+            if ($h -lt 0) { $h = $cnt } elseif ($cnt -ne $h) { $ok = $false }
+            $recs++; $cnt = 0; $fs = $true
+        }
+        if ($h -lt 1 -or $recs -lt 2) { $ok = $false }
+        $hdr[$k] = $h; $good[$k] = $ok
+    }
+    $best = -1; $fits = 0
+    foreach ($k in @(1, 2, 0)) {
+        if ($good[$k]) { $fits++; if ($best -lt 0 -or $hdr[$k] -gt $hdr[$best]) { $best = $k } }
+    }
+    if ($best -lt 0) {
+        $fits = 0
+        for ($k = 0; $k -lt 3; $k++) {
+            if ($hdr[$k] -gt 0) { $fits++; if ($best -lt 0 -or $hdr[$k] -gt $hdr[$best]) { $best = $k } }
+        }
+    }
+    if ($best -lt 0) { $best = 0 }
+    $out = [string]$cands[$best]
+    if ($fits -gt 1) { $out += "?" }
+    return $out
 }
 
 # A .tsv or a tabular .txt is data exapump will not take BY NAME: it picks the
@@ -1558,10 +1978,7 @@ function Test-ExakitCsvExtensionRefused {
 # Show-ExakitJsonUnsupported - one honest explanation, with the reason the
 # add-on itself gives, instead of a load that fails at the first ingest.
 function Show-ExakitJsonUnsupported {
-    $why = ""
-    if (Get-Command Get-JsonTablesApplicableReason -ErrorAction SilentlyContinue) {
-        $why = Get-JsonTablesApplicableReason
-    }
+    $why = Get-ExakitJsonTablesReason
     if ($why) {
         Warn2 "JSON files need an engine that is not available on this machine: $why"
     } else {
@@ -1571,7 +1988,7 @@ function Show-ExakitJsonUnsupported {
 }
 
 # --- JSON loading ------------------------------------------------------------
-# Windows x86_64 CAN run the ingest engine - Get-JsonTablesEngineAsset publishes
+# Windows x86_64 can run the ingest engine; the Python add-on publishes
 # a build for it, which is why the add-on is offered and installable here - but
 # this side had no twin of the shell's JSON load path at all, so every .json
 # file was refused on every Windows machine. The refusal even contradicted
@@ -1580,12 +1997,55 @@ function Show-ExakitJsonUnsupported {
 # These are the twins of _exakit_json_tables_ready, _exakit_json_tables_ensure
 # and exakit_load_local_json in exapump.sh.
 
+function Get-ExakitJsonTablesBin {
+    $recorded = Get-ExakitManifestValue 'components.json_tables.command'
+    if ($recorded) { return [string]$recorded }
+    if ($env:EXAKIT_JSON_TABLES_BIN) { return $env:EXAKIT_JSON_TABLES_BIN }
+    return (Join-Path $script:BinDir 'exasol-json-tables.cmd')
+}
+
+function Get-ExakitJsonTablesReason {
+    if (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py')) {
+        return ("" + (Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'applicable-reason'))
+    }
+    return ""
+}
+
+# The data loader owns this one ingest invocation. Preserve the add-on log
+# named by its failure message without loading the retired PowerShell module.
+function Invoke-ExakitJsonTablesLogged {
+    param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @())
+    $log = Join-Path $script:LogDir 'json-tables.log'
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
+        Add-Content -Path $log -Value ("=== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $Exe + " " + ($Arguments -join " "))
+    } catch { }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& $Exe @Arguments 2>&1) -join "`n"
+        $code = $LASTEXITCODE
+    } catch {
+        $out = "$_"
+        $code = 1
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    try { if ($out) { Add-Content -Path $log -Value $out } } catch { }
+    if ($out) { Write-ExakitLog 'INFO' $out }
+    # What the engine said, for a caller that has to name the failure.
+    $script:ExakitJsonTablesOutput = "$out"
+    return $code
+}
+
 # Test-ExakitJsonTablesReady - is the add-on installed AND usable right now?
 # Twin of _exakit_json_tables_ready.
 function Test-ExakitJsonTablesReady {
-    if (-not (Get-Command Get-JsonTablesInstalledVersion -ErrorAction SilentlyContinue)) { return $false }
-    if (-not (Get-JsonTablesInstalledVersion)) { return $false }
-    $bin = Get-JsonTablesBin
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) { return $false }
+    if (-not (Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'installed-version')) { return $false }
+    # A launcher an earlier kit wrote is not usable yet: the install repairs it.
+    if (Test-ExakitAddonNeedsUpdate 'json-tables') { return $false }
+    $bin = Get-ExakitJsonTablesBin
     if (-not $bin) { return $false }
     return (Test-Path $bin)
 }
@@ -1594,8 +2054,8 @@ function Test-ExakitJsonTablesReady {
 # Defensive about the module being absent: a kit copy without it cannot install
 # the add-on either, so "no" is the honest answer in both cases.
 function Test-ExakitJsonTablesApplicable {
-    if (-not (Get-Command Test-JsonTablesApplicable -ErrorAction SilentlyContinue)) { return $false }
-    return [bool](Test-JsonTablesApplicable)
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) { return $false }
+    return [bool](Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'applicable')
 }
 
 # Confirm-ExakitJsonTablesReady - make the JSON engine usable, saying nothing.
@@ -1625,11 +2085,9 @@ function Confirm-ExakitJsonTablesReady {
         return $false
     }
 
-    # No dot-sourcing fallback here, unlike the shell: a dot-sourced module
-    # inside a function loads into THAT function's scope and is gone on return.
-    # Both entry points (setup/exakit.ps1 and setup-windows.ps1) source
-    # every add-on module at the top, so a missing one means an old kit copy.
-    if (-not (Get-Command Install-JsonTables -ErrorAction SilentlyContinue)) {
+    # The Python marketplace service is the add-on's implementation. The
+    # shared PowerShell bridge below remains the stable platform boundary.
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) {
         $script:JsonTablesBlocked = "This kit copy does not carry the JSON engine - update the kit first: exakit update"
         Warn2 $script:JsonTablesBlocked
         return $false
@@ -1648,7 +2106,55 @@ function Confirm-ExakitJsonTablesReady {
     # boot if that is on. It quiets its own detail into the logfile. The shell
     # calls the singular _exakit_marketplace_install_one; this side has only the
     # plural, and one id is the same work.
+    # A minute, once: the bar says so instead of sitting still on the file's name. Twin of
+    # the phase in _exakit_json_tables_ensure (a no-op when no bar is running).
+    Set-ExakitProgressPhase "installing the JSON engine (first JSON file only)"
+    # The download writes how far it is ("downloading the JSON engine, 6 of 15 MB")
+    # to this file and the bar shows it, so a slow line is not a hang. Twin of
+    # EXAKIT_PROGRESS_PHASE_FILE in _exakit_json_tables_ensure.
+    $phaseFile = $null
+    if ($null -ne $script:UiSpinFlag) {
+        try {
+            $phaseFile = [IO.Path]::GetTempFileName()
+            $script:UiSpinFlag.PhaseFile = $phaseFile
+            $env:EXAKIT_PROGRESS_PHASE_FILE = $phaseFile
+        } catch { $phaseFile = $null }
+    }
+    # One file (or a URL) has no folder bar: a spinner of its own says it for the
+    # whole install and leaves no line behind. Meanwhile the marketplace's lines
+    # go to the log and its notes are held here, so nothing prints into the
+    # spinner's line; a warning is still said once the spinner is gone. Twin of
+    # the spinner in _exakit_json_tables_ensure. With no spinner (a plain
+    # console, or a bar or table already on screen) the marketplace speaks as before.
+    $spin = ($script:UiFancy -and $null -eq $script:UiSpinFlag -and -not $script:UiTableLive -and
+        -not $script:UiBarActive -and $null -eq $script:ExakitAddonTable)
+    $prevQuiet = $script:ExakitQuietDetail
+    $prevKeep = $script:ExakitAddonTableKeep
+    $prevNotes = $script:ExakitAddonTableNotes
+    if ($spin) {
+        Start-ExakitSpinner "Installing the JSON engine"
+        $script:ExakitQuietDetail = $true
+        $script:ExakitAddonTableKeep = $true
+        $script:ExakitAddonTableNotes = @()
+    }
     try { Invoke-ExakitMarketplaceApply -Ids @("json-tables") | Out-Null } catch { }
+    finally {
+        if ($null -ne $phaseFile) {
+            Remove-Item Env:EXAKIT_PROGRESS_PHASE_FILE -ErrorAction SilentlyContinue
+            if ($null -ne $script:UiSpinFlag) { $script:UiSpinFlag.PhaseFile = $null }
+            Remove-Item -Force -ErrorAction SilentlyContinue $phaseFile
+        }
+        if ($spin) {
+            Stop-ExakitSpinnerAll
+            $script:ExakitQuietDetail = $prevQuiet
+            $script:ExakitAddonTableKeep = $prevKeep
+            $held = @($script:ExakitAddonTableNotes)
+            $script:ExakitAddonTableNotes = $prevNotes
+            foreach ($note in $held) {
+                if ($note.Kind -eq 'ok') { Write-ExakitLog "OK" $note.Text } else { Warn2 $note.Text }
+            }
+        }
+    }
     if (-not (Test-ExakitJsonTablesReady)) {
         $script:JsonTablesBlocked = "The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         Warn2 "The JSON engine could not be installed, so this file was not loaded."
@@ -1725,7 +2231,7 @@ print("normalised")
 # exactly; several keep it as their shared prefix, so the name the user typed
 # still describes every table the document produced.
 function Import-ExakitLocalJson {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Target)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Target, [switch]$Single)
     $schema = Get-ExakitTargetSchema $Target
     $base = ($Target -split "\.", 2)[1]
 
@@ -1757,12 +2263,30 @@ function Import-ExakitLocalJson {
         }
 
         $outDir = Join-Path $tmpDir "out"
-        $engine = Get-JsonTablesBin
+        $engine = Get-ExakitJsonTablesBin
         # Through Invoke-JsonTablesLogged so the engine's own words land in the
         # add-on's log too - the very file the failure message below points at.
-        if ((Invoke-JsonTablesLogged -Exe $engine -Arguments @("ingest", "--input", $ingestInput, "--output-dir", $outDir)) -ne 0) {
-            Warn2 "This JSON file could not be read - see: exakit logs json-tables"
-            Info "It must be one JSON document, or NDJSON with one document per line."
+        $script:ExakitJsonTablesOutput = ""
+        $engineCode = Invoke-ExakitJsonTablesLogged -Exe $engine -Arguments @("ingest", "--input", $ingestInput, "--output-dir", $outDir)
+        if ($engineCode -ne 0) {
+            # The engine's own first word on it.
+            $why = ""
+            foreach ($line in ("" + $script:ExakitJsonTablesOutput) -split "`r?`n") {
+                if ($line -match '(?i)error|denied|not found|no such|cannot|failed|not recognized') { $why = $line.Trim(); break }
+            }
+            if (-not $why) { $why = "exit $engineCode" }
+            $script:ExakitUploadReason = $why
+            if ($verdict -eq "normalised" -or $verdict -eq "ndjson") {
+                # THE FILE IS FINE: Python just read it. Blaming it sent the
+                # reader to fix a file that had nothing wrong with it while the
+                # engine itself could not run. Twin of the same branch in
+                # exakit_load_local_json.
+                Warn2 "The JSON Tables engine could not load $(Get-ExakitTilde $Path): $why"
+                Info "The file itself is valid JSON. Repair the engine with: exakit update json-tables (detail: exakit logs json-tables)"
+            } else {
+                Warn2 "This JSON file could not be read: $why - see: exakit logs json-tables"
+                Info "It must be one JSON document, or NDJSON with one document per line."
+            }
             Info "Nothing was loaded; the database is unchanged."
             return $false
         }
@@ -1778,19 +2302,79 @@ function Import-ExakitLocalJson {
             return $false
         }
 
+        # Which table each Parquet file lands on, decided before anything is
+        # sent. The engine names its files after the file it read:
+        # <stem>.parquet for the documents, <stem>.<array>[].parquet per nested
+        # array - and that stem is the kit's temporary copy when the file was
+        # re-flowed, so ga_json_test.json became GA_JSON_TEST_NORMALISED. The
+        # stem is taken off. Twin of _jl_stem in exakit_load_local_json.
+        $plan = @()
+        if ($files.Count -eq 1) {
+            $plan += [pscustomobject]@{ File = $files[0]; Table = $Target }
+        } else {
+            $stem = Get-ExakitNamePart $ingestInput
+            foreach ($file in $files) {
+                $part = Get-ExakitNamePart $file
+                if ($part -eq $stem) { $table = Get-ExakitUpperTableTarget $Target }
+                elseif ($stem -and $part.StartsWith("$($stem)_")) { $table = Get-ExakitUpperTableTarget "$schema.$($base)_$($part.Substring($stem.Length + 1))" }
+                else { $table = Get-ExakitUpperTableTarget "$schema.$($base)_$part" }
+                $plan += [pscustomobject]@{ File = $file; Table = $table }
+            }
+        }
+
+        # ONE FILE BY NAME is held to the rule a folder is held to: exapump's
+        # upload APPENDS, and this path loaded the same document on top of
+        # itself on every run - EXAKIT_ON_EXISTING ignored, no receipt. Tables
+        # this document is about to write that already hold rows are the same
+        # question a CSV asks. Twin of the "single" branch in
+        # exakit_load_local_json.
+        if ($Single) {
+            Clear-ExakitTableListing
+            $held = [long]0; $heldIn = @(); $changed = "-"
+            foreach ($p in $plan) {
+                $n = Get-ExakitTableRowCount $p.Table
+                if ($null -eq $n -or $n -eq "absent" -or [long]$n -le 0) { continue }
+                $held += [long]$n; $heldIn += $p.Table
+                # An edited document: every table holding rows has to be this
+                # file's own, from its earlier version.
+                if ($changed) { $changed = Get-ExakitLoadReceiptChanged $p.Table $Path $n }
+            }
+            if ($changed -eq "-") { $changed = "" }
+            if ($held -gt 0) {
+                $heldText = $heldIn -join ", "
+                $policy = "" + $env:EXAKIT_ON_EXISTING
+                if (-not $policy) { $policy = Read-ExakitFileClashAnswer -Target $heldText -Rows $held -Changed $changed }
+                if ($policy -eq "replace") {
+                    Info "Replacing the $(Get-ExakitRowsLabel $held) already in $heldText - dropped and rebuilt (EXAKIT_ON_EXISTING=replace)."
+                    foreach ($t in $heldIn) {
+                        [void](Invoke-Exapump @("sql", "-p", $script:ExapumpProfile, "DROP TABLE IF EXISTS $t"))
+                        Remove-ExakitLoadReceipt $t
+                        Write-ExakitLog "RESET" "$t dropped before loading $(Split-Path $Path -Leaf)"
+                    }
+                } elseif ($policy -eq "append") {
+                    Info "Appending to the $(Get-ExakitRowsLabel $held) already in $heldText (EXAKIT_ON_EXISTING=append)."
+                } elseif ($changed) {
+                    Write-ExakitChangedFileRefusal -Targets $heldText -Rows $held -Changed $changed
+                    return "declined"
+                } else {
+                    $verb = "hold"; if ($heldIn.Count -eq 1) { $verb = "holds" }
+                    Warn2 "Not loaded: $heldText already $verb $(Get-ExakitRowsLabel $held) with no load record for this file (another file loaded them, or a load made before this kit version kept no record)."
+                    Info "Re-run with `$env:EXAKIT_ON_EXISTING = 'replace' (drop and rebuild) or 'append' (load on top)."
+                    return "declined"
+                }
+            }
+        }
+
         Confirm-ExakitSchemaExists $schema | Out-Null
         $loaded = @()
-        if ($files.Count -eq 1) {
-            Invoke-ExapumpUpload $files[0] $Target | Out-Null
-            Confirm-ExakitLoadedTable $Target
-            $loaded = @($Target)
-        } else {
-            foreach ($file in $files) {
-                $table = Get-ExakitUpperTableTarget "$schema.$($base)_$(Get-ExakitTableName $file)"
-                Invoke-ExapumpUpload $file $table | Out-Null
-                Confirm-ExakitLoadedTable $table
-                $loaded += $table
-            }
+        foreach ($p in $plan) {
+            Invoke-ExapumpUpload $p.File $p.Table | Out-Null
+            $script:ExakitLastVerifiedRows = $null
+            Confirm-ExakitLoadedTable $p.Table
+            # A receipt per table, as the folder load writes them: it is what
+            # lets the next run of this same file say "already loaded".
+            if ($Single) { Write-ExakitLoadReceipt -Target $p.Table -File $Path -Rows $script:ExakitLastVerifiedRows }
+            $loaded += $p.Table
         }
 
         Set-ExakitManifestValue "data.last_load.type" "local_json"
@@ -1803,7 +2387,22 @@ function Import-ExakitLocalJson {
     }
 }
 
+# Stop-ExakitLocalFileRefused <message> - a file the loader cannot take: said as
+# the card every refusal has, logged, and thrown as ExakitRefusedException - bad
+# input, never a failed step. `exakit data-load` answers it with exit 2 once the
+# rows after the file have had their turn; the installer warns and carries on.
+# Twin of _llf_refuse in exapump.sh (exit 3, read the same way by its callers).
+# It used to be a bare `exit 2`, which ended the whole installer.
+function Stop-ExakitLocalFileRefused {
+    param([Parameter(Mandatory)][string]$Message)
+    Write-Host ""; Write-Host "  [x] $Message"
+    Write-ExakitLog "REJECT" $Message
+    throw [ExakitRefusedException]::new($Message)
+}
+
 function Import-ExakitLocalFile {
+    # The files of this load that did not load, for the installer's note.
+    $script:ExakitLocalFileNames = @()
     $defaultPath = if ($env:EXAKIT_DATA_FILE) { $env:EXAKIT_DATA_FILE } else { "" }
     while ($true) {
         $rawPath = Read-ExakitPrompt "Local CSV / Parquet / JSON file - or a folder of them (type back to return)" $defaultPath
@@ -1836,34 +2435,40 @@ function Import-ExakitLocalFile {
             # and does not rename it behind the user's back.
             if ($llfKind -eq "csv" -and (Test-ExakitCsvExtensionRefused $path)) {
                 Warn2 "$llfName looks tabular, but exapump reads .csv and .parquet only - rename it to .csv and load that."
-                if (-not (Test-ExakitInteractive)) { exit 2 }
+                if (-not (Test-ExakitInteractive)) { Stop-ExakitLocalFileRefused "Cannot load '$llfName': exapump reads .csv and .parquet only - rename it to .csv first." }
                 continue
             }
             if ($llfKind -eq "unknown") {
                 if (-not (Test-ExakitInteractive)) {
-                    Write-Host ""; Write-Host "  [x] Cannot load '$llfName': only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) are supported - rename or convert the file first."
-                    exit 2
+                    Stop-ExakitLocalFileRefused "Cannot load '$llfName': only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) are supported - rename or convert the file first."
                 }
                 Warn2 "Only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) can be loaded: $llfName"
                 continue
             }
             if ($llfKind -eq "csv") {
-                # The delimiter is read from the header now, so the only thing
-                # left to say is which one was found.
-                $llfHead = ""
-                try { $llfHead = (Get-Content -Path $path -TotalCount 1 -ErrorAction Stop) } catch { }
-                if ("$llfHead" -notmatch ',') {
-                    if ("$llfHead" -match ';') { Info "$llfName is semicolon-separated - loading it as such." }
-                    elseif ("$llfHead" -match "`t") { Info "$llfName is tab-separated - loading it as such." }
+                # The delimiter is read from the file now (Get-ExakitCsvInspection),
+                # so the only thing left to say is which one was found - and,
+                # when more than one fits, which one is used.
+                $llfLook = $null
+                try { $llfLook = Get-ExakitCsvInspection -Path $path } catch { }
+                if ($llfLook -and -not $llfLook.HeaderOnly) {
+                    $llfDname = "tab"
+                    if ($llfLook.Delimiter -eq ";") { $llfDname = "semicolon" } elseif ($llfLook.Delimiter -eq ",") { $llfDname = "comma" }
+                    if (("," + $llfLook.Flags + ",") -like "*,ambiguous-delimiter,*") { Info "$llfName fits more than one separator - loading it as $llfDname-separated." }
+                    elseif ($llfLook.Delimiter -eq ";") { Info "$llfName is semicolon-separated - loading it as such." }
+                    elseif ($llfLook.Delimiter -eq "`t") { Info "$llfName is tab-separated - loading it as such." }
                 }
             }
             break
         }
         Warn2 "File not found or empty: $path"
         if (-not (Test-ExakitInteractive)) {
-            Write-Host ""; Write-Host "  [x] File not found or empty: $path"; exit 2
+            Stop-ExakitLocalFileRefused "File not found or empty: $path"
         }
     }
+    # The installer names the file if it does not load (read only on failure).
+    # Twin of EXAKIT_LOCAL_FILE_NAMES in exakit_load_local_file.
+    $script:ExakitLocalFileNames = @([System.IO.Path]::GetFileName($path))
     $kind = Get-ExakitDataFileKind $path
     # A JSON file this machine can never load is refused HERE, before the user
     # picks a table for a load that cannot happen. What is NOT settled here is
@@ -1891,12 +2496,17 @@ function Import-ExakitLocalFile {
             return "back"
         }
         if (Test-ExakitTableTarget $target) { break }
-        Warn2 "Target table must look like SCHEMA.TABLE and use letters, numbers, or underscores."
+        Warn2 (Get-ExakitTableTargetProblem $target)
         if (-not (Test-ExakitInteractive)) {
-            Fail "EXAKIT_DATA_TABLE must look like SCHEMA.TABLE and use letters, numbers, or underscores."
+            Fail "EXAKIT_DATA_TABLE: $(Get-ExakitTableTargetProblem $target)"
         }
     }
     $target = Get-ExakitUpperTableTarget $target
+    # The table got a different name from the file: say which, and why.
+    if (-not $env:EXAKIT_DATA_TABLE -and $target -eq (Get-ExakitUpperTableTarget $defaultTable) -and
+        ($target.Split('.', 2)[1] -ne (Get-ExakitNamePart $path))) {
+        Info "$([System.IO.Path]::GetFileName($path)) loads as $($target.Split('.', 2)[1]): a table name must start with a letter, must not be an SQL reserved word and has at most 128 characters."
+    }
 
     # Every file kind is asked the same two things, in the same order, before
     # any work starts: the file, then SCHEMA.TABLE. What has to happen after
@@ -1906,7 +2516,46 @@ function Import-ExakitLocalFile {
         $script:ExakitUploadQuiet = $true
         $script:ExakitActiveLabel = "Loading your data"
         try {
-            if (-not (Import-ExakitLocalJson -Path $path -Target $target)) { return "back" }
+            # A JSON file that did not load is a failure, not "back": it
+            # answered exit 0 under "Local file load skipped". Twin of the
+            # shell side's return 1.
+            $script:ExakitUploadReason = ""
+            # The same three answers as a CSV, read before anything runs.
+            $jsonPolicy = "" + $env:EXAKIT_ON_EXISTING
+            if ($jsonPolicy -ne "" -and (@("skip", "replace", "append") -notcontains $jsonPolicy)) {
+                Stop-ExakitLocalFileRefused "EXAKIT_ON_EXISTING must be skip, replace or append (got '$jsonPolicy')."
+            }
+            # Loaded from this very file, and every table it made still holds
+            # exactly what it put there: leave it, as a CSV is left.
+            Clear-ExakitTableListing
+            $landedRows = Get-ExakitFileAlreadyLanded (Get-ExakitTargetSchema $target) $path
+            if ($null -ne $landedRows -and $jsonPolicy -ne "replace" -and $jsonPolicy -ne "append") {
+                # Named from the load record: a byte-identical copy matches
+                # the original's receipts, and the tables are the original's.
+                $leaf = [System.IO.Path]::GetFileName($path)
+                $from = $leaf
+                if ($script:ExakitLandedFrom) { $from = $script:ExakitLandedFrom }
+                $made = $target
+                if (@($script:ExakitLandedTables).Count -gt 0) { $made = @($script:ExakitLandedTables) -join ", " }
+                $verb = "hold"; $left = "they are"
+                if (@($script:ExakitLandedTables).Count -le 1) { $verb = "holds"; $left = "it is" }
+                Ok "$made already $verb the $(Get-ExakitRowsLabel $landedRows) $from loaded - left as $left."
+                if ($from -ne $leaf) { Info "$leaf has the same content as $from, so it is not loaded again." }
+                Info "Load it again on top with `$env:EXAKIT_ON_EXISTING = 'append', or drop and rebuild it with `$env:EXAKIT_ON_EXISTING = 'replace'."
+                return
+            }
+            $jsonResult = @(Import-ExakitLocalJson -Path $path -Target $target -Single)[-1]
+            # The string on the LEFT: a load that worked answers $true, and
+            # `$true -eq "declined"` is TRUE in PowerShell (the right side is
+            # cast to the left's type, and a non-empty string is $true), so
+            # every successful JSON load returned "declined" - no "Loaded"
+            # line, exit 5.
+            if ("declined" -eq $jsonResult) { return "declined" }
+            if (-not $jsonResult) {
+                $why = "see the reason above"
+                if ($script:ExakitUploadReason) { $why = $script:ExakitUploadReason }
+                Fail "Could not load $([System.IO.Path]::GetFileName($path)) - $why"
+            }
         } finally {
             $script:ExakitUploadQuiet = $false
             $script:ExakitActiveLabel = ""
@@ -1930,9 +2579,8 @@ function Import-ExakitLocalFile {
         # Bad input, the same class as an unsupported file: exit 2, nothing
         # recorded - not the folder path's "failed", which the installer books
         # as a failed step over a typo in a variable.
-        Write-Host ""; Write-Host "  [x] EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
-        Write-ExakitLog "REJECT" "EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
-        exit 2
+        Stop-ExakitLocalFileRefused "EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
+
     }
     Clear-ExakitTableListing
     $rows = Get-ExakitTableRowCount $target
@@ -1948,18 +2596,23 @@ function Import-ExakitLocalFile {
         # Loaded from this very file, and still holding exactly what it put
         # there: loading it again would double it, which is what a re-run did.
         Ok "$target already holds the $(Get-ExakitRowsLabel $rows) this file loaded - left as it is."
-        Info "Load it again on top with EXAKIT_ON_EXISTING=append, or drop and rebuild it with EXAKIT_ON_EXISTING=replace."
+        Info "Load it again on top with `$env:EXAKIT_ON_EXISTING = 'append', or drop and rebuild it with `$env:EXAKIT_ON_EXISTING = 'replace'."
         return
     }
     if ($verdict -eq "clash") {
-        if ($policy -eq "") { $policy = Read-ExakitFileClashAnswer -Target $target -Rows $rows }
+        $changed = Get-ExakitLoadReceiptChanged $target $path $rows
+        if ($policy -eq "") { $policy = Read-ExakitFileClashAnswer -Target $target -Rows $rows -Changed $changed }
         if ($policy -eq "skip") {
             # Declined: the rows are the reader's and nobody said replace or
             # append, so nothing was changed. The menu turns this into exit 5,
             # the code every unconfirmed command answers with - not 0, which an
             # agent reads as "loaded", and not a failed step.
+            if ($changed) {
+                Write-ExakitChangedFileRefusal -Targets $target -Rows $rows -Changed $changed
+                return "declined"
+            }
             Warn2 "Not loaded: $target already holds $(Get-ExakitRowsLabel $rows) with no load record for this file (another file loaded them, or a load made before this kit version kept no record)."
-            Info "Re-run with EXAKIT_ON_EXISTING=replace (drop and rebuild it) or =append (load on top)."
+            Info "Re-run with `$env:EXAKIT_ON_EXISTING = 'replace' (drop and rebuild it) or 'append' (load on top)."
             return "declined"
         }
     }
@@ -1984,7 +2637,12 @@ function Import-ExakitLocalFile {
     $script:ExakitActiveLabel = "Loading your data"
     try {
         Confirm-ExakitSchemaExists (Get-ExakitTargetSchema $target) | Out-Null
-        Invoke-ExapumpUpload $path $target | Out-Null
+        # Not there before (or just dropped): a failed upload must not leave it
+        # behind empty.
+        $script:ExakitUploadTableBefore = ""
+        if ($rows -eq "absent" -or ($verdict -ne "load" -and $policy -eq "replace")) { $script:ExakitUploadTableBefore = "absent" }
+        $script:ExakitNumberGuard = $true
+        try { Invoke-ExapumpUpload $path $target | Out-Null } finally { $script:ExakitUploadTableBefore = ""; $script:ExakitNumberGuard = $false }
         Set-ExakitManifestValue "data.last_load.type" "local_file"
         Set-ExakitManifestValue "data.last_load.target" $target
         Set-ExakitManifestValue "data.last_load.source" $path
@@ -2040,9 +2698,12 @@ function Write-ExakitLoadReceipt {
         $rowText = "0"
         if ($null -ne $Rows) { $rowText = "$Rows" }
         $epoch = [int][double]::Parse((Get-Date -UFormat %s))
-        $line = "{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f $Target.ToUpper(), $bytes,
-            (Get-ExakitSha256 -Path $File), $rowText, $epoch, (Split-Path $File -Leaf)
-        Add-Content -LiteralPath $path -Value $line -Encoding UTF8
+        $line = "{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $Target.ToUpper(), $bytes,
+            (Get-ExakitSha256 -Path $File), $rowText, $epoch, (Split-Path $File -Leaf), (Get-ExakitReceiptFilePath $File)
+        # BOM-less: other readers take this file as UTF-8, and
+        # `Add-Content -Encoding UTF8` on PowerShell 5.1 starts a new file with
+        # a BOM that lands on the first table's name.
+        [System.IO.File]::AppendAllText($path, $line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
     } catch {
         # Bookkeeping must never fail a load that worked.
     }
@@ -2077,13 +2738,93 @@ function Get-ExakitLoadReceipt {
     }
 }
 
+# Get-ExakitReceiptFilePath <file> - the file's full path as a receipt keeps it
+# (the 7th field), so a later load can tell "the same file, edited since" from
+# "another file". Empty for a path a tab-separated line cannot hold. Twin of
+# _exakit_receipt_file_path.
+function Get-ExakitReceiptFilePath {
+    param([Parameter(Mandatory)][string]$File)
+    try {
+        $full = [System.IO.Path]::GetFullPath($File)
+        if ($full.Contains("`t") -or $full.Contains("`n")) { return "" }
+        return $full
+    } catch {
+        return ""
+    }
+}
+
+# Get-ExakitLoadReceiptChanged <target> <file> <rows> - were the rows in that
+# table loaded by this kit from THIS file, before it was edited? Returns
+# "<file name>|<epoch>" when the newest receipt for the table names this file
+# (by its path; a receipt written before paths were kept, by its name), still
+# accounts for every row the table holds, and records different content;
+# otherwise "". Twin of exakit_load_receipt_changed: without it an edited file
+# was called "rows this kit did not load", which made append look safe, and
+# every unchanged row then landed twice.
+function Get-ExakitLoadReceiptChanged {
+    param([Parameter(Mandatory)][string]$Target, [Parameter(Mandatory)][string]$File, $Rows)
+    try {
+        $path = Get-ExakitLoadReceiptsPath
+        if (-not (Test-Path $path)) { return "" }
+        $prefix = $Target.ToUpper() + "`t"
+        $last = $null
+        foreach ($line in @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)) {
+            if ($line.StartsWith($prefix)) { $last = $line }
+        }
+        if ($null -eq $last) { return "" }
+        $f = $last -split "`t"
+        if ($f.Count -lt 6 -or "$($f[3])" -ne "$Rows") { return "" }
+        $name = $f[5]
+        if ($f.Count -ge 7 -and $f[6]) {
+            if ($f[6] -ne (Get-ExakitReceiptFilePath $File)) { return "" }
+        } elseif (-not $name -or $name -ne (Split-Path $File -Leaf)) {
+            return ""
+        }
+        if ($f[1] -eq ("" + (Get-Item -LiteralPath $File).Length) -and $f[2] -eq (Get-ExakitSha256 -Path $File)) { return "" }
+        if (-not $name) { $name = Split-Path $File -Leaf }
+        return "$name|$($f[4])"
+    } catch {
+        return ""
+    }
+}
+
+# Get-ExakitLoadedFromText <name|epoch> - "this kit loaded from orders.csv on
+# 2026-11-18". Twin of _exakit_loaded_from.
+function Get-ExakitLoadedFromText {
+    param([Parameter(Mandatory)][string]$Changed)
+    $parts = $Changed.Split('|', 2)
+    $said = "this kit loaded from $($parts[0])"
+    if ($parts.Count -gt 1 -and $parts[1] -match '^[0-9]+$' -and $parts[1] -ne "0") {
+        try {
+            $said += " on " + [DateTimeOffset]::FromUnixTimeSeconds([long]$parts[1]).LocalDateTime.ToString("yyyy-MM-dd")
+        } catch { }
+    }
+    return $said
+}
+
+# Write-ExakitChangedFileRefusal <targets> <rows> <name|epoch> - the "not
+# loaded" for a file edited since this kit loaded it, said when the answer was
+# skip: the remedy is replace, and append is named for what it does. Twin of
+# _exakit_changed_file_refusal.
+function Write-ExakitChangedFileRefusal {
+    param([Parameter(Mandatory)][string]$Targets, $Rows, [Parameter(Mandatory)][string]$Changed)
+    $verb = "holds"; if ($Targets.Contains(", ")) { $verb = "hold" }
+    Warn2 "Not loaded: $Targets $verb the $(Get-ExakitRowsLabel $Rows) $(Get-ExakitLoadedFromText $Changed), and the file has changed since."
+    Info "Load the new version with `$env:EXAKIT_ON_EXISTING = 'replace' (drop and rebuild it); 'append' would add every row again on top of the old ones."
+}
+
 # Get-ExakitFileAlreadyLanded <schema> <file> - has this exact file already been
 # loaded into this schema, and is every table it made still holding exactly what
 # it held? The total rows across them, or $null. Twin of
 # exakit_file_already_landed: a JSON document never lands in the table the plan
-# named, so its own receipts are the only way to tell it was loaded.
+# named, so its own receipts are the only way to tell it was loaded. On a
+# match it also leaves the tables in $script:ExakitLandedTables and the name
+# of the file that made them in $script:ExakitLandedFrom: the receipts match
+# on content, so a byte-identical copy matches what the original loaded.
 function Get-ExakitFileAlreadyLanded {
     param([Parameter(Mandatory)][string]$Schema, [Parameter(Mandatory)][string]$File)
+    $script:ExakitLandedTables = @()
+    $script:ExakitLandedFrom = ""
     try {
         $path = Get-ExakitLoadReceiptsPath
         if (-not (Test-Path $path)) { return $null }
@@ -2097,9 +2838,13 @@ function Get-ExakitFileAlreadyLanded {
         $sha = Get-ExakitSha256 -Path $File
         # Newest last wins, per table.
         $seen = [ordered]@{}
+        $from = ""
         foreach ($line in $lines) {
             $f = $line -split "`t"
-            if ($f[2] -eq $sha) { $seen[$f[0]] = $f[3] }
+            if ($f[2] -eq $sha) {
+                $seen[$f[0]] = $f[3]
+                if ($f.Count -ge 6 -and $f[5]) { $from = $f[5] }
+            }
         }
         if ($seen.Count -eq 0) { return $null }
         $total = [long]0
@@ -2111,6 +2856,8 @@ function Get-ExakitFileAlreadyLanded {
             $total += [long]$n
         }
         if ($total -le 0) { return $null }
+        $script:ExakitLandedTables = @($seen.Keys | Sort-Object)
+        $script:ExakitLandedFrom = $from
         return $total
     } catch {
         return $null
@@ -2124,7 +2871,10 @@ function Remove-ExakitLoadReceipt {
         if (-not (Test-Path $path)) { return }
         $prefix = $Target.ToUpper() + "`t"
         $keep = @(Get-Content -LiteralPath $path | Where-Object { -not $_.StartsWith($prefix) })
-        Set-Content -LiteralPath $path -Value $keep -Encoding UTF8
+        # BOM-less, as Write-ExakitLoadReceipt writes it.
+        $text = ""
+        if ($keep.Count -gt 0) { $text = ($keep -join [Environment]::NewLine) + [Environment]::NewLine }
+        [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
     } catch {
     }
 }
@@ -2134,13 +2884,19 @@ function Remove-ExakitLoadReceipt {
 # indistinguishable from a table the reader filled themselves -- unless we said,
 # before starting, that we were about to write to it. That is the whole
 # difference between "resume this" and "ask before touching the reader's data".
+#
+# The crumb also says what the table held BEFORE this write: "absent", "0", a
+# row count, or "unknown". Only a table that held nothing before may be dropped
+# and rebuilt on resume; one that was being appended to held rows the kit never
+# loaded, and "resume" used to drop them. Twin of exakit_load_inflight_set.
 function Set-ExakitLoadInflight {
-    param([Parameter(Mandatory)][string]$Target)
+    param([Parameter(Mandatory)][string]$Target, $Before = "unknown")
     try {
         $path = Get-ExakitLoadInflightPath
         $dir = Split-Path $path -Parent
         if (-not (Test-Path $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
-        Set-Content -LiteralPath $path -Value $Target.ToUpper() -Encoding UTF8
+        if ($null -eq $Before -or "$Before" -eq "") { $Before = "unknown" }
+        Set-Content -LiteralPath $path -Value ("{0}|{1}" -f $Target.ToUpper(), $Before) -Encoding UTF8
     } catch {
     }
 }
@@ -2166,6 +2922,13 @@ function Get-ExakitLoadInflight {
 function Get-ExakitBulkDecisions {
     param([Parameter(Mandatory)][string[]]$Chosen, [Parameter(Mandatory)][string]$Schema)
     $inflight = Get-ExakitLoadInflight
+    # TARGET|what it held before; a crumb from an older kit has no "|" and so
+    # no "before" - unknown, which is not enough to drop anything.
+    $inflightBefore = "unknown"
+    if ($inflight.Contains("|")) {
+        $inflightBefore = $inflight.Split('|', 2)[1]
+        $inflight = $inflight.Split('|', 2)[0]
+    }
     $out = @()
     foreach ($row in $Chosen) {
         $parts = $row.Split('|', 3)
@@ -2187,7 +2950,20 @@ function Get-ExakitBulkDecisions {
             if ($null -ne $seen -and $seen -eq $had) {
                 $action = "done"
             } elseif ($inflight -eq $target) {
-                $action = "resume"
+                if ($inflightBefore -eq "absent" -or $inflightBefore -eq "0") {
+                    # Nothing was there before the interrupted write: every row
+                    # in it is a part of this file. Drop and redo.
+                    $action = "resume"
+                } else {
+                    # It was being appended to: the reader's rows plus part of
+                    # this file, which no one can tell apart from here. Ask,
+                    # never drop. Twin of the same branch in exakit_bulk_decide.
+                    $heldSaid = "rows"
+                    if ($inflightBefore -match '^[0-9]+$') { $heldSaid = Get-ExakitRowsLabel ([long]$inflightBefore) }
+                    Warn2 "An interrupted run was adding $(Split-Path $file -Leaf) to $target, which already held ${heldSaid}: part of the file may be in it now, and it is left as it is."
+                    Info "Check it, then re-run with `$env:EXAKIT_ON_EXISTING = 'replace' (drop it and load the file alone) or 'append' (load the file again on top)."
+                    $action = "clash"
+                }
             } else {
                 $action = "clash"
             }
@@ -2198,7 +2974,11 @@ function Get-ExakitBulkDecisions {
             $landedRows = Get-ExakitFileAlreadyLanded $Schema $file
             if ($null -ne $landedRows) { $action = "done"; $had = $landedRows }
         }
-        $out +=[pscustomobject]@{ Action = $action; File = $file; Target = $target; Table = $parts[1]; Kind = $parts[0]; Had = $had }
+        # A clash with this kit's own rows from an earlier version of the same
+        # file is an edited file, not "rows this kit did not load".
+        $changed = ""
+        if ($action -eq "clash") { $changed = Get-ExakitLoadReceiptChanged $target $file $had }
+        $out +=[pscustomobject]@{ Action = $action; File = $file; Target = $target; Table = $parts[1]; Kind = $parts[0]; Had = $had; Before = $rows; Changed = $changed }
     }
     return $out
 }
@@ -2215,26 +2995,45 @@ function Read-ExakitBulkClashAnswer {
     param([Parameter(Mandatory)]$Decisions, [Parameter(Mandatory)][string]$Schema)
     $clashes = @($Decisions | Where-Object { $_.Action -eq "clash" })
     if ($clashes.Count -eq 0) { return "skip" }
+    # Which of them hold this kit's own rows from an earlier version of the
+    # same file: an edited file is not "rows this kit did not load".
+    $edited = @($clashes | Where-Object { $_.Changed })
+    $allEdited = ($edited.Count -eq $clashes.Count)
     Write-Host ""
-    Warn2 "$(Get-ExakitPlural $clashes.Count 'table') in $Schema already holding rows this kit did not load:"
+    if ($allEdited) {
+        Warn2 "$(Get-ExakitPlural $clashes.Count 'table') in $Schema already holding rows this kit loaded from an earlier version of the same file:"
+    } else {
+        Warn2 "$(Get-ExakitPlural $clashes.Count 'table') in $Schema already holding rows this kit did not load:"
+    }
     foreach ($c in $clashes) {
-        Write-Host ("      {0}{1}{2} {3} {4}->{5} {6} already" -f $script:UiDim, $script:UiBullet, $script:UiReset,
-            (Split-Path $c.File -Leaf), $script:UiDim, $script:UiReset, (Get-ExakitRowsLabel $c.Had))
+        $note = ""
+        if ($c.Changed -and -not $allEdited) { $note = " (loaded by this kit from an earlier version of this file)" }
+        Write-Host ("      {0}{1}{2} {3} {4}->{5} {6} already{7}" -f $script:UiDim, $script:UiBullet, $script:UiReset,
+            (Split-Path $c.File -Leaf), $script:UiDim, $script:UiReset, (Get-ExakitRowsLabel $c.Had), $note)
     }
     if (-not (Test-ExakitInteractive)) {
-        Info "Skipping those files. Re-run with EXAKIT_ON_EXISTING=replace or =append to decide otherwise."
+        if ($allEdited) {
+            Info "Skipping those files. Load the new versions with `$env:EXAKIT_ON_EXISTING = 'replace'; 'append' would add every row again on top of the old ones."
+        } else {
+            Info "Skipping those files. Re-run with `$env:EXAKIT_ON_EXISTING = 'replace' or 'append' to decide otherwise."
+        }
         return "skip"
+    }
+    # Every one of them an edited file: replace is what the reader came for, so
+    # it comes first and is the default; append is named for what it does.
+    if ($allEdited) {
+        return (Read-ExakitClashPrompt "Those files: (r)eplace each table with the new version, (a)ppend (adds every row again: unchanged rows end up twice), or (s)kip" "r")
     }
     return (Read-ExakitClashPrompt "Those files: (s)kip, (r)eplace what is there, or (a)ppend to it")
 }
 
-# Read-ExakitClashPrompt <question> - the one question both load paths ask
-# about rows this kit did not put there, so a folder and a single file cannot
-# drift into offering different answers. Twin of exakit_clash_prompt.
+# Read-ExakitClashPrompt <question> [<default>] - the one question both load
+# paths ask about rows this kit did not put there, so a folder and a single
+# file cannot drift into offering different answers. Twin of exakit_clash_prompt.
 function Read-ExakitClashPrompt {
-    param([Parameter(Mandatory)][string]$Question)
+    param([Parameter(Mandatory)][string]$Question, [string]$Default = "s")
     while ($true) {
-        $answer = Read-ExakitPrompt $Question "s"
+        $answer = Read-ExakitPrompt $Question $Default
         switch -Regex ($answer) {
             '^[sS]' { return "skip" }
             '^[rR]' { return "replace" }
@@ -2248,11 +3047,20 @@ function Read-ExakitClashPrompt {
 # table, so no list, and without a console the answer is skip for the same
 # reason as the folder's. The caller prints the refusal and the remedy. Twin
 # of exakit_file_ask_clash.
+#
+# With -Changed (Get-ExakitLoadReceiptChanged) the rows are this kit's own,
+# from an earlier version of the same file: that is said, replace is offered
+# first and is the default, and append is named for what it does.
 function Read-ExakitFileClashAnswer {
-    param([Parameter(Mandatory)][string]$Target, $Rows)
+    param([Parameter(Mandatory)][string]$Target, $Rows, [string]$Changed = "")
     if (-not (Test-ExakitInteractive)) { return "skip" }
     Write-Host ""
-    Warn2 "$Target already holds $(Get-ExakitRowsLabel $Rows) this kit did not load."
+    if ($Changed) {
+        $verb = "holds"; if ($Target.Contains(", ")) { $verb = "hold" }
+        Warn2 "$Target $verb the $(Get-ExakitRowsLabel $Rows) $(Get-ExakitLoadedFromText $Changed); the file has changed since."
+        return (Read-ExakitClashPrompt "That table: (r)eplace it with the new version, (a)ppend (adds every row again: unchanged rows end up twice), or (s)kip" "r")
+    }
+    Warn2 "$Target already holds $(Get-ExakitRowsLabel $Rows) that this file did not load."
     return (Read-ExakitClashPrompt "That table: (s)kip, (r)eplace what is there, or (a)ppend to it")
 }
 
@@ -2343,7 +3151,7 @@ function Get-ExakitBulkFileKind {
 # JSON is planned as load|json on a machine that can have the JSON Tables engine
 # (Windows x86_64) and loaded through Import-ExakitLocalJson, as a single JSON
 # file is. Elsewhere (ARM64) it is reported as json-unsupported with
-# Get-JsonTablesApplicableReason - the same answer a single JSON file gets.
+# the Python add-on's applicable reason - the same answer a single JSON file gets.
 #
 # Files are ordered by ORDINAL bytes, not by the machine's culture, so which of
 # two duplicates wins is the same answer on every machine - the twin sorts with
@@ -2458,6 +3266,17 @@ function Show-ExakitBulkPlan {
         Write-Host ("      {0}{1}{2} {3} {4}->{5} {6}" -f $script:UiDim, $script:UiBullet, $script:UiReset,
             (Split-Path $parts[2] -Leaf), $script:UiDim, $script:UiReset, $parts[1])
     }
+    # A table that is not called what its file is called, explained once.
+    $renamed = $false
+    foreach ($row in $Chosen) {
+        $parts = $row.Split('|', 3)
+        $part = Get-ExakitNamePart $parts[2]
+        if (-not $part) { $part = "MY_TABLE" }
+        if ($parts[1] -ne $part) { $renamed = $true; break }
+    }
+    if ($renamed) {
+        Write-Host ("      {0}T_ goes in front of a name that starts with a digit or is an SQL reserved word; a name is cut at 128 characters.{1}" -f $script:UiDim, $script:UiReset)
+    }
     foreach ($row in ($Plan | Where-Object { $_.StartsWith("skip|duplicate") })) {
         $parts = $row.Split('|', 4)
         if ($parts[1] -eq "duplicate-content") { $why = "identical to $($parts[2])" }
@@ -2467,10 +3286,7 @@ function Show-ExakitBulkPlan {
     }
     $json = @($Plan | Where-Object { $_.StartsWith("skip|json-unsupported|") }).Count
     if ($json -gt 0) {
-        $why = ""
-        if (Get-Command Get-JsonTablesApplicableReason -ErrorAction SilentlyContinue) {
-            $why = Get-JsonTablesApplicableReason
-        }
+        $why = Get-ExakitJsonTablesReason
         if ($why) { Warn2 "$(Get-ExakitPlural $json 'JSON file') skipped: $why" }
         else { Warn2 "$(Get-ExakitPlural $json 'JSON file') skipped: no ingest engine is available on this machine." }
         Info "CSV and Parquet load without it. Load the JSON files from macOS, Linux or WSL."
@@ -2479,8 +3295,7 @@ function Show-ExakitBulkPlan {
     # near-identical sentences stacked under a three-file plan was more lines
     # about what is NOT being loaded than about what is.
     $ignored = ""
-    $other = @($Plan | Where-Object { $_.StartsWith("skip|unsupported|") }).Count
-    if ($other -gt 0) { $ignored = "$other of other kinds" }
+    # Files of other kinds (images, notes beside the exports) are left alone without a word: they were never data.
     $empty = @($Plan | Where-Object { $_.StartsWith("skip|empty|") }).Count
     if ($empty -gt 0) {
         if ($ignored) { $ignored = "$ignored, $empty empty" } else { $ignored = "$empty empty" }
@@ -2546,8 +3361,13 @@ function Import-ExakitLocalFolder {
             Info "Returning to data loading options."
             return "back"
         }
-        if ($schema -match '^[A-Za-z0-9_]+$') { break }
-        Warn2 "Schema must use letters, numbers or underscores."
+        if ($schema -match '^[A-Za-z0-9_]+$') {
+            $schemaWhy = Get-ExakitIdentifierProblem $schema
+            if (-not $schemaWhy) { break }
+            Warn2 "Schema $schema cannot be used: $schemaWhy. It must start with a letter and not be an SQL reserved word."
+        } else {
+            Warn2 "Schema must use letters, numbers or underscores."
+        }
         if (-not (Test-ExakitInteractive)) { return "failed" }
     }
     $schema = $schema.ToUpperInvariant()
@@ -2611,6 +3431,15 @@ function Import-ExakitLocalFolder {
                     Detail = (Get-ExakitRowsLabel $d.Had); Why = "already loaded from this file - left as it is" }
                 continue
             }
+            if ($d.Action -eq "clash" -and $clashAnswer -eq "skip" -and $d.Changed) {
+                $skipped++
+                $doneWeight += $w
+                Write-ExakitLog "SKIP" "$(Split-Path $file -Leaf) -> $target (holds $($d.Had) rows this kit loaded from an earlier version of this file)"
+                $outcomes += [pscustomobject]@{ Status = "skip"; File = $file; Table = $d.Table
+                    Detail = (Get-ExakitRowsLabel $d.Had)
+                    Why = "not loaded: the file changed since this kit loaded it - `$env:EXAKIT_ON_EXISTING = 'replace' loads the new version" }
+                continue
+            }
             if ($d.Action -eq "clash" -and $clashAnswer -eq "skip") {
                 $skipped++
                 $doneWeight += $w
@@ -2644,7 +3473,14 @@ function Import-ExakitLocalFolder {
             # file, which on a forty-file folder was forty extra round trips.
             $before = "absent"
             if ($null -ne $d.Had -and $d.Action -eq "load") { $before = $d.Had }
-            Set-ExakitLoadInflight $target
+            # What the crumb records as "before": a table just dropped (resume,
+            # or a clash the reader chose to replace) held nothing; one appended
+            # to held its rows, and a resume must never drop those.
+            $crumb = "unknown"
+            if ($d.Action -eq "resume" -or ($d.Action -eq "clash" -and $clashAnswer -eq "replace")) { $crumb = "absent" }
+            elseif ($d.Action -eq "clash") { $crumb = $d.Had }
+            elseif ($null -ne $d.Before) { $crumb = $d.Before }
+            Set-ExakitLoadInflight $target $crumb
             # @(...)[-1]: the function writes its progress with Write-Host, but
             # taking the LAST emitted value keeps the boolean even if a helper
             # underneath it ever starts writing to the pipeline.
@@ -2657,7 +3493,10 @@ function Import-ExakitLocalFolder {
                     # exakit_load_local_folder.
                     $uploaded = [bool](@(Import-ExakitLocalJson -Path $file -Target $target)[-1])
                 } else {
-                    $uploaded = [bool](@(Invoke-ExapumpUpload $file $target -Soft)[-1])
+                    # The number guard on, its note kept for this file's row.
+                    $script:ExakitNumberGuard = $true; $script:ExakitGuardQuiet = $true
+                    try { $uploaded = [bool](@(Invoke-ExapumpUpload $file $target -Soft)[-1]) }
+                    finally { $script:ExakitNumberGuard = $false; $script:ExakitGuardQuiet = $false }
                 }
             } catch {
                 $uploaded = $false
@@ -2684,14 +3523,17 @@ function Import-ExakitLocalFolder {
                 # one per file: each listing is a process start, a TLS handshake
                 # and an authentication.
                 $landed += [pscustomobject]@{ File = $file; Targets = $targets }
+                $okWhy = ""
+                if ($d.Kind -ne "json" -and $script:ExakitGuardNote) { $okWhy = "kept as text: $($script:ExakitGuardNote)" }
                 $outcomes += [pscustomobject]@{ Status = "ok"; File = $file
                     Table = (@($targets | ForEach-Object { $_.Split('.', 2)[-1] }) -join ", ")
-                    Detail = $null; Why = "" }
+                    Detail = $null; Why = $okWhy }
             } else {
                 $why = ""
                 if ($script:ExakitUploadReason) { $why = $script:ExakitUploadReason }
                 $gone = Remove-ExakitPhantomTable -Target $target -RowsBefore $before
                 $failed++
+                $script:ExakitLocalFileNames = @($script:ExakitLocalFileNames) + @(Split-Path $file -Leaf)
                 $outcomes += [pscustomobject]@{ Status = "fail"; File = $file; Table = $d.Table
                     Detail = "not loaded$gone"; Why = $why }
             }
@@ -2797,7 +3639,7 @@ function Import-ExakitRemoteFile {
     $defaultTable = "$schema.$(Get-ExakitTableName $name)"
     $target = Read-ExakitPrompt "Target table (SCHEMA.TABLE)" $defaultTable
     if (-not (Test-ExakitTableTarget $target)) {
-        Fail "Target table must look like SCHEMA.TABLE and use letters, numbers, or underscores."
+        Fail (Get-ExakitTableTargetProblem $target)
     }
     $target = Get-ExakitUpperTableTarget $target
 
@@ -2859,6 +3701,9 @@ function Invoke-ExakitSqlScript {
 # database-wide read (USE ANY SCHEMA + SELECT ANY TABLE), so it sees every
 # dataset schema with no per-schema grant.
 function Get-ExakitBundledDatasets {
+    # -IncludeHidden: the hidden ones too (twin of exakit_bundled_datasets --all):
+    # the legacy crossing's sample catalog and the flag reset, never an offer or a load.
+    param([switch]$IncludeHidden)
     # Every dataset (TPC-H included) is discovered from its dataset.conf;
     # nothing is hardcoded. A conf may set flag= to override the default
     # manifest key (TPC-H keeps the historical data.loaded) and schema= to name
@@ -2872,15 +3717,299 @@ function Get-ExakitBundledDatasets {
                 if ($line -match '^([a-z_]+)=(.*)$') { $kv[$Matches[1]] = $Matches[2] }
             }
             if (-not $kv.id -or -not $kv.label) { continue }
+            # Not part of this release (hidden=yes): its folder stays, but it is not
+            # offered, listed or loaded. Twin of the same skip in exakit_bundled_datasets.
+            if (-not $IncludeHidden -and ("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
+            # A dataset that will be downloaded says how big the download is, in
+            # every list that offers it ("... - 3.9 MB download").
+            $label = $kv.label
+            $note = Get-ExakitDatasetDownloadNote -Dir (Split-Path $conf.FullName -Parent)
+            if ($note) { $label = "$label - $note" }
             $markers = @(($kv.markers -split ',') | Where-Object { $_ })
             $flag = if ($kv.flag) { $kv.flag } else { "data.datasets.$($kv.id).loaded" }
             $schema = if ($kv.schema) { $kv.schema } else { $kv.id.ToUpper() }
             $order = 50
             if ($kv.order -match '^[0-9]+$') { $order = [int]$kv.order }
-            $datasets += @{ Id = $kv.id; Label = $kv.label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order }
+            $hidden = ("" + $kv.hidden) -match '^(yes|true|1)$'
+            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order; Hidden = $hidden
+                            Description = ("" + $kv.description) }
         }
     }
     return @($datasets | Sort-Object { $_.Order }, { $_.Id })
+}
+
+# --- reference datasets: CSVs from a checksummed release asset --------------
+# A reference dataset (a folder with a manifest.json "asset") keeps its CSVs in git
+# but not in the kit archive users download (.gitattributes, export-ignore):
+# they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
+# asset whose SHA-256, size and URL are in the dataset's manifest.json
+# ("asset", written by tools\datasets\package.py). The decisions and the checks
+# live in ONE place both twins call, setup\lib\dataset_asset.py; the download
+# stays here, with WebClient's proxy and TLS handling (Get-ExakitFile). Twin of
+# exakit_dataset_files in exapump.sh.
+#
+#   EXAKIT_DATASETS_MIRROR  a folder (or file:// or https:// base URL) holding
+#                           <id>-<snapshot>.tar.gz: an offline or internal copy
+#   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
+#                           the repository this kit was installed from)
+#   GITHUB_TOKEN / GH_TOKEN a token that can read that repository: a private
+#                           repository's release is fetched through the API
+
+# Get-ExakitDatasetAssetWithToken -Url -Dest - a release asset of a PRIVATE
+# repository. Twin of _exakit_dataset_fetch_token in exapump.sh: the
+# releases/download link answers 404 even with a token, so the asset is found
+# through the API (the release by its tag, the asset by name) and fetched from
+# its API URL as application/octet-stream. The token ($env:GITHUB_TOKEN, else
+# $env:GH_TOKEN) goes to api.github.com only: the redirect to the storage host
+# is followed here, without it - Windows PowerShell 5.1 would replay the header
+# there, and the storage host refuses a second credential. The storage URL is
+# signed and short-lived, so it is not logged. $true when $Dest holds the file.
+function Get-ExakitDatasetAssetWithToken {
+    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Dest)
+    $token = $env:GITHUB_TOKEN
+    if (-not $token) { $token = $env:GH_TOKEN }
+    if (-not $token -or $Url -notmatch '^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/([^/]+)$') { return $false }
+    $repo = $Matches[1]; $tag = $Matches[2]; $file = $Matches[3]
+    try {
+        $headers = @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'exakit' }
+        Write-ExakitLog "INFO" "GET https://api.github.com/repos/$repo/releases/tags/$tag (with a token)"
+        $release = Invoke-RestMethod -UseBasicParsing -Headers $headers -TimeoutSec 60 `
+            -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+        $asset = @($release.assets | Where-Object { $_.name -eq $file }) | Select-Object -First 1
+        if (-not $asset -or ("" + $asset.url) -notlike "https://api.github.com/repos/$repo/releases/assets/*") { return $false }
+        Write-ExakitLog "INFO" "GET $($asset.url) (with a token) -> $Dest"
+        $request = [System.Net.HttpWebRequest]::Create("" + $asset.url)
+        $request.AllowAutoRedirect = $false
+        $request.Accept = 'application/octet-stream'
+        $request.UserAgent = 'exakit'
+        $request.Timeout = 60000
+        $request.Headers.Add('Authorization', "Bearer $token")
+        $response = $null
+        try { $response = $request.GetResponse() } catch [System.Net.WebException] { $response = $_.Exception.Response }
+        if ($null -eq $response) { return $false }
+        $location = $null
+        try {
+            $code = [int]$response.StatusCode
+            if ($code -ge 300 -and $code -lt 400) {
+                $location = $response.Headers['Location']
+            } elseif ($code -eq 200) {
+                $stream = $response.GetResponseStream()
+                $out = [System.IO.File]::Create($Dest)
+                try { $stream.CopyTo($out) } finally { $out.Close(); $stream.Close() }
+                return $true
+            }
+        } finally { $response.Close() }
+        if (-not $location -or $location -notmatch '^https://') { return $false }
+        return [bool](Get-ExakitFile -Url $location -Dest $Dest -Soft)
+    } catch {
+        Write-ExakitLog "WARN" "The token download did not work ($($_.Exception.Message)); trying the plain link"
+        return $false
+    }
+}
+
+# Get-ExakitDatasetAsset <dataset-dir> - the manifest's asset block, or $null.
+function Get-ExakitDatasetAsset {
+    param([Parameter(Mandatory)][string]$Dir)
+    $path = Join-Path $Dir "manifest.json"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $doc = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($doc.asset -and $doc.asset.sha256) { return $doc.asset }
+    } catch { }
+    return $null
+}
+
+# Get-ExakitMegabytes <bytes> - "3.9 MB", whatever the machine's locale.
+function Get-ExakitMegabytes {
+    param([long]$Bytes)
+    $mb = [double]$Bytes / 1000000
+    if ($mb -lt 0.1) { $mb = 0.1 }
+    return ($mb.ToString("0.0", [System.Globalization.CultureInfo]::InvariantCulture) + " MB")
+}
+
+# Get-ExakitDatasetDownloadNote <dataset-dir> - "3.9 MB download" when loading
+# the dataset would download its asset, else "": no asset block, CSVs in the
+# kit copy (a checkout), or an extraction already verified in the cache. Twin of
+# exakit_dataset_download_note.
+function Get-ExakitDatasetDownloadNote {
+    param([Parameter(Mandatory)][string]$Dir)
+    $asset = Get-ExakitDatasetAsset -Dir $Dir
+    if (-not $asset) { return "" }
+    if (@(Get-ChildItem -Path (Join-Path (Join-Path $Dir "data") "*.csv") -ErrorAction SilentlyContinue).Count -gt 0) { return "" }
+    $cached = Join-Path (Join-Path (Join-Path (Join-Path $script:CacheDir "datasets") (Split-Path $Dir -Leaf)) $asset.sha256) ".verified"
+    if (Test-Path -LiteralPath $cached) { return "" }
+    if (-not ("$($asset.size)" -match '^[0-9]+$')) { return "" }
+    return "$(Get-ExakitMegabytes ([long]$asset.size)) download"
+}
+
+# Get-ExakitDatasetPython - the Python 3.8+ on PATH that dataset_asset.py runs
+# on, or "" (then uv's managed one is used). The Microsoft Store alias answers
+# `python` too and fails every call, so the version is asked, not assumed.
+$script:ExakitDatasetPython = $null
+function Get-ExakitDatasetPython {
+    if ($null -ne $script:ExakitDatasetPython) { return $script:ExakitDatasetPython }
+    $script:ExakitDatasetPython = ""
+    foreach ($candidate in @("python", "python3")) {
+        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $ok = & $candidate -c "import sys; print(sys.version_info[:2] >= (3, 8))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and ("$ok").Trim() -eq "True") { $script:ExakitDatasetPython = $candidate; break }
+        } catch {
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+    return $script:ExakitDatasetPython
+}
+
+# Invoke-ExakitDatasetAssetService <args> - run setup\lib\dataset_asset.py.
+# @{ Code; Out (its stdout lines); Why (its last stderr line) }. Read as UTF-8,
+# whatever the console's code page: the paths it prints can be anything.
+function Invoke-ExakitDatasetAssetService {
+    param([Parameter(Mandatory)][string]$KitRoot, [Parameter(ValueFromRemainingArguments)]$ServiceArgs)
+    $service = Join-Path (Join-Path (Join-Path $KitRoot "setup") "lib") "dataset_asset.py"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousEncoding = [Console]::OutputEncoding
+    $previousIo = $env:PYTHONIOENCODING
+    $result = @{ Code = 1; Out = @(); Why = "" }
+    try {
+        $ErrorActionPreference = "Continue"
+        $env:PYTHONIOENCODING = "utf-8"
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+        $python = Get-ExakitDatasetPython
+        $nativeArgs = ConvertTo-ExakitNativeArgs $ServiceArgs
+        if ($python) {
+            $raw = @(& $python $service @nativeArgs 2>&1)
+        } else {
+            $uv = Install-ExakitUv
+            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service @nativeArgs 2>&1)
+        }
+        $result.Code = $LASTEXITCODE
+        $result.Out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+        $errs = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" } | Where-Object { $_ })
+        foreach ($e in $errs) { Write-ExakitLog "INFO" "dataset_asset: $e" }
+        if ($errs.Count) { $result.Why = $errs[-1] }
+    } catch {
+        $result.Why = "$_"
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        try { [Console]::OutputEncoding = $previousEncoding } catch { }
+        $env:PYTHONIOENCODING = $previousIo
+    }
+    return $result
+}
+
+# Get-ExakitDatasetFiles -KitRoot -Dir -Id - the folder holding the dataset's
+# verified CSVs. Fails (a soft failure to every caller, which catches it) with
+# one line naming the reason when they cannot be had: offline with nothing
+# cached, a digest that does not match, an archive that is unsafe. Nothing is
+# loaded from a file that failed a check, and a failed download is never
+# cached. Twin of exakit_dataset_files.
+function Get-ExakitDatasetFiles {
+    param([Parameter(Mandatory)][string]$KitRoot, [Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$Id)
+    $kitCopy = Join-Path $Dir "data"
+    # No asset block: the kit copy, exactly as before - and no Python started.
+    if (-not (Get-ExakitDatasetAsset -Dir $Dir)) { return $kitCopy }
+    $cache = Join-Path $script:CacheDir "datasets"
+    $plan = Invoke-ExakitDatasetAssetService $KitRoot "resolve" $Dir $cache
+    $line = "" + (@($plan.Out | Where-Object { $_ }) | Select-Object -Last 1)
+    $fields = $line -split "`t"
+    if ($plan.Code -ne 0 -or -not $line) {
+        Fail "Could not read the '$Id' dataset's manifest (a Python 3 is needed; details: exakit logs setup)."
+    }
+    if ($fields[0] -eq "kit") { return $kitCopy }
+    if ($fields[0] -eq "dir" -and $fields.Count -ge 2) {
+        Write-ExakitLog "INFO" "${Id}: verified CSVs in $($fields[1])"
+        return $fields[1]
+    }
+    if ($fields[0] -ne "fetch" -or $fields.Count -lt 5) {
+        Fail "Could not read the '$Id' dataset's manifest (details: exakit logs setup)."
+    }
+    $file = $fields[1]; $size = [long]$fields[3]; $url = $fields[4]
+    # owner/name only: the value lands in a URL.
+    $repo = $env:EXAKIT_DATASETS_REPO
+    if (-not $repo) { $repo = $script:KitRepo }
+    if (-not $repo) { $repo = "exasol-labs/exasol-personal-local-starterkit" }
+    if ($repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+        Fail "EXAKIT_DATASETS_REPO must be owner/name (got '$repo')."
+    }
+    $source = $url.Replace("{repo}", $repo)
+    $local = ""
+    $mirror = $env:EXAKIT_DATASETS_MIRROR
+    if ($mirror) {
+        if ($mirror -match '^https://') {
+            $source = $mirror.TrimEnd('/') + "/" + $file
+        } elseif ($mirror -match '^file://') {
+            $local = $mirror.Substring(7)
+            # file:///C:/x reads as /C:/x; the drive letter is the path.
+            if ($local -match '^/[A-Za-z]:') { $local = $local.Substring(1) }
+            $local = Join-Path $local.TrimEnd('/', '\') $file
+            $source = $local
+        } elseif ($mirror -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+            Fail "EXAKIT_DATASETS_MIRROR must be a folder, a file:// URL or an https:// URL (got '$mirror')."
+        } else {
+            $local = Join-Path $mirror.TrimEnd('/', '\') $file
+            $source = $local
+        }
+    }
+    $mb = Get-ExakitMegabytes $size
+    $assetHome = Join-Path $cache $Id
+    New-Item -ItemType Directory -Force -Path $assetHome | Out-Null
+    $part = Join-Path $assetHome "$file.part"
+    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+    if ($script:ExakitTableRow -gt 0) {
+        Set-ExakitTableRow -Row $script:ExakitTableRow -State "running" -Pct 0 -Ceiling 1 -Secs 10 `
+            -Phase "downloading $mb"
+        Write-ExakitLog "INFO" "Downloading the '$Id' data ($mb) from $source"
+    } else {
+        Info "Downloading the '$Id' data ($mb, checked against its SHA-256)"
+        Write-ExakitLog "INFO" "from $source"
+    }
+    if ($local) {
+        try { Copy-Item -LiteralPath $local -Destination $part -Force -ErrorAction Stop } catch {
+            Write-ExakitLog "WARN" "Could not copy $local ($_)"
+            Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        # With a token, the release may be a private repository's: through the
+        # API first, then the plain link (a public repository needs no token).
+        $viaToken = $false
+        if (-not $mirror -and ($env:GITHUB_TOKEN -or $env:GH_TOKEN)) {
+            $viaToken = Get-ExakitDatasetAssetWithToken -Url $source -Dest $part
+            if (-not $viaToken) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
+        }
+        # Three tries, each bounded (10 s to connect, 20 s between bytes): a
+        # blip is retried, an offline machine answers in seconds, not minutes.
+        for ($attempt = 1; -not $viaToken -and $attempt -le 3; $attempt++) {
+            if (Get-ExakitFile -Url $source -Dest $part -Soft) { break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
+        # A kit installed from a private repository (a fork, a backup) reaches its release only with a token. The
+        # public kit's release holds the same file, and the SHA-256 below checks it either way: try that one.
+        $public = $url.Replace("{repo}", "exasol-labs/exasol-personal-local-starterkit")
+        $got = (Test-Path -LiteralPath $part) -and ((Get-Item -LiteralPath $part).Length -gt 0)
+        if (-not $got -and -not $mirror -and $public -ne $source) {
+            Write-ExakitLog "INFO" "$source was not reachable without a token; trying the public kit's copy $public"
+            if (Get-ExakitFile -Url $public -Dest $part -Soft) { $source = $public }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $part) -or (Get-Item -LiteralPath $part).Length -eq 0) {
+        Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        Fail "The '$Id' data could not be fetched from $source and nothing is cached. Retry when online; for a private repository set GITHUB_TOKEN; or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $file."
+    }
+    $done = Invoke-ExakitDatasetAssetService $KitRoot "install" $Dir $cache $part
+    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+    $line = "" + (@($done.Out | Where-Object { $_ }) | Select-Object -Last 1)
+    $fields = $line -split "`t"
+    if ($done.Code -eq 0 -and $fields[0] -eq "dir" -and $fields.Count -ge 2) {
+        Write-ExakitLog "OK" "${Id}: $file verified (SHA-256) and cached in $($fields[1])"
+        return $fields[1]
+    }
+    $why = $done.Why
+    if (-not $why) { $why = "it could not be verified" }
+    Fail "The '$Id' data from $source was refused: $why"
 }
 
 # Test-ExakitDbReachable - can we run SQL right now?
@@ -2912,6 +4041,46 @@ function Test-ExakitDbReachable {
 # twin: exakit_forget_db_reachable in setup/lib/exapump.sh.
 function Clear-ExakitDbReachable {
     $script:ExakitDbReachable = $null
+}
+
+# Get-ExakitDbClockSkew - how far the database's clock is from this computer's,
+# in whole seconds (negative: the database is behind), or $null when the
+# database cannot be asked. A sleeping laptop can leave the database's VM clock
+# behind, and the first symptom is a remote source's certificate that is "not
+# yet valid" by it. POSIX_TIME() is the epoch whatever the session time zone;
+# the local reads either side of the query bound the round trip.
+# twin: exakit_db_clock_skew in setup/lib/exapump.sh.
+$script:ExakitClockSkewLimit = 120
+if ($env:EXAKIT_CLOCK_SKEW_LIMIT -match '^[0-9]+$') { $script:ExakitClockSkewLimit = [int]$env:EXAKIT_CLOCK_SKEW_LIMIT }
+function Get-ExakitDbClockSkew {
+    if (-not (Get-ExakitManifestValue "components.exapump.profile")) { return $null }
+    $before = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    # Invoke-Exapump, not Invoke-ExakitBounded: exapump.exe can exit non-zero
+    # on a statement that ran (see Test-ExapumpSucceeded), and the bounded
+    # runner discards the output of any non-zero exit.
+    $result = Invoke-Exapump @("sql", "-p", $script:ExapumpProfile, "SELECT 'EXAKIT_CLOCK=' || FLOOR(POSIX_TIME()) AS T")
+    $after = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (-not $result.Success -or "$($result.Output)" -notmatch 'EXAKIT_CLOCK=([0-9]+)') { return $null }
+    return [long]$Matches[1] - [long][Math]::Floor(($before + $after) / 2)
+}
+
+# Format-ExakitClockSkew <seconds> - "32 min behind", "1 h 25 min ahead of".
+# twin: exakit_clock_skew_words in setup/lib/exapump.sh.
+function Format-ExakitClockSkew {
+    param([long]$Seconds)
+    $dir = "ahead of"
+    if ($Seconds -lt 0) { $Seconds = -$Seconds; $dir = "behind" }
+    $minutes = [long][Math]::Floor(($Seconds + 30) / 60)
+    if ($minutes -ge 60) { return "$([long][Math]::Floor($minutes / 60)) h $($minutes % 60) min $dir" }
+    return "$minutes min $dir"
+}
+
+# Test-ExakitClockSkewed <seconds> - true when the skew is past the limit.
+# twin: exakit_clock_skewed in setup/lib/exapump.sh.
+function Test-ExakitClockSkewed {
+    param($Seconds)
+    if ($null -eq $Seconds) { return $false }
+    return ([Math]::Abs([long]$Seconds) -ge $script:ExakitClockSkewLimit)
 }
 
 # Test-ExakitTablePresent <table> [schema] - does the table exist in the given
@@ -3046,11 +4215,21 @@ function Test-ExakitDatasetLoaded {
 # reporting it as either one is what let a failed upload pass for a loaded one.
 # Twin of exakit_table_rows_listing.
 function Get-ExakitQualifiedTableRows {
-    $result = Invoke-Exapump @("sql", "-p", $script:ExapumpProfile,
-        "SELECT 'EXAKIT.LISTING_ANSWERED|1' AS QUALIFIED FROM DUAL UNION ALL SELECT TABLE_SCHEMA || '.' || TABLE_NAME || '|' || TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES")
-    if (-not $result.Success) { return $null }
+    # -TimeoutSeconds: for a caller that must answer (status) rather than wait
+    # on a database that accepts logins and then never replies. Twin of the
+    # [limit] of exakit_verified_datasets.
+    param([int]$TimeoutSeconds = 0)
+    $query = "SELECT 'EXAKIT.LISTING_ANSWERED|1' AS QUALIFIED FROM DUAL UNION ALL SELECT TABLE_SCHEMA || '.' || TABLE_NAME || '|' || TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES"
+    if ($TimeoutSeconds -gt 0) {
+        $output = Invoke-ExakitBounded -FilePath (Get-ExapumpCli) -Arguments @("sql", "-p", $script:ExapumpProfile, $query) -TimeoutSeconds $TimeoutSeconds
+        if ($null -eq $output) { return $null }
+    } else {
+        $result = Invoke-Exapump @("sql", "-p", $script:ExapumpProfile, $query)
+        if (-not $result.Success) { return $null }
+        $output = $result.Output
+    }
     $map = @{}
-    foreach ($line in (("" + $result.Output) -split "`r?`n")) {
+    foreach ($line in (("" + $output) -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -match '^([A-Za-z0-9_$]+\.[A-Za-z0-9_$]+)\|([0-9]+)$') {
             $map[$Matches[1].ToUpper()] = [long]$Matches[2]
@@ -3072,7 +4251,8 @@ function Get-ExakitTableRowCount {
 }
 
 function Get-ExakitQualifiedTables {
-    $map = Get-ExakitQualifiedTableRows
+    param([int]$TimeoutSeconds = 0)
+    $map = Get-ExakitQualifiedTableRows -TimeoutSeconds $TimeoutSeconds
     if ($null -eq $map) { return $null }
     $set = @{}
     foreach ($k in $map.Keys) {
@@ -3088,14 +4268,18 @@ function Get-ExakitQualifiedTables {
 }
 
 function Get-ExakitVerifiedDatasets {
-    $datasets = @(Get-ExakitBundledDatasets)
+    param([int]$TimeoutSeconds = 0)
+    # -IncludeHidden: a dataset this release hides (hidden=yes) is still the kit's
+    # data where an earlier kit loaded it - TPC-H, kit 0.2.5's sample - and status
+    # must not answer "none loaded" over it. Twin of --all in exakit_verified_datasets.
+    $datasets = @(Get-ExakitBundledDatasets -IncludeHidden)
     # THE TABLE LISTING IS THE REACHABILITY PROBE. Asking SELECT 1 first bought
     # no information the listing does not already give, and doubled the cost:
     # every exapump call is a process start, a TLS handshake and an
     # authentication, about 2.5s on a warm machine, so `exakit status` paid ~5s
     # where ~2.5s answers the same question. A listing that comes back proves
     # the database is up, so the cached flag is set from here.
-    $present = Get-ExakitQualifiedTables
+    $present = Get-ExakitQualifiedTables -TimeoutSeconds $TimeoutSeconds
     if ($null -ne $present) { $script:ExakitDbReachable = $true }
     if ($null -eq $present) {
         # Could not list: unreachable, or the query failed. Ask properly before
@@ -3136,7 +4320,8 @@ function Get-ExakitVerifiedDatasets {
 
 # Datasets that are NOT loaded yet - drives the dynamic data menus.
 function Get-ExakitPendingDatasets {
-    return @(Get-ExakitBundledDatasets | Where-Object { -not (Test-ExakitDatasetLoaded $_) })
+    # A dataset its conf hides (hidden=yes) is kept and loads when named, never offered. Twin of exakit_pending_datasets.
+    return @(Get-ExakitBundledDatasets | Where-Object { -not $_.Hidden -and -not (Test-ExakitDatasetLoaded $_) })
 }
 
 function Invoke-ExakitDatasetLoad {
@@ -3269,7 +4454,17 @@ function Invoke-ExakitDatasetDirLoad {
     $schemaSql = Join-Path $dir "01_create_schema.sql"
     $loadSql = Join-Path $dir "02_load_data.sql"
     $verifySql = Join-Path $dir "03_verify_setup.sql"
-    $csvFiles = @(Get-ChildItem -Path (Join-Path $dir "data\*.csv") -ErrorAction SilentlyContinue |
+    # Which row of the table this dataset owns, if a table is on screen. Zero
+    # means there is none, and the single-line bar takes over.
+    $script:ExakitTableRow = 0
+    if ($script:ExakitTableLive) { $script:ExakitTableRow = Get-ExakitDataTableRow -Id $Id }
+    # Where the CSVs come from. A reference dataset's ship as a checksummed
+    # release asset, not in the kit archive: the kit copy when it is there and
+    # matches the manifest, else the verified cache, else a download that is
+    # checked before anything is loaded (Get-ExakitDatasetFiles). Every other
+    # dataset reads its own data\ as it always has.
+    $dataDir = Get-ExakitDatasetFiles -KitRoot $KitRoot -Dir $dir -Id $Id
+    $csvFiles = @(Get-ChildItem -Path (Join-Path $dataDir "*.csv") -ErrorAction SilentlyContinue |
         Where-Object { $_.Length -gt 0 })
     $bytes = [long]0
     foreach ($csv in $csvFiles) { $bytes += [long]$csv.Length }
@@ -3280,10 +4475,6 @@ function Invoke-ExakitDatasetDirLoad {
     if ((Test-Path $verifySql) -and (Get-Item $verifySql).Length -gt 0) { $totalWeight += $nominal }
     $doneWeight = [long]0
     $started = Get-Date
-    # Which row of the table this dataset owns, if a table is on screen. Zero
-    # means there is none, and the single-line bar takes over.
-    $script:ExakitTableRow = 0
-    if ($script:ExakitTableLive) { $script:ExakitTableRow = Get-ExakitDataTableRow -Id $Id }
     if ($script:ExakitTableRow -gt 0) {
         Set-ExakitTableRow -Row $script:ExakitTableRow -State "running" `
             -Pct 0 -Ceiling 1 -Secs 2 -Phase "$Id - reading the dataset"
@@ -3393,7 +4584,7 @@ function Invoke-ExakitDatasetDirLoad {
 
     # Row-count summary over the dataset's tables (uploaded CSVs + markers).
     $tables = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($csv in (Get-ChildItem -Path (Join-Path $dir "data\*.csv") -ErrorAction SilentlyContinue)) {
+    foreach ($csv in (Get-ChildItem -Path (Join-Path $dataDir "*.csv") -ErrorAction SilentlyContinue)) {
         $t = [System.IO.Path]::GetFileNameWithoutExtension($csv.Name).ToUpper()
         if (-not $tables.Contains($t)) { [void]$tables.Add($t) }
     }
@@ -3509,8 +4700,10 @@ function Invoke-ExakitDatasetDirLoad {
 $script:ExakitTableIds = @()          # the dataset id per row ("" for the rest)
 $script:ExakitTableRowLocal = 0
 $script:ExakitTableRowSkip = 0
+$script:ExakitTableHasDesc = $false  # does any row carry a description
 $script:ExakitTableDefaults = @()
 $script:ExakitTableGroupFirst = 0
+$script:ExakitTablePendingCount = 0
 $script:ExakitTableGroupLast = 0
 $script:ExakitTableLive = $false      # is the table animating right now
 $script:ExakitTableRow = 0            # the row the dataset being loaded owns
@@ -3519,54 +4712,131 @@ $script:ExakitTableRow = 0            # the row the dataset being loaded owns
 # drawn, and record the defaults / group range / exclusive row the way the
 # selection layer expects. Twin of exakit_data_table_build in exapump.sh.
 function New-ExakitDataTable {
-    param([Parameter(Mandatory)][string]$FinalLabel)
-    [void](New-ExakitTable -Title "Datasets to load")
+    param([Parameter(Mandatory)][string]$FinalLabel, [switch]$NoLocal)
+    [void](New-ExakitTable -Title "Data to load")
+    # What each dataset is (description= in its dataset.conf): the row's second
+    # column, shown as "Description" while the reader picks (Select-ExakitDataLoad).
+    $script:ExakitTableHasDesc = $false
     $ids = New-Object 'System.Collections.Generic.List[string]'
     $defaults = New-Object 'System.Collections.Generic.List[int]'
     $script:ExakitTableGroupFirst = 0
     $script:ExakitTableGroupLast = 0
     $pending = @(Get-ExakitPendingDatasets)
-    if ($pending.Count -gt 0) {
-        # The group row is itself a checkbox: pre-selected with every dataset;
-        # unchecking it clears them all, after which they can be picked
-        # individually. Each dataset hangs off it with a tree connector, which the
-        # table draws from the palette - the connectors must never be literals in
-        # this file, which has no BOM and would be misread byte for byte by
-        # Windows PowerShell 5.1 (see tests/ps-encoding-guard.sh).
-        [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Ticked)
+    $script:ExakitTableSampleIds = @()
+    # EVERY SAMPLE IS LISTED, a persona or not: a persona's datasets are the
+    # ones ticked (EXAKIT_DATASETS_PRESELECT, below), the rest can be ticked too.
+    # Twin of the same comment in exakit_data_table_build.
+    if ($pending.Count -gt 0 -and $env:EXAKIT_DATA_TABLE_COMPACT -eq "1") {
+        # THE INSTALL'S FORM: one row for the samples, named by what it loads, no
+        # tree under it - the default persona's datasets still to load, else every
+        # pending one. Its load shows on that one row. Twin of the compact row in
+        # exakit_data_table_build.
+        $preselect = "$env:EXAKIT_DATASETS_PRESELECT"
+        $sampleIds = @($pending | ForEach-Object { $_.Id })
+        if ($preselect -and $preselect -ne "none") {
+            $wanted = @($preselect -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $picked = @($sampleIds | Where-Object { $wanted -ccontains $_ })
+            if ($picked.Count -gt 0) { $sampleIds = $picked }
+        }
+        $script:ExakitTableSampleIds = $sampleIds
+        $script:ExakitTableSampleLabels = (@($pending | Where-Object { $sampleIds -contains $_.Id } | ForEach-Object { $n = (("" + $_.Label) -replace ' - [0-9.]+ MB download$', '') -replace ' *\(.*$', ''; if ($n) { $n } else { $_.Id } }) -join ', ')
+        # The name alone: the datasets are named in its Status cell once they are
+        # in, so the label is never cut short. Twin of the compact row in exapump.sh.
+        [void](Add-ExakitTableRow -Kind "plain" -Label "Sample datasets" -Ticked)
+        [void]$ids.Add("samples")
+        [void]$defaults.Add(1)
+    } elseif ($pending.Count -gt 0) {
+        # The parent row "Sample datasets" is itself a checkbox: pre-selected with
+        # every dataset; unchecking it clears them all, after which they can be
+        # picked individually. Each dataset hangs off it with a tree connector,
+        # which the table draws from the palette - the connectors must never be
+        # literals in this file, which has no BOM and would be misread byte for
+        # byte by Windows PowerShell 5.1 (see tests/ps-encoding-guard.sh).
+        [void](Add-ExakitTableRow -Kind "group" -Label "Sample datasets" -Ticked)
         [void]$ids.Add("")
         for ($i = 0; $i -lt $pending.Count; $i++) {
             if ($i -eq $pending.Count - 1) { $kind = "corner" } else { $kind = "tee" }
             # The label loses its trailing "(~175k rows)": the Status column
             # carries the real count when the row finishes, and an estimate beside
             # a measurement is the same fact twice, worse. Only a TRAILING
-            # parenthetical goes - "Orders (EU) by quarter" keeps its brackets.
-            $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)$', '')
-            [void](Add-ExakitTableRow -Kind $kind -Label $label -Ticked)
+            # parenthetical goes - "Orders (EU) by quarter" keeps its brackets -
+            # and a download size after it stays: that is what the row will cost.
+            $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)( - [0-9.]+ MB download)?$', '$1')
+            # What it is goes in its own column, not on the name.
+            $about = "" + $pending[$i].Description
+            if ($about) { $script:ExakitTableHasDesc = $true }
+            [void](Add-ExakitTableRow -Kind $kind -Label $label -Col2 $about -Ticked)
             [void]$ids.Add($pending[$i].Id)
         }
         $script:ExakitTableGroupFirst = 2
         $script:ExakitTableGroupLast = $pending.Count + 1
         for ($i = 1; $i -le ($pending.Count + 1); $i++) { [void]$defaults.Add($i) }
+        # The personas picked for this machine tick their own datasets only (and
+        # the parent only when that is every row). Twin of _exakit_data_table_preselect.
+        if ($env:EXAKIT_DATASETS_PRESELECT) {
+            $wanted = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
+            $defaults.Clear()
+            $all = $true
+            for ($i = 0; $i -lt $pending.Count; $i++) {
+                if ($wanted -ccontains $pending[$i].Id) { [void]$defaults.Add($i + 2) } else { $all = $false }
+            }
+            if ($all) { $defaults.Insert(0, 1) }
+        }
+    } else {
+        # Every sample is in already: the parent stays on screen, so the reader
+        # sees why, but it cannot be picked.
+        [void](Add-ExakitTableRow -Kind "plain" -Label "Sample datasets - all of them are loaded already")
+        if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
+        [void]$ids.Add("")
     }
-    # The label is NARROWER than the shell twin's on purpose: exapump.ps1 does not
-    # route a .json file to the JSON Tables add-on the way exapump.sh does, so
-    # naming JSON here would offer what this side cannot do. When that routing
-    # lands, widen the label and the assertion in tests/test_sample_data_schema.py
-    # together - never the label alone.
-    [void](Add-ExakitTableRow -Kind "plain" -Label "A local CSV / Parquet / JSON file, or a folder of them")
-    [void]$ids.Add("local")
-    $script:ExakitTableRowLocal = $ids.Count
-    [void](Add-ExakitTableRow -Kind "plain" -Label $FinalLabel)
+    $script:ExakitTablePendingCount = $pending.Count
+    # The other two ways data comes in, in the same table: your own file or
+    # folder, and an external source (`exakit connect`, pickable only where the
+    # virtual-schema module can run). -NoLocal leaves both rows out. 0 means no
+    # row. Twin of exakit_data_table_build.
+    $script:ExakitTableRowLocal = 0
+    if (-not $NoLocal) {
+        [void](Add-ExakitTableRow -Kind "plain" -Label "Upload a file or folder: CSV/Parquet/JSON")
+        [void]$ids.Add("local")
+        $script:ExakitTableRowLocal = $ids.Count
+        # An external source stays where it is and is queried through a virtual
+        # schema - the same wizard as `exakit connect`. Pickable wherever it can
+        # work (the module is loaded - the installer loads it too - and the
+        # kit's pyexasol is installed); elsewhere it is shown, cannot be
+        # picked, and says why. Twin of the row in exakit_data_table_build.
+        if ((Get-Command Test-ExakitVsAvailable -ErrorAction SilentlyContinue) -and (Test-ExakitVsAvailable)) {
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Federation: Connect other data sources")
+            [void]$ids.Add("external")
+        } else {
+            $why = "unavailable"
+            if (Get-Command Get-ExakitVsUnavailableReason -ErrorAction SilentlyContinue) { $why = Get-ExakitVsUnavailableReason }
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Federation: Connect other data sources - $why")
+            if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
+            [void]$ids.Add("")
+        }
+    }
+    # The install's compact table loads its samples before it asks, so the last
+    # row goes on rather than skips (as the add-ons table does). `exakit
+    # data-load` keeps Skip. Twin of the same row in exakit_data_table_build.
+    $lastLabel = $FinalLabel
+    if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and $FinalLabel -eq "Skip") { $lastLabel = "Continue" }
+    [void](Add-ExakitTableRow -Kind "plain" -Label $lastLabel)
     [void]$ids.Add("")
     $script:ExakitTableRowSkip = $ids.Count
     # With every bundled dataset already loaded there is nothing to tick but the
     # local-file row, which is the only thing this screen can still do. Enter must
     # never be a no-op.
-    if ($pending.Count -eq 0) {
+    # A persona whose datasets are all in already: Skip, not the file row -
+    # nothing it asked for is left, and it did not ask for a file.
+    if ($pending.Count -eq 0 -and $script:ExakitTableRowLocal -gt 0) {
         $defaults.Clear()
-        [void]$defaults.Add($script:ExakitTableRowLocal)
+        if ($env:EXAKIT_DATASETS_PRESELECT) { [void]$defaults.Add($script:ExakitTableRowSkip) }
+        else { [void]$defaults.Add($script:ExakitTableRowLocal) }
     }
+    # Nothing ticked - the personas' datasets are all loaded already, a persona
+    # wants none, or there is no local-file row to fall back on - is Skip, so
+    # Enter answers instead of doing nothing. Twin of exakit_data_table_build.
+    if ($defaults.Count -eq 0) { [void]$defaults.Add($script:ExakitTableRowSkip) }
     $script:ExakitTableIds = $ids.ToArray()
     $script:ExakitTableDefaults = $defaults.ToArray()
 }
@@ -3575,57 +4845,235 @@ function New-ExakitDataTable {
 # Twin of exakit_data_table_row in exapump.sh.
 function Get-ExakitDataTableRow {
     param([Parameter(Mandatory)][string]$Id)
+    # The install's one sample row carries every one of its datasets.
+    if (@($script:ExakitTableSampleIds) -ccontains $Id) { $Id = "samples" }
     for ($i = 0; $i -lt $script:ExakitTableIds.Count; $i++) {
         if ($script:ExakitTableIds[$i] -eq $Id) { return $i + 1 }
     }
     return 0
 }
 
-# Select-ExakitDataLoad <final_label> - the data-source choice, made in the
-# TABLE that will show the progress: every bundled dataset that is not loaded yet
-# under a "Select All" group row, then the local-file option, then <final_label>
-# as the mutually exclusive opt-out (Cancel/Skip). When every bundled dataset is
-# already loaded the group disappears and the local-file row is the default, so
-# Enter still does something. Returns a string array of ids ("tpch", "local") or
+# Select-ExakitDataLoad <final_label> - the data question, ONE table that the
+# load then fills in: the parent "Sample datasets" with every dataset not loaded
+# yet under it (a For column naming the personas each is for), your file or
+# folder, an external source (exakit connect where it can run, else shown
+# disabled) and <final_label> as the
+# mutually exclusive opt-out (Skip). When every dataset is in, the parent stays
+# on screen, disabled. Returns a string array of ids ("tpch", "local") or
 # @("none"). Twin of exakit_data_load_select in exapump.sh.
 function Select-ExakitDataLoad {
     param([Parameter(Mandatory)][string]$FinalLabel)
     # EXAKIT_DATA_FILE mirrors the EXAKIT_DATASETS contract: naming a file IS
     # choosing the local-file option, so the table never draws. The path (and
     # EXAKIT_DATA_TABLE) are consumed by Import-ExakitLocalFile as its answers.
+    $script:ExakitDataFileAnnounce = $false
     if ($env:EXAKIT_DATA_FILE) {
-        Info "Loading a local file (EXAKIT_DATA_FILE)."
         # No table was built, so nothing may animate one. The row ids ARE that
         # signal, the way an empty EXAKIT_TABLE_STATE is on the shell side.
         $script:ExakitTableIds = @()
-        return @("local")
+        # The personas picked at the install's question keep their datasets:
+        # the file loads after them, not instead of them - and is announced
+        # just before it loads (Write-ExakitDataFileAnnounce), not ahead of
+        # their datasets. Twin of the same block in exakit_data_load_select.
+        $mine = @()
+        if ($env:EXAKIT_PERSONA_ACTIVE -and $env:EXAKIT_DATASETS_PRESELECT -and $env:EXAKIT_DATASETS_PRESELECT -ne "none") {
+            $wanted = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
+            $mine = @(Get-ExakitPendingDatasets | Where-Object { $wanted -ccontains $_.Id } | ForEach-Object { $_.Id })
+        }
+        if ($mine.Count -gt 0) { $script:ExakitDataFileAnnounce = $true }
+        else { Info "Loading a local file (EXAKIT_DATA_FILE)." }
+        return @($mine + @("local"))
     }
+    # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
+    # it, then your own file or folder, an external source (exakit connect
+    # where it can run, else shown disabled) and Skip; Enter starts the load in
+    # this same table. Twin of
+    # exakit_data_load_select / exakit_data_samples_select.
     New-ExakitDataTable -FinalLabel $FinalLabel
-    # The local-file row being row 1 means there was no group above it, which
-    # means nothing is pending.
-    # Nothing said about it - twin of the same silence in exapump.sh. The table
-    # below shows what is on offer, and their absence from it is the message.
-    if ($script:ExakitTableRowLocal -eq 1) {
-        Write-ExakitLog "INFO" "Every bundled dataset is already loaded (reload with: exakit data-load -Force)."
-    }
     $groupParent = 0
     if ($script:ExakitTableGroupFirst -gt 0) { $groupParent = 1 }
-    Write-Host ""
-    $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
-        -ExclusiveIndex $script:ExakitTableRowSkip `
-        -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
-        -GroupLast $script:ExakitTableGroupLast -GroupMode "all")
+    # Who each dataset is for gets a column of its own while the reader picks,
+    # and only then: the progress display that follows has no room for it.
+    # Without a persona the second column is there all the same, blank and
+    # untitled, so the names get their width (twin of exakit_data_samples_select).
+    if ($script:UiTable) {
+        if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
+        # The install's compact table has no descriptions: no blank column either, so the names keep their width.
+        if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1") { $script:UiTable.Col2 = "" }
+        # A row with no description runs its name on into the Description's room,
+        # so on 80 columns no name is cut short. Twin of UI_TABLE_SPAN_EMPTY.
+        $script:UiTable.SpanEmpty = $true
+    }
+    $onScreen = 0
+    $startRow = 0
+    if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and @($script:ExakitTableSampleIds).Count -gt 0) {
+        # THE INSTALL'S SAMPLE ROW, before the question: its column heading as on
+        # a re-run (one table, one heading), no
+        # checkbox on it, and its datasets loading at once with the bar to the
+        # right of the row. Then the same table asks about the rows under it,
+        # Skip ticked so Enter goes on. Twin of _exakit_data_compact_samples.
+        # A narrow console (under 100 columns): a narrower Status, so no row's
+        # name is cut short, and the sample row says how many rather than which.
+        # Twin of _dcs_wide in exapump.sh.
+        $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+        $script:ExakitDataWide = ($cols -ge 100)
+        if (-not $script:ExakitDataWide -and $script:UiTable) { $script:UiTable.StatMin = 22 }
+        $script:UiTableNoBox = @(1)
+        $script:UiTableLocked = @(1)    # ticked and locked: it loads, and it cannot be unticked
+        Write-Host ""
+        Start-ExakitDataTableRun
+        $okCount = 0
+        $all = @($script:ExakitTableSampleIds)
+        foreach ($sampleId in $all) {
+            try {
+                Invoke-ExakitDatasetLoad -KitRoot (Get-ExakitRepoRoot) -Id $sampleId
+                $okCount++
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_" }
+                Write-ExakitLog "WARN" "Dataset '$sampleId' did not load: $reason"
+                $script:ExakitCompactFailedIds = @($script:ExakitCompactFailedIds) + @($sampleId)
+            }
+        }
+        if ($okCount -eq $all.Count) {
+            $say = "$($script:ExakitTableSampleLabels) loaded"
+            if (-not $script:ExakitDataWide -or -not $script:ExakitTableSampleLabels -or $say.Length -gt 40) { $say = "$($all.Count) of $($all.Count) loaded" }
+            Set-ExakitTableRow -Row 1 -State "done" -Final $say
+        } else {
+            Set-ExakitTableRow -Row 1 -State "failed" -Final "$okCount of $($all.Count) loaded"
+        }
+        Stop-ExakitDataTableRun
+        # Loaded: the row is no longer a choice, and nothing more loads from it.
+        $script:ExakitTableIds[0] = ""
+        $script:ExakitTableSampleIds = @()
+        $script:ExakitTableDefaults = @($script:ExakitTableRowSkip)
+        # The frame only, as its twin passes UI_TABLE_LINES: one more moved the
+        # menu up onto the blank line above the box and drew over it.
+        if ($script:UiTable) { $onScreen = [int]$script:UiTable.Lines }
+        $startRow = 2
+    } else {
+        Write-Host ""
+    }
+    try {
+        $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
+            -ExclusiveIndex $script:ExakitTableRowSkip `
+            -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
+            -GroupLast $script:ExakitTableGroupLast -GroupMode "all" -OnScreen $onScreen -StartRow $startRow)
+    } finally {
+        if ($script:UiTable) { $script:UiTable.Col2 = "" }
+        # The install's compact table keeps its look through the progress that
+        # follows: no "Dataset" heading, and the sample row's ghost tick. The
+        # offer (persona.ps1) resets them once the table is done. Twin of the
+        # same rule in exakit_data_samples_select.
+        if ($env:EXAKIT_DATA_TABLE_COMPACT -ne "1") {
+            if ($script:UiTable) { $script:UiTable.Col1 = "Dataset"; $script:UiTable.StatMin = $null }
+            $script:UiTableNoBox = @()
+            $script:UiTableLocked = @()
+        }
+    }
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
+    # With nothing pending the local-file row is pre-ticked so Enter does
+    # something, but only a person can answer the question it asks. With no
+    # terminal the default stood and asked for a path nobody could give. Twin
+    # of the same check in exakit_data_load_select.
+    # "Nothing pending" is the count, not the row number: the table keeps the
+    # sample parent on screen (disabled) then, so the file row is not row 1.
+    if ((-not $script:ExakitTableConfirmed) -and $script:ExakitTablePendingCount -eq 0 -and
+        $script:ExakitTableRowLocal -gt 0 -and
+        $selection.Count -eq 1 -and $selection[0] -eq $script:ExakitTableRowLocal) {
+        Info "Every bundled dataset is already loaded. To load a file of your own without a terminal, name it with EXAKIT_DATA_FILE."
+        return @("none")
+    }
     $chosen = New-Object 'System.Collections.Generic.List[string]'
     foreach ($row in $selection) {
         if ($row -lt 1 -or $row -gt $script:ExakitTableIds.Count) { continue }
         $id = $script:ExakitTableIds[$row - 1]
-        # The group row and the opt-out carry no id: they are answers about the
-        # other rows, not data sources of their own.
+        if ($id -eq "samples") {
+            foreach ($sampleId in @($script:ExakitTableSampleIds)) { if (-not $chosen.Contains($sampleId)) { [void]$chosen.Add($sampleId) } }
+            continue
+        }
         if ($id -and -not $chosen.Contains($id)) { [void]$chosen.Add($id) }
     }
     if ($chosen.Count -eq 0) { return @("none") }
     return $chosen.ToArray()
+}
+
+
+# Get-ExakitDataLoadOrder - the picked ids in the table's order: the datasets,
+# then your own file, then the external source. The shell twins get the same
+# order by asking the file and the source after the table has closed.
+function Get-ExakitDataLoadOrder {
+    param([string[]]$Chosen = @())
+    $datasets = @($Chosen | Where-Object { $_ -ne "local" -and $_ -ne "external" })
+    $file = @($Chosen | Where-Object { $_ -eq "local" })
+    $source = @($Chosen | Where-Object { $_ -eq "external" })
+    return @($datasets + $file + $source)
+}
+
+# What a run that does not start the wizard says for the external row. The
+# wizard asks questions only a person can answer (its inputs are not read from
+# the environment). Without a console that is the reason; with one, the row was
+# named in EXAKIT_DATASETS or nobody confirmed the table, and it is for later.
+# Twin of exakit_data_external_hint_text.
+function Get-ExakitDataExternalHint {
+    if (-not (Test-ExakitInteractive)) {
+        return "Connecting an external source asks its own questions, so it needs a terminal. Connect one any time with: exakit connect"
+    }
+    return "Connecting an external source asks its own questions, which this run does not ask. Run it later: exakit connect"
+}
+function Write-ExakitDataExternalHint {
+    Info (Get-ExakitDataExternalHint)
+}
+
+# Write-ExakitDataFileAnnounce - "Loading a local file (EXAKIT_DATA_FILE)." just
+# before the file loads, when a persona's datasets went first (see
+# Select-ExakitDataLoad). Twin of exakit_data_file_announce.
+function Write-ExakitDataFileAnnounce {
+    if (-not $script:ExakitDataFileAnnounce) { return }
+    $script:ExakitDataFileAnnounce = $false
+    Info "Loading a local file (EXAKIT_DATA_FILE)."
+}
+
+# Test-ExakitConnectCancelled <exit code> - did the wizard end without
+# connecting because the person stopped it? 5 is its own "nothing changed",
+# 130 an interrupt on a shell, and -1073741510 (0xC000013A,
+# STATUS_CONTROL_C_EXIT) Ctrl+C on a Windows console. Twin of the 5|130 arm in
+# exakit_data_external_run.
+function Test-ExakitConnectCancelled {
+    param([int]$Code)
+    return ($Code -eq 5 -or $Code -eq 130 -or $Code -eq -1073741510)
+}
+
+# Invoke-ExakitDataExternal - the "Federation: Connect other data sources" row, run last,
+# after the datasets and the file: `exakit connect` with no arguments
+# (Invoke-ExakitVsConnectWizard, a child on this console). Only a person who
+# ticked the row at a console gets the wizard; anything else is told the
+# command. It never fails its caller: a connect that failed or was cancelled
+# is said, with the command that retries it, and the data load carries on.
+# Twin of exakit_data_external_run.
+function Invoke-ExakitDataExternal {
+    if (-not $script:ExakitTableConfirmed -or -not (Test-ExakitInteractive)) {
+        Write-ExakitDataExternalHint
+        return
+    }
+    if (-not (Get-Command Invoke-ExakitVsConnectWizard -ErrorAction SilentlyContinue)) {
+        Warn2 "This kit copy cannot connect an external source. Update it (exakit update), then run: exakit connect"
+        return
+    }
+    Write-Host ""
+    # Never the caller's failure: a wizard that could not even be started is a
+    # connect that did not finish.
+    $code = 1
+    try { $code = [int](Invoke-ExakitVsConnectWizard) } catch { Write-ExakitLog "WARN" "data load: exakit connect could not run: $_" }
+    Write-ExakitLog "INFO" "data load: exakit connect (the external-source row) exited $code"
+    # Ctrl+C: the person wants their prompt back - no update check after this
+    # run (Show-ExakitUpdateNotice). A declined connect (5) is not an interrupt.
+    if ($code -eq 130 -or $code -eq -1073741510) { $script:ExakitUserInterrupted = $true }
+    if (Test-ExakitConnectCancelled $code) {
+        Info "No external source was connected. Connect one any time with: exakit connect"
+    } elseif ($code -ne 0) {
+        Warn2 "Connecting the external source did not finish (see above). Retry any time with: exakit connect"
+    }
 }
 
 function Show-ExakitDataLoadMenu {
@@ -3637,17 +5085,48 @@ function Show-ExakitDataLoadMenu {
         Info "Data loading cancelled."
         return
     }
+    # The check the menu did not wait for (exakit data-load): before any load.
+    # Twin of the same block in exakit_data_load_menu.
+    if ($script:ExakitRuntimeCheckDeferred) {
+        $script:ExakitRuntimeCheckDeferred = $false
+        Confirm-ExakitRuntimeRunning -Deploy
+    }
+    # The table's order: the datasets, your own file, then the external source.
+    # The file and the source are questions asked after the table, and the
+    # shell twin (exakit_data_load_menu) asks them in this order too.
+    $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
+    $deferred = $null
     Start-ExakitDataTableRun
     try {
         foreach ($id in $chosen) {
-            if ($id -eq "local") {
+            if ($id -eq "external") {
                 Stop-ExakitDataTableRun
-                $result = Import-ExakitLocalFile
-                if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
-                # Declined (the table held rows this kit did not load and the
-                # answer was skip): exit 5, as every unconfirmed command does.
-                # Twin of _menu_status=5 in exakit_data_load_menu.
-                if ($result -eq "declined") { $script:PendingExitCode = 5 }
+                # A connect that failed or was cancelled is said and does not
+                # change this command's exit code: the loads are what it
+                # reports on.
+                Invoke-ExakitDataExternal
+                continue
+            }
+            if ($id -eq "local") {
+                # A refused or failed file still lets the external source after
+                # it have its turn, as the shell twin runs the file in a
+                # subshell: refused is exit 2 at the end, failed is its error,
+                # thrown once the loop is done.
+                Stop-ExakitDataTableRun
+                Write-ExakitDataFileAnnounce
+                try {
+                    $result = Import-ExakitLocalFile
+                    if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+                    # Declined (the table held rows this kit did not load and the
+                    # answer was skip): exit 5, as every unconfirmed command does.
+                    # Twin of _menu_status=5 in exakit_data_load_menu.
+                    if ($result -eq "declined") { $script:PendingExitCode = 5 }
+                    # A folder with a file that did not load: exit 1, as the
+                    # shell twin's folder load returns 1. It answered 0.
+                    if ($result -eq "failed" -and $script:PendingExitCode -eq 0) { $script:PendingExitCode = 1 }
+                } catch {
+                    if (Test-ExakitRefusal $_) { $script:PendingExitCode = 2 } else { $deferred = $_ }
+                }
             } else {
                 $kitRoot = Get-ExakitRepoRoot
                 if (-not $kitRoot) { Fail "Could not find the kit's sql/ and data/ files to load." }
@@ -3657,6 +5136,9 @@ function Show-ExakitDataLoadMenu {
     } finally {
         Stop-ExakitDataTableRun
     }
+    # The file's failure, now that the external row has had its turn: exit 1,
+    # as the shell twin's _menu_status.
+    if ($deferred) { throw $deferred }
 }
 
 # Start-ExakitDataTableRun / Stop-ExakitDataTableRun - the same table the
@@ -3698,13 +5180,74 @@ function Invoke-ExakitSampleDataLoad {
     Invoke-ExakitDatasetDirLoad -KitRoot $KitRoot -Id "tpch" -Force:$Force
 }
 
+# Invoke-ExakitOfferLocalFile - the installer's local-file load (the file row,
+# or EXAKIT_DATA_FILE), once the table has stopped animating. A file the loader
+# refused is bad input, not a failed step: a warning, not booked, and the
+# install carries on. A failed load is a warning too, naming the file(s), and
+# never throws. Whatever happens to the reader's own file - refused, declined,
+# or a load that did not finish - it is the file, not the install: said, never
+# booked. Booking it said "sample data is not installed" over datasets that had
+# loaded, and the soft failure skipped the marketplace offer. Twin of
+# _exakit_offer_local_file.
+function Invoke-ExakitOfferLocalFile {
+    Write-ExakitDataFileAnnounce
+    $noteBefore = Test-Path -LiteralPath $script:FailureNotePath
+    try {
+        $result = Import-ExakitLocalFile
+        $failed = ($result -eq "failed")
+    } catch {
+        if (Test-ExakitRefusal $_) {
+            Warn2 "The local file was refused (see above). Load another any time with: exakit data-load"
+            return
+        }
+        Write-ExakitLog "WARN" "The local file did not load: $_"
+        $failed = $true
+        # Fail() kept its reason for a step to quote, and wrote it to disk as
+        # last_failure; neither belongs to the install now.
+        [void](Get-ExakitFailureReason)
+        if (-not $noteBefore) { Remove-Item -LiteralPath $script:FailureNotePath -Force -ErrorAction SilentlyContinue }
+    }
+    if ($failed) {
+        $names = @($script:ExakitLocalFileNames | Where-Object { $_ })
+        if ($names.Count -gt 1) { $say = "Your files $($names -join ', ') did not load (reason above)." }
+        elseif ($names.Count -eq 1) { $say = "Your file $($names[0]) did not load (reason above)." }
+        else { $say = "Your local file did not load (reason above)." }
+        Warn2 "$say Retry any time with: exakit data-load"
+        return
+    }
+    if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+    # Not a failed step - the install is fine, the table is the reader's.
+    # Twin of the exit-5 note in the shell installer.
+    if ($result -eq "declined") {
+        Warn2 "The local file was not loaded: its table already holds rows (see above). Decide with `$env:EXAKIT_ON_EXISTING = 'replace' or 'append' and re-run: exakit data-load"
+    }
+}
+
+# Stop-ExakitDataOffer <reasons> <unsaid> - end the installer's data step as
+# failed once every row picked has had its turn, naming EVERY reason (a dataset
+# and the file can both fail). With something not on screen yet (-Unsaid) it is
+# said as Fail says it; otherwise each reason was already said where it
+# happened, and only the booking is left. Invoke-ExakitBestEffort books it
+# without ending the install.
+function Stop-ExakitDataOffer {
+    param([string[]]$Reasons, [switch]$Unsaid)
+    $all = (@($Reasons | Where-Object { $_ }) -join " ")
+    if ($Unsaid) { Fail $all }
+    Set-ExakitFailureReason $all
+    if ($script:ExakitRecordFailureNotes -and (Get-Command Write-ExakitFailureNote -ErrorAction SilentlyContinue)) {
+        Write-ExakitFailureNote $all
+    }
+    Write-ExakitLog "FATAL" $all
+    throw [ExakitFailException]::new($all)
+}
+
 # Request-ExakitDataLoadOffer <kit_root> - interactively offer the guided
 # data loading menu during install. Non-interactive installs print the
-# follow-up command and continue. Runs in a try/catch so a Fail() inside the
-# loading flow (which calls exit) is still contained by the caller... note:
-# unlike bash's subshell isolation, PowerShell's exit terminates the whole
-# process, so callers that must survive a failed load run this in a child
-# pwsh process instead (see setup-windows.ps1).
+# follow-up command and continue. The rows run in the table's order: the
+# datasets, then your own file, then the external source (`exakit connect`, at
+# a console only). A failure is thrown once everything picked has had its
+# turn, with every reason, and the caller (Invoke-ExakitBestEffort) books it
+# without ending the install. Twin of exakit_maybe_offer_data_load.
 function Request-ExakitDataLoadOffer {
     param([Parameter(Mandatory)][string]$KitRoot)
     # One dataset's failure must not cost the others: a thrown load used to leave
@@ -3712,97 +5255,144 @@ function Request-ExakitDataLoadOffer {
     # data is not installed" about a TPCH that was fully in. Failures are
     # collected and reported once, with the exact retry.
     $failedIds = @()
-    $failedReason = ""
+    # Why the step failed, every part of it, and whether a part is not on
+    # screen yet (the datasets' retry line is said once, at the end).
+    $reasons = @()
+    $unsaid = $false
 
     # EXAKIT_DATASETS names bundled datasets directly (csv of ids from
     # data\datasets\<id>\, e.g. "tpch,weather") so an agent-driven or scripted
     # install picks an exact selection without a tty. Unknown ids warn and are
-    # skipped; if none are valid the load fails. EXAKIT_DATASETS takes
-    # precedence over EXAKIT_LOAD_SAMPLE. Twin of exakit_maybe_offer_data_load
-    # in common.sh - the .ps1 path used to ignore these documented vars.
-    if ($env:EXAKIT_DATASETS) {
-        $knownIds = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
-        $validAny = $false
-        foreach ($envId in ($env:EXAKIT_DATASETS -split ',')) {
-            $envId = $envId.Trim()
-            if (-not $envId) { continue }
-            if ($knownIds -contains $envId) {
-                $validAny = $true
-                Info "Loading dataset '$envId' (EXAKIT_DATASETS)."
-                try {
-                    Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $envId
-                } catch {
-                    $reason = Get-ExakitFailureReason
-                    if (-not $reason) { $reason = "$_" }
-                    # ONE TELLING. Fail already put the reason on screen with
-                    # the log path under it; repeating it here and again in
-                    # the closing line printed the same failure three times.
-                    Write-ExakitLog "WARN" "Dataset '$envId' did not load: $reason"
-                    $failedIds += $envId
-                    $failedReason = $reason
-                }
-            } else {
-                Warn2 "Unknown dataset id '$envId' in EXAKIT_DATASETS (available: $($knownIds -join ', '))."
-            }
-        }
-        if (-not $validAny) { Fail "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded." }
-        if ($failedIds.Count -gt 0) {
-            Fail "Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load"
-        }
-        return
-    }
-
-    # EXAKIT_LOAD_SAMPLE decides up front: =0 skips data loading entirely, =1
-    # loads the bundled TPC-H sample without asking. Twin of common.sh.
-    if ($env:EXAKIT_LOAD_SAMPLE -eq "0") {
-        Info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
-        return
-    }
-    if ($env:EXAKIT_LOAD_SAMPLE -eq "1") {
-        Info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
-        Invoke-ExakitSampleDataLoad -KitRoot $KitRoot
-        return
-    }
-
-    # No lead-in sentence: the checkbox below names every dataset on offer and
-    # the skip, which is the whole of what this line was explaining.
-    # Dynamic dataset checkbox (shared with `exakit data-load`): only bundled
-    # datasets that are not loaded yet are offered, pre-selected, plus the
-    # local-file option and an explicit skip. Non-interactive installs keep
-    # the pre-selected defaults.
-    $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
-    if ($chosen -contains "none") {
-        Info "Skipping data loading. Run it any time with: exakit data-load"
-        return
-    }
-    Start-ExakitDataTableRun
-    try {
-        foreach ($id in $chosen) {
-            if ($id -eq "local") {
-                Stop-ExakitDataTableRun
-                $result = Import-ExakitLocalFile
-                if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
-                # Not a failed step - the install is fine, the table is the
-                # reader's. Twin of the exit-5 note in the shell installer.
-                if ($result -eq "declined") {
-                    Warn2 "The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load"
-                }
-            } else {
-                try {
-                    Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
-                } catch {
-                    $reason = Get-ExakitFailureReason
-                    if (-not $reason) { $reason = "$_" }
-                    Write-ExakitLog "WARN" "Dataset '$id' did not load: $reason"
-                    $failedIds += $id
-                    $failedReason = $reason
+    # skipped; if none are valid the step fails. `external` names the
+    # external-source row, which unattended only prints the command.
+    # EXAKIT_DATASETS takes precedence over EXAKIT_LOAD_SAMPLE (=0 skips the
+    # samples, =1 loads the bundled TPC-H). EXAKIT_DATA_FILE loads after either:
+    # a persona fills in EXAKIT_DATASETS, and that answer used to return before
+    # the file was looked at, so the file was dropped without a word. Twin of
+    # exakit_maybe_offer_data_load in common.sh.
+    if ($env:EXAKIT_DATASETS -or $env:EXAKIT_LOAD_SAMPLE -eq "0" -or $env:EXAKIT_LOAD_SAMPLE -eq "1") {
+        $externalNamed = $false
+        if ($env:EXAKIT_DATASETS) {
+            $knownIds = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
+            $validAny = $false
+            foreach ($envId in ($env:EXAKIT_DATASETS -split ',')) {
+                $envId = $envId.Trim()
+                if (-not $envId) { continue }
+                if ($knownIds -ccontains $envId) {
+                    $validAny = $true
+                    Info "Loading dataset '$envId' (EXAKIT_DATASETS)."
+                    try {
+                        Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $envId
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_" }
+                        # ONE TELLING. Fail already put the reason on screen with
+                        # the log path under it; repeating it here and again in
+                        # the closing line printed the same failure three times.
+                        Write-ExakitLog "WARN" "Dataset '$envId' did not load: $reason"
+                        $failedIds += $envId
+                    }
+                } elseif ($envId -ceq "external") {
+                    # The external-source row, by the id the table gives it. An
+                    # answer, not an unknown id - and unattended only ever the
+                    # command to run (after the file).
+                    $validAny = $true
+                    $externalNamed = $true
+                } else {
+                    Warn2 "Unknown dataset id '$envId' in EXAKIT_DATASETS (available: $($knownIds -join ', '))."
                 }
             }
+            if (-not $validAny) {
+                # Said now, before the file, as the shell twin says it.
+                $noMatch = "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded."
+                Write-ExakitError $noMatch
+                $reasons += $noMatch
+            }
+        } elseif ($env:EXAKIT_LOAD_SAMPLE -eq "0") {
+            if ($env:EXAKIT_DATA_FILE) {
+                Info "Skipping the sample data (EXAKIT_LOAD_SAMPLE=0)."
+            } else {
+                Info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
+            }
+        } else {
+            Info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
+            try {
+                Invoke-ExakitSampleDataLoad -KitRoot $KitRoot
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                $reasons += $reason
+            }
         }
-    } finally {
-        Stop-ExakitDataTableRun
+        if ($env:EXAKIT_DATA_FILE) {
+            Info "Loading a local file (EXAKIT_DATA_FILE)."
+            try {
+                Invoke-ExakitOfferLocalFile
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                $reasons += $reason
+            }
+        }
+        if ($externalNamed) { Write-ExakitDataExternalHint }
+    } else {
+        # No lead-in sentence: the checkbox below names every dataset on offer and
+        # the skip, which is the whole of what this line was explaining.
+        # Dynamic dataset checkbox (shared with `exakit data-load`): only bundled
+        # datasets that are not loaded yet are offered, pre-selected, plus the
+        # local-file option, the external source and an explicit skip.
+        # Non-interactive installs keep the pre-selected defaults.
+        $script:ExakitCompactFailedIds = @()
+        $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
+        $failedIds += @($script:ExakitCompactFailedIds)
+        if ($chosen -contains "none") {
+            # The install's compact table loaded its samples before it asked: Skip is only "nothing more".
+            if ($env:EXAKIT_DATA_TABLE_COMPACT -ne "1") {
+                Info "Skipping data loading. Run it any time with: exakit data-load"
+                return
+            }
+            $chosen = @()
+        }
+        $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
+        if ($chosen.Count -gt 0) { Start-ExakitDataTableRun }
+        try {
+            foreach ($id in $chosen) {
+                if ($id -eq "external") {
+                    # Last, the table's order. A connect that failed or was
+                    # cancelled is said, with the command, and is not a failed
+                    # data step: the install carries on.
+                    Stop-ExakitDataTableRun
+                    Invoke-ExakitDataExternal
+                } elseif ($id -eq "local") {
+                    # A failed file still lets the external source after it
+                    # have its turn; a refused one is only a warning.
+                    Stop-ExakitDataTableRun
+                    try {
+                        Invoke-ExakitOfferLocalFile
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                        $reasons += $reason
+                    }
+                } else {
+                    try {
+                        Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_" }
+                        Write-ExakitLog "WARN" "Dataset '$id' did not load: $reason"
+                        $failedIds += $id
+                    }
+                }
+            }
+        } finally {
+            Stop-ExakitDataTableRun
+        }
     }
     if ($failedIds.Count -gt 0) {
-        Fail "Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load"
+        # The datasets' retry line goes first: they ran first.
+        $reasons = @("Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load") + $reasons
+        $unsaid = $true
     }
+    if ($reasons.Count -gt 0) { Stop-ExakitDataOffer -Reasons $reasons -Unsaid:$unsaid }
 }

@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Profile D: a native adapter (a Rust .so) run by the Rust language",
+    "container, a custom SLC the kit installs with consent (pinned per CPU",
+    "architecture, one restart). Measured on Exasol Personal 2.3.0: a Rust",
+    "UDF's entry point is bound to its script name (the .so exports",
+    "__exa_udf_entry_<NAME>), so the adapter and its scan UDF keep the names",
+    "the .so was built with and are shared by every source of the connector."
+  ],
+  "id": "rust-native",
+  "label": "D",
+  "slc": {
+    "alias": "RUST",
+    "language": "rust",
+    "needs_dns": false,
+    "custom": {
+      "version": "0.33.0",
+      "license": "MIT",
+      "upstream": "exasol-labs/language-container-rs",
+      "arch": {
+        "aarch64": {
+          "asset": "lc-rust-0.33.0-aarch64.tar.gz",
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0-aarch64.tar.gz",
+          "size": 9574265,
+          "sha256": "de311ae8acadd30579373820d00b92364866880c15bf2edf8284567a8aaa5f8e"
+        },
+        "x86_64": {
+          "asset": "lc-rust-0.33.0.tar.gz",
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0.tar.gz",
+          "size": 10238906,
+          "sha256": "eeedf5f2f8f7a4ad3a329065e516f93106412f270280bf47dede8e5023985245"
+        }
+      }
+    }
+  },
+  "bucket": {
+    "service": "bfsdefault",
+    "bucket": "default",
+    "dir": "exakit/vs"
+  },
+  "adapter_script": {
+    "language": "RUST"
+  },
+  "import_script": {
+    "language": "RUST",
+    "signature": "(spec VARCHAR(2000000)) EMITS (...)",
+    "type": "SCALAR"
+  }
+}

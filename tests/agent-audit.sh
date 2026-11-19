@@ -101,7 +101,7 @@ _conf="$( (
 check "status is conflict, and the start probe says not running" "conflict not-running " "$_conf"
 # The database half of cmd_start lives in _start_database (shared with
 # `exakit start database`), so the slice covers both.
-has "cmd_start refuses on conflict with the remedy" "held by another process" "$(sed -n '/^_start_database()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
+has "cmd_start refuses on conflict with the remedy" "held by another process" "$(sed -n '/^_start_database()/,/^}/p; /^_start_database_run()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
 has "status --json names the conflict remedy" "another process is listening on the database port" "$(cat "$CLI")"
 
 echo "4. info --json carries the contract keys:"
@@ -243,13 +243,13 @@ exakit_note_failure "the AI client configuration did not finish (see the log)"
 exakit_clear_runtime_failure_note
 check "an install-step note stays" "present" "$([ -f "$EXAKIT_HOME/.last-failure" ] && echo present || echo absent)"
 exakit_clear_failure_note
-has "cmd_start calls it once the database runs" "exakit_clear_runtime_failure_note" "$(sed -n '/^_start_database()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
+has "cmd_start calls it once the database runs" "exakit_clear_runtime_failure_note" "$(sed -n '/^_start_database()/,/^}/p; /^_start_database_run()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
 
 echo "R2-4b. every command answers --help, the help command included:"
 # `exakit help --help` was the one spelling refused as an unknown option: the
 # universal --help hook skips the help command on purpose, and the help arm's
 # own guard did not list --help. It opens the help command's page now.
-check "exakit help --help opens the help command's page" "exakit help [--all] [<component>]" \
+check "exakit help --help opens the help command's page" "exakit help [<component> | <command> [<action>...]] [--all] [--json]" \
     "$(bash "$CLI" help --help 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^[[:space:]]*$' | head -1 | sed 's/^[[:space:]]*//')"
 
 echo "R2-5. exakit sql --json is an option, and the gate still runs first:"
@@ -332,6 +332,24 @@ check "...and remedy is never a sentence" "command" \
 d = json.load(sys.stdin)
 print("command" if d["remedy"].startswith("exakit ") and " " not in d["remedy"].strip()[7:] else "prose")' 2>/dev/null)"
 
+echo "SCR-03. exakit sql hands the statement to exapump on stdin, never as an argument:"
+# A statement with a secret, saved to a file so nothing is in the shell history,
+# was still put on exapump's command line, where every process listing shows it.
+_argv_stub="$WORK/stub-exapump/exapump-argv"
+printf '#!/bin/sh\nfor a in "$@"; do printf "<<%%s>>\\n" "$a"; done > "%s/argv.seen"\ncat > "%s/stdin.seen"\necho "[]"\n' "$WORK" "$WORK" > "$_argv_stub"
+chmod +x "$_argv_stub"
+printf -- "-- saved\nCREATE OR REPLACE CONNECTION S3_C TO 'https://b.s3.amazonaws.com' USER 'AKIAEXAMPLE' IDENTIFIED BY 'S3_SECRET_KEY=wJalrXUtn';\n" > "$WORK/conn.sql"
+for _sm in --json ""; do
+    rm -f "$WORK/argv.seen" "$WORK/stdin.seen"
+    EXAKIT_EXAPUMP_BIN="$_argv_stub" bash "$CLI" sql --write --file "$WORK/conn.sql" $_sm >/dev/null 2>&1 </dev/null
+    lacks "--file ${_sm:-plain}: the secret is not in exapump's arguments" "wJalrXUtn" "$(cat "$WORK/argv.seen" 2>/dev/null)"
+    has "--file ${_sm:-plain}: it reaches exapump on stdin" "IDENTIFIED BY 'S3_SECRET_KEY=wJalrXUtn'" "$(cat "$WORK/stdin.seen" 2>/dev/null)"
+done
+rm -f "$WORK/argv.seen" "$WORK/stdin.seen"
+printf 'SELECT 1\n' | EXAKIT_EXAPUMP_BIN="$_argv_stub" bash "$CLI" sql --json >/dev/null 2>&1
+check "stdin input: exapump's arguments are the options alone" "<<sql>><<-p>><<starter-kit>><<-f>><<json>>" "$(tr -d '\n' < "$WORK/argv.seen" 2>/dev/null)"
+check "...and the statement is on its stdin" "SELECT 1" "$(cat "$WORK/stdin.seen" 2>/dev/null)"
+
 echo "R3-3. exakit mcp-remove exists and takes client names:"
 check "no client named: exit 2" "2" "$(bash "$CLI" mcp-remove >/dev/null 2>&1; echo $?)"
 check "'all' refused: exit 2" "2" "$(bash "$CLI" mcp-remove all >/dev/null 2>&1; echo $?)"
@@ -346,11 +364,20 @@ has "the exapump skill says the same" 'keep the file' "$(cat "$ROOT/skills/exaso
 
 echo "R3-5. uninstall removes exactly the permission rules the kit added:"
 mkdir -p "$HOME/.claude"
+# An older kit (0.2.5) merged its list and recorded nothing: the rules of its
+# list in the file are taken as its own (MCP-04 records them from now on).
+manifest_set components.skills.installed '["exakit"]'
+manifest_del components.skills.claude_rules >/dev/null 2>&1 || true
 printf '%s\n' '{"permissions": {"allow": ["Bash(exakit status:*)", "Bash(git status:*)", "mcp__exasol"], "deny": ["Bash(exakit uninstall:*)", "Bash(rm -rf:*)"]}, "theme": "dark"}' > "$HOME/.claude/settings.json"
 check "reports what it removed" "REMOVED 3" "$(exakit_remove_readonly_allowlist)"
 check "the user's own rules and settings stay" "Bash(git status:*)|Bash(rm -rf:*)|dark" \
     "$(python3 -c 'import json; d=json.load(open("'"$HOME"'/.claude/settings.json")); print("|".join(d["permissions"]["allow"]+d["permissions"]["deny"]+[d["theme"]]))')"
 check "a second run removes nothing" "REMOVED 0" "$(exakit_remove_readonly_allowlist)"
+printf '%s\n' '{"permissions": {"allow": ["Bash(git status:*)", "Bash(exakit tls-pin --accept)"]}}' > "$HOME/.claude/settings.json"
+exakit_apply_readonly_allowlist >/dev/null
+exakit_remove_readonly_allowlist >/dev/null
+check "a round trip leaves only the user's own (tls-pin included)" "Bash(git status:*)|Bash(exakit tls-pin --accept)" \
+    "$(python3 -c 'import json; d=json.load(open("'"$HOME"'/.claude/settings.json")); print("|".join(d["permissions"]["allow"]+d["permissions"]["deny"]))')"
 has "the uninstall step calls it" "exakit_remove_readonly_allowlist" "$(sed -n '/^_exakit_remove_installed_skills()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 
 echo "R3-6. doctor repairs a repairable WARNING, and blames one file once:"
@@ -383,6 +410,22 @@ printf '%s\n%s\n' "$_sp" "Thu Jan  1 00:00:00 1970" > "$_lk"
 check "the same pid with another start time is NOT the holder" "no" "$(exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
 printf '%s\n' "$_sp" > "$_lk"
 check "an old one-line lock still falls back to the pid check" "yes" "$(exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
+# LNU-04. On Linux ps derives lstart from the wall clock as it is NOW, so a
+# clock step (WSL2 after a resume) moved it and a live holder read as gone. The
+# holder is named by /proc's start tick there, which no clock step moves; a lock
+# an earlier kit wrote with lstart is still honoured. macOS keeps lstart.
+if [ -r "/proc/$_sp/stat" ]; then
+    _lk_tick="$(sed -n '1s/^.*) //p' "/proc/$_sp/stat" | awk '{print $20}')"
+    check "Linux: the recorded start is /proc's start tick" "$_lk_tick" "$(exakit_process_start_time "$_sp")"
+    _lk_lstart="$(ps -o lstart= -p "$_sp" | sed 's/^ *//;s/ *$//')"
+    printf '%s\n%s\n' "$_sp" "$(exakit_process_start_time "$_sp")" > "$_lk"
+    check "Linux: a clock step that moves ps's start time leaves the holder alive" "yes" \
+        "$(ps() { echo "Thu Jan  1 00:00:00 1970"; }; exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
+    printf '%s\n%s\n' "$_sp" "$_lk_lstart" > "$_lk"
+    check "Linux: a lock an earlier kit wrote (lstart) still names its holder" "yes" "$(exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
+    printf '%s\n%s\n' "$_sp" "1" > "$_lk"
+    check "Linux: another start tick is NOT the holder" "no" "$(exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
+fi
 kill "$_sp" 2>/dev/null; wait "$_sp" 2>/dev/null
 check "a dead pid is not the holder" "no" "$(exakit_lock_holder_alive "$_lk" && echo yes || echo no)"
 has "acquire writes two lines" 'exakit_process_start_time "$$"' "$(sed -n '/^exakit_acquire_lock()/,/^}/p' "$ROOT/setup/lib/common.sh")"
@@ -512,21 +555,29 @@ for _bin in bash sh env sed awk grep cat tr cut sort head tail date mkdir rm chm
     _src="$(command -v "$_bin" 2>/dev/null || true)"
     [ -n "$_src" ] && ln -sf "$_src" "$NOPYPATH/$_bin"
 done
-# A curl that downloads nothing and leaves a fingerprint. The point of the
-# assertion below is that this file is never created: a read-only state query
-# must not so much as REACH for the network, let alone install 36 MB from it.
-printf '#!/bin/sh\n: > "%s"\n' "$WORK/uv-download-attempted" > "$NOPYPATH/curl"
+# Record curl arguments so the check distinguishes a uv bootstrap from other
+# probes made by status.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$WORK/curl-calls" > "$NOPYPATH/curl"
 chmod +x "$NOPYPATH/curl"
 _nopy="$(EXAKIT_HOME="$NOPY" EXAKIT_BIN_DIR="$NOPYBIN" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
     PATH="$NOPYPATH" bash "$CLI" status --json 2>/dev/null)"
 check "no state query ever reached for the uv download" "absent" \
-    "$([ -f "$WORK/uv-download-attempted" ] && echo present || echo absent)"
+    "$(grep -q 'astral.sh/uv/install.sh' "$WORK/curl-calls" 2>/dev/null && echo present || echo absent)"
 check "with no usable interpreter the answer is still one JSON object" "yes" \
     "$(printf '%s' "$_nopy" | python3 -m json.tool >/dev/null 2>&1 && echo yes || echo no)"
 check "...carrying the three contract keys" "yes" \
     "$(printf '%s' "$_nopy" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if all(k in d for k in ("installed","status","remedy")) else "no")' 2>/dev/null)"
 check "...and NOTHING was installed into the bin dir" "empty" \
     "$([ -z "$(ls -A "$NOPYBIN" 2>/dev/null)" ] && echo empty || echo "$(ls -A "$NOPYBIN")")"
+printf '#!/bin/sh\nprintf "offline=%%s downloads=%%s args=%%s\\n" "${UV_OFFLINE:-}" "${UV_PYTHON_DOWNLOADS:-}" "$*" >> "%s"\nexit 1\n' "$WORK/uv-calls" > "$NOPYPATH/uv"
+chmod +x "$NOPYPATH/uv"
+_nopy="$(EXAKIT_HOME="$NOPY" EXAKIT_BIN_DIR="$NOPYBIN" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
+    PATH="$NOPYPATH" bash "$CLI" status --json 2>/dev/null)"
+check "a preinstalled uv cannot download Python for status" "absent" \
+    "$(grep -E 'args=(run |python find )' "$WORK/uv-calls" 2>/dev/null | grep -q -v 'offline=1 downloads=never' && echo present || echo absent)"
+check "the uv-present fallback remains JSON" "yes" \
+    "$(printf '%s' "$_nopy" | python3 -m json.tool >/dev/null 2>&1 && echo yes || echo no)"
+rm -f "$NOPYPATH/uv"
 
 echo "R5-5. the state queries agree on installed and on the exit code:"
 _pre_doc="$(pre mcp-doctor --json 2>/dev/null)"
@@ -733,9 +784,11 @@ lacks "...and no longer puts a command in the status field" \
 has "the twin marks add-on rows too" 'addon           = ($addonIds -contains $r.C)' "$_ps"
 has "...from the registry, not a hand-written set" 'Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }' "$_ps"
 has "the twin's status --json carries the service urls" 'urls            = $serviceUrls' "$_ps"
-has "...resolved through a registry hook, not a hardcoded id" 'function Get-ExakitServiceUrl' "$_ps"
-has "dash-server registers its UrlFn" 'UrlFn       = "Get-DashServerUrl"' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-has "...and defines it" "function Get-DashServerUrl" "$(cat "$ROOT/setup/lib/dash-server.ps1")"
+# The hook lives in the shared library, where an add-on module can reach it.
+has "...resolved through a registry hook, not a hardcoded id" 'function Get-ExakitServiceUrl' "$_ps$(cat "$ROOT/setup/lib/exakit-common.ps1")"
+has "dash-server registers its url hook" 'dash-server|url|url' \
+    "$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
+has "...and defines it" 'def url(' "$(cat "$ROOT/marketplace/addons/dash_server.py")"
 has "the shell side still carries urls" '"urls": umap' "$(cat "$CLI")"
 _dashskill="$(cat "$ROOT/skills/dash-server/SKILL.md")"
 has "the dash-server skill points at the JSON that carries the URL" \

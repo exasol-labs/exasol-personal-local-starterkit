@@ -1,4 +1,4 @@
-# Data dictionary — bundled sample datasets (TPC-H at SF=0.02, ENERGY, WEATHER)
+# Data dictionary — bundled sample datasets (RETAIL_SALES, BANK_TRANSACTION, TPC-H at SF=0.02, ENERGY, WEATHER)
 
 > The same descriptions ship **inside the database** as table and column comments
 > (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
@@ -7,6 +7,67 @@
 
 Reference for every table and column in this folder. Use it to write correct SQL
 (and to ground an AI assistant) without guessing what a column means.
+
+New installs load **RETAIL_SALES** and **BANK_TRANSACTION**. TPC-H, ENERGY and WEATHER
+are no longer offered for new installs. A kit that already loaded them keeps them, so
+their parts stay below.
+
+## RETAIL_SALES — retail sales (schema `RETAIL_SALES`, 1,000 rows)
+
+One table of customer purchases from 2023-01-01 to 2024-01-01, in three product
+categories. Loaded by `exakit data-load` (dataset id `retail_sales`) from
+`data/datasets/retail_sales/`.
+
+### retail_sales  (1,000 rows)
+Grain: one sale. **PK:** `transaction_id`. Each sale has its own `customer_id`.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| transaction_id | DECIMAL(9,0) | Sale id (PK) | 1 |
+| sale_date | DATE | Date of the sale | 2023-11-24 |
+| customer_id | VARCHAR(20) | Customer who bought | CUST001 |
+| gender | VARCHAR(10) | Customer gender: Female or Male | Male |
+| age | DECIMAL(3,0) | Customer age in years, 18 to 64 | 34 |
+| product_category | VARCHAR(30) | Beauty, Clothing or Electronics | Beauty |
+| quantity | DECIMAL(9,0) | Units sold, 1 to 4 | 3 |
+| price_per_unit | DECIMAL(12,2) | Price of one unit | 50.00 |
+| total_amount | DECIMAL(14,2) | `quantity * price_per_unit` | 150.00 |
+
+Typical questions: revenue per product category, revenue per month, average sale per
+age band and gender.
+
+## BANK_TRANSACTION — bank transactions (schema `BANK_TRANSACTION`, 2,512 rows)
+
+One table of card and account transactions on 495 accounts, from 2023-01-02 to
+2024-01-01. Loaded by `exakit data-load` (dataset id `bank_transaction`) from
+`data/datasets/bank_transaction/`. The schema is `BANK_TRANSACTION` and the table is
+`BANK_TRANSACTIONS`.
+
+### bank_transactions  (2,512 rows)
+Grain: one transaction. **PK:** `transaction_id`.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| transaction_id | VARCHAR(20) | Transaction id (PK) | TX000001 |
+| account_id | VARCHAR(20) | Account the transaction is on | AC00128 |
+| transaction_amount | DECIMAL(14,2) | Amount moved | 14.09 |
+| transaction_date | TIMESTAMP | When it happened | 2023-04-11 16:29:00 |
+| transaction_type | VARCHAR(10) | Debit or Credit | Debit |
+| location | VARCHAR(50) | City where it happened (43 cities) | San Diego |
+| device_id | VARCHAR(20) | Device used | D000380 |
+| merchant_id | VARCHAR(20) | Merchant paid or paying (100 merchants) | M015 |
+| channel | VARCHAR(20) | ATM, Branch or Online | ATM |
+| customer_age | DECIMAL(3,0) | Account holder age in years | 70 |
+| customer_occupation | VARCHAR(30) | Doctor, Engineer, Retired or Student | Doctor |
+| transaction_duration | DECIMAL(9,0) | Seconds the transaction took | 81 |
+| login_attempts | DECIMAL(5,0) | Login attempts before it, 1 to 5 | 1 |
+| account_balance | DECIMAL(14,2) | Balance after it | 5112.21 |
+| previous_transaction_date | TIMESTAMP | When the account last transacted | 2024-11-04 08:08:00 |
+
+Typical questions: debits and credits per channel, the busiest accounts, transactions
+that needed more than one login attempt.
+
+## TPC-H — order benchmark (schema `TPCH`)
 
 **Notes on the files**
 - CSV, comma-delimited, one header row. Headers are UPPERCASE TPC-H column names, so the loaded
@@ -222,8 +283,9 @@ temperature range on a given day.
   identifiers to uppercase). No double-quoting needed.
 - **Row limit:** Exasol uses `LIMIT n` (or `LIMIT n OFFSET m`) — **not** `FETCH FIRST … ROWS ONLY`
   or `TOP n`.
-- **Revenue** (kit convention): `l_extendedprice * (1 - l_discount)` — net of line discount,
+- **Revenue** in RETAIL_SALES is `SUM(total_amount)`.
+- **Revenue** in TPC-H (kit convention): `l_extendedprice * (1 - l_discount)` — net of line discount,
   excludes tax, does not subtract returns. Add `WHERE l_returnflag <> 'R'` to exclude returned lines.
 
-See **[example-questions.md](example-questions.md)** for 14 ready-to-ask questions with validated
+See **[example-questions.md](example-questions.md)** for 21 ready-to-ask questions with validated
 reference SQL you can inspect before running.

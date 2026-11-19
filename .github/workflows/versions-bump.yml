@@ -1,27 +1,38 @@
 name: versions-bump
 
-# Proposes version bumps as a pull request, on a schedule.
+# Proposes version bumps on a branch, on a schedule.
 #
-# It never merges and never writes to main: it rewrites versions.json on one
-# reusable branch and opens (or updates) a single pull request, which then goes
-# through exactly the same review and the same CI as a hand-written bump --
-# including digest-verify and upstream-exists in versions.yml.
+# It never merges and never writes to main: it rewrites versions.json (and the
+# constants that move with it) on ONE branch, chore/versions-bump, and commits
+# beside it a report, .github/versions-bump-report.md, that says what moved,
+# where each release is, what was downloaded and verified, and the exact
+# command that opens the pull request. GitHub Actions may not open pull
+# requests in this repository, so the run tries once and, when refused, leaves
+# that command in the job summary instead of failing. A push made with the
+# workflow token starts no other workflow, so the run starts `versions` and
+# `windows-ps51` on the branch itself: the branch is tested before anyone
+# opens the pull request, and the pull request then runs the same CI again.
 #
 # TURNING IT ON OR OFF
-#   Repository variable EXAKIT_AUTO_BUMP (Settings > Secrets and variables >
-#   Actions > Variables). Set it to 'true' to let the schedule run; delete it, or
-#   set anything else, and the schedule does nothing. No code change, no commit.
-#   A manual run from the Actions tab always works, switch or no switch.
+#   The schedule runs every day. To pause it, set the repository variable
+#   EXAKIT_AUTO_BUMP to 'false' (Settings > Secrets and variables > Actions >
+#   Variables); delete the variable, or set anything else, and it runs again.
+#   No code change, no commit. A manual run from the Actions tab always works,
+#   switch or no switch. (It used to need 'true' to run, and with the variable
+#   unset every scheduled run was skipped.)
 #
 # CHANGING THE PERIOD
-#   The cron line below. Times are UTC. '30 0 * * *' is every day at 00:30 UTC,
-#   which is 06:00 IST.
+#   The cron line below. Times are UTC. '30 3 * * *' is every day at 03:30 UTC,
+#   which is 09:00 IST.
 #
 # ONE PROPOSAL AT A TIME
 #   While a bump pull request is open, a run does nothing -- not a second PR, and
 #   not a rewrite of the one under review. A proposal can sit open on purpose
 #   (waiting for a test pass, or deliberately not merged yet), and a daily run
 #   must not move it. Merge or close it and the next run proposes afresh.
+#   Without a pull request the branch is still left alone when a person has
+#   pushed to it, and when it already proposes exactly these versions. A day
+#   with nothing newer makes no branch and no commit.
 #
 # WHAT IT WILL AND WILL NOT PROPOSE
 #   Stable releases only: release candidates, betas, dev builds and arch-suffixed
@@ -32,12 +43,13 @@ name: versions-bump
 
 on:
   schedule:
-    - cron: '30 0 * * *'
+    - cron: '30 3 * * *'     # 09:00 IST every day
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
+  actions: write        # start versions.yml and windows-ps51.yml on the bump branch
 
 concurrency:
   group: versions-bump
@@ -46,7 +58,7 @@ concurrency:
 jobs:
   propose:
     name: propose the newest stable versions
-    if: github.event_name == 'workflow_dispatch' || vars.EXAKIT_AUTO_BUMP == 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.EXAKIT_AUTO_BUMP != 'false'
     runs-on: ubuntu-latest
     steps:
       # Checked BEFORE any work: an open proposal means this run has nothing to
@@ -97,6 +109,21 @@ jobs:
 
           notes = []      # human-readable lines for the summary and the PR body
           bumped = {}     # component -> (old, new)
+
+          # The helpers CI uses too (glibc floors, the Docker Hub digest, the
+          # report), so the branch report and the checks cannot disagree.
+          sys.path.insert(0, "tools")
+          import bump_checks
+
+          details = {}    # component -> what the branch report says about it
+
+          def detail(key, **fields):
+              row = details.setdefault(key, {"notes": [], "checks": []})
+              for name, value in fields.items():
+                  if name in ("notes", "checks"):
+                      row[name].extend(value)
+                  else:
+                      row[name] = value
 
           def fetch(url, token=False, raw=False):
               request = urllib.request.Request(url, headers={
@@ -226,6 +253,13 @@ jobs:
                               bumped["personal"] = (personal["version"], winner)
                               personal["version"] = winner
                               s3["sha256"] = digests
+                              detail("personal",
+                                     link="https://github.com/%s/releases/tag/v%s" % (repo, winner),
+                                     link_label="v%s" % winner,
+                                     digests="%d of %d recomputed" % (len(digests), len(digests)),
+                                     checks=["newest stable release of %s on GitHub" % repo,
+                                             "downloaded the launcher for %s from %s and hashed it"
+                                             % (", ".join(sorted(digests)), base)])
 
           # --- mcp, pyexasol and dbt-exasol: stable, non-yanked PyPI releases ---
           def bump_pypi(key, default_package):
@@ -249,8 +283,43 @@ jobs:
               if winner:
                   bumped[key] = (block["version"], winner)
                   block["version"] = winner
+                  files = (body.get("releases") or {}).get(winner) or []
+                  requires = sorted({f.get("requires_python") for f in files if f.get("requires_python")})
+                  kinds = sorted({f.get("packagetype") for f in files if f.get("packagetype")})
+                  detail(key,
+                         link="https://pypi.org/project/%s/%s/" % (package, winner),
+                         link_label="PyPI %s" % winner,
+                         digests="none pinned (installed by exact version)",
+                         checks=["newest stable, not yanked release of %s on PyPI" % package],
+                         notes=["Requires-Python: %s (the kit builds its venvs on Python 3.12)"
+                                % (", ".join(requires) or "not declared"),
+                                "files published: %s" % (", ".join(kinds) or "none listed")])
 
           bump_pypi("mcp", "exasol-mcp-server")
+          # The MCP server runs as the launcher's sidecar image, and the image
+          # tag IS the version (mcp_sidecar_image_version): a bump of the number
+          # alone would be an update every kit refuses ("pins no launcher image
+          # of MCP server"). Pin the new tag by the digest Docker Hub serves,
+          # or leave mcp alone.
+          if "mcp" in bumped:
+              mcp_block = components["mcp"]
+              old_version, new_version = bumped["mcp"]
+              image_repo = mcp_block.get("sidecar_image", "docker.io/exasol/mcp-server:x").split("@", 1)[0].rsplit(":", 1)[0]
+              digest, platforms, why = bump_checks.registry_digest("%s:%s" % (image_repo, new_version))
+              missing = [p for p in ("linux/amd64", "linux/arm64") if p not in platforms]
+              if not digest or missing:
+                  notes.append("- `mcp`: %s is on PyPI but the image %s:%s %s, so it was left alone"
+                               % (new_version, image_repo, new_version,
+                                  "did not resolve (%s)" % why if not digest else "has no %s build" % ", ".join(missing)))
+                  mcp_block["version"] = old_version
+                  del bumped["mcp"]
+                  details.pop("mcp", None)
+              else:
+                  mcp_block["sidecar_image"] = "%s:%s@%s" % (image_repo, new_version, digest)
+                  detail("mcp", digests="image digest resolved",
+                         checks=["resolved %s:%s on Docker Hub: %s" % (image_repo, new_version, digest)],
+                         notes=["sidecar image built for %s" % ", ".join(platforms),
+                                "the Claude Desktop bridge stays %s" % mcp_block.get("bridge", "unpinned")])
           bump_pypi("pyexasol", "pyexasol")
           bump_pypi("dbt-exasol", "dbt-exasol")
 
@@ -272,6 +341,7 @@ jobs:
                       if match:
                           candidates.append(match.group(1))
                   winner = pick(candidates, exapump["version"], "exapump", semver_key)
+                  floors = {}
                   if winner:
                       # The digests are not optional: install refuses an asset that
                       # does not match. Hash the real files, and abandon the exapump
@@ -289,6 +359,8 @@ jobs:
                               failed = "%s (%s)" % (asset, why)
                               break
                           digests[platform] = hashlib.sha256(payload).hexdigest()
+                          if platform.startswith("linux-"):
+                              floors[platform] = bump_checks.glibc_floor(payload)
                       if failed:
                           notes.append("- `exapump`: %s is available but %s could not be "
                                        "downloaded, so it was left alone" % (winner, failed))
@@ -296,6 +368,13 @@ jobs:
                           bumped["exapump"] = (exapump["version"], winner)
                           exapump["version"] = winner
                           exapump["sha256"] = digests
+                          detail("exapump",
+                                 link="https://github.com/%s/releases/tag/v%s" % (repo, winner),
+                                 link_label="v%s" % winner,
+                                 digests="%d of %d recomputed" % (len(digests), len(digests)),
+                                 checks=["downloaded %s and hashed each" % ", ".join(sorted(digests))],
+                                 notes=["%s needs glibc %s (an older system runs it through the kit's "
+                                        "container shim)" % (k, v or "-") for k, v in sorted(floors.items())])
 
           # --- uv: astral's newest stable release, plus the five archive digests -
           # Installs straight from astral's release (exapump's model), so the
@@ -350,6 +429,16 @@ jobs:
                           bumped["uv"] = (uv["version"], winner)
                           uv["version"] = winner
                           uv["sha256"] = digests
+                          detail("uv",
+                                 link="https://github.com/%s/releases/tag/%s" % (repo, winner),
+                                 link_label=winner,
+                                 digests="%d of %d recomputed" % (len(digests), len(digests)),
+                                 checks=["downloaded astral's %d archives and hashed each" % len(digests)],
+                                 notes=["min_version stays %s (a security floor, never moved by this bot)"
+                                        % uv.get("min_version"),
+                                        "ACTION: the offline tables exakit_uv_pinned_sha256 (common.sh) and "
+                                        "Get-ExakitUvPinnedSha256 (exakit-common.ps1) still name %s; update them "
+                                        "on this branch or uv-digest-verify fails" % bumped["uv"][0]])
 
           # --- the marketplace add-ons: newest stable GitHub release -------------
           # dash-server installs the tag's source tarball through uv (no digest
@@ -388,6 +477,13 @@ jobs:
                   addon["sha256"]["vsix"] = hashlib.sha256(payload).hexdigest()
               bumped[addon_name] = (addon["version"], winner)
               addon["version"] = winner
+              has_vsix = bool((addon.get("sha256") or {}).get("vsix"))
+              detail(addon_name,
+                     link="https://github.com/%s/releases/tag/v%s" % (repo, winner),
+                     link_label="v%s" % winner,
+                     digests="vsix recomputed" if has_vsix else "none pinned (installs the tag's source archive)",
+                     checks=["newest stable release of %s on GitHub" % repo]
+                     + (["downloaded %s-%s.vsix and hashed it" % (addon_name, winner)] if has_vsix else []))
 
           # --- exasol-scheduler: newest stable upstream release + five digests ---
           # Installs straight from upstream's release (exapump's model). Upstream
@@ -413,6 +509,7 @@ jobs:
                       if match:
                           candidates.append(match.group(1))
                   winner = pick(candidates, scheduler["version"], "exasol-scheduler", semver_key)
+                  floors = {}
                   if winner:
                       digests = {}
                       failed = None
@@ -425,13 +522,34 @@ jobs:
                               failed = "%s (%s)" % (asset, why)
                               break
                           digests[platform] = hashlib.sha256(payload).hexdigest()
+                          if platform.startswith("linux-"):
+                              # The floor the kit checks before it installs the
+                              # engine (components.exasol-scheduler.glibc): a new
+                              # build linked against a newer glibc must move it.
+                              floors[platform] = bump_checks.glibc_floor_in_archive(payload, "exasol_scheduler")
                       if failed:
                           notes.append("- `exasol-scheduler`: %s is available but %s could not be "
                                        "downloaded, so it was left alone" % (winner, failed))
+                      elif [k for k, v in floors.items() if not v]:
+                          notes.append("- `exasol-scheduler`: %s is available but the glibc floor of %s could "
+                                       "not be measured, so it was left alone"
+                                       % (winner, ", ".join(sorted(k for k, v in floors.items() if not v))))
                       else:
+                          old_floors = dict(scheduler.get("glibc") or {})
                           bumped["exasol-scheduler"] = (scheduler["version"], winner)
                           scheduler["version"] = winner
                           scheduler["sha256"] = digests
+                          if floors:
+                              scheduler["glibc"] = dict(sorted(floors.items()))
+                          detail("exasol-scheduler",
+                                 link="https://github.com/%s/releases/tag/v%s" % (repo, winner),
+                                 link_label="v%s" % winner,
+                                 digests="%d of %d recomputed" % (len(digests), len(digests)),
+                                 checks=["downloaded the %d archives and hashed each" % len(digests),
+                                         "measured the glibc floor of each Linux engine from its ELF"],
+                                 notes=["%s glibc floor %s -> %s%s" % (k, old_floors.get(k, "-"), v,
+                                                                     "" if old_floors.get(k) == v else " (CHANGED)")
+                                        for k, v in sorted(floors.items())])
 
           # --- the constants that must move with the manifest -------------------
           # A version lives in more than one place. mcp/runtime/exakit.py's
@@ -467,32 +585,7 @@ jobs:
                   ("setup/lib/common.sh", "bash", "EXAKIT_PYEXASOL_VERSION_FALLBACK"),
                   ("setup/lib/exakit-common.ps1", "pwsh", "PyexasolVersionFallback"),
               ],
-              # Marketplace add-ons keep their constants in their own module
-              # pair, not in the shared libraries.
-              "dbt-exasol": [
-                  ("setup/lib/dbt-exasol.sh", "bash", "EXAKIT_DBT_EXASOL_VERSION_FALLBACK"),
-                  ("setup/lib/dbt-exasol.ps1", "pwsh", "DbtExasolVersionFallback"),
-              ],
-              "exasol-scheduler": [
-                  ("setup/lib/exasol-scheduler.sh", "bash", "EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-scheduler.ps1", "pwsh", "ExasolSchedulerVersionFallback"),
-              ],
-              "dash-server": [
-                  ("setup/lib/dash-server.sh", "bash", "EXAKIT_DASH_SERVER_VERSION_FALLBACK"),
-                  ("setup/lib/dash-server.ps1", "pwsh", "DashServerVersionFallback"),
-              ],
-              "exasol-vscode": [
-                  ("setup/lib/exasol-vscode.sh", "bash", "EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-vscode.ps1", "pwsh", "ExasolVscodeVersionFallback"),
-              ],
-              # json-tables is versioned by the upstream COMMIT its prebuilt
-              # artifacts were built from; the pkg/json-tables workflow moves
-              # that version, so the auto-bump leaves it alone and only the
-              # fallback constants are kept in lockstep by hand.
-              "json-tables": [
-                  ("setup/lib/json-tables.sh", "bash", "EXAKIT_JSON_TABLES_VERSION_FALLBACK"),
-                  ("setup/lib/json-tables.ps1", "pwsh", "JsonTablesVersionFallback"),
-              ],
+              # Marketplace fallbacks live together in marketplace/catalog.json.
           }
           touched = set()
 
@@ -526,11 +619,41 @@ jobs:
               for path, dialect, name in COUPLED.get(key, []):
                   retune(path, dialect, name, new_version)
 
+          # The MCP image fallbacks hold the whole pinned reference (tag and
+          # digest), so they are not a version constant COUPLED could retune;
+          # tests/test_version_pins.py holds them equal to the manifest.
+          if "mcp" in bumped:
+              image = components["mcp"]["sidecar_image"]
+              for path, pattern in (
+                      ("setup/lib/mcp.sh", r'^(EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK=")([^"]*)(")'),
+                      ("setup/lib/mcp.ps1", r'^(\$script:McpSidecarImageFallback = ")([^"]*)(")')):
+                  compiled = re.compile(pattern, re.MULTILINE)
+                  text = pathlib.Path(path).read_text()
+                  if len(compiled.findall(text)) != 1:
+                      print("expected exactly one MCP image fallback in %s" % path, file=sys.stderr)
+                      raise SystemExit(1)
+                  pathlib.Path(path).write_text(
+                      compiled.sub(lambda m: m.group(1) + image + m.group(3), text, count=1))
+                  touched.add(path)
+
+          marketplace_path = pathlib.Path("marketplace/catalog.json")
+          marketplace = json.loads(marketplace_path.read_text())
+          marketplace_changed = False
+          for row in marketplace["addons"]:
+              if row["id"] in bumped:
+                  row["default_version"] = bumped[row["id"]][1]
+                  marketplace_changed = True
+          if marketplace_changed:
+              # The catalog's own one-row-per-add-on layout (tools/addon_github.py
+              # writes it), so the branch diff is the version lines and nothing else.
+              import addon_github
+              marketplace_path.write_text(addon_github.render(marketplace), encoding="utf-8")
+              touched.add(str(marketplace_path))
+
           # --- write it back, canonically --------------------------------------
-          summary = []
           if bumped:
               for key in bumped:
-                  block = components[key]
+                  block = components[key.split(".", 1)[0]]     # a dotted key names its component's block
                   # Urgency is a human call, and a note written about an older
                   # version does not describe this one.
                   block["severity"] = "normal"
@@ -551,55 +674,51 @@ jobs:
               with open(MANIFEST, "w") as handle:
                   handle.write(rendered)
 
-              summary.append("| Component | Was | Now |")
-              summary.append("|---|---|---|")
-              for key, (old, new) in sorted(bumped.items()):
-                  summary.append("| `%s` | %s | **%s** |" % (key, old, new))
-              if "exapump" in bumped:
-                  summary.append("")
-                  summary.append("The five exapump `sha256` digests were recomputed from the "
-                                 "downloaded release assets.")
-              if "uv" in bumped:
-                  summary.append("")
-                  summary.append("The five uv `sha256` digests were recomputed from astral's downloaded "
-                                 "release archives. `min_version` was not moved. The offline pinned "
-                                 "tables (`exakit_uv_pinned_sha256`, `Get-ExakitUvPinnedSha256`) still "
-                                 "name the previous release: update them before merging, or "
-                                 "uv-digest-verify fails this PR.")
-              if "personal" in bumped:
-                  summary.append("")
-                  summary.append("The five Personal S3 raw-binary `sha256` digests were recomputed ")
-                  summary.append("from the versioned Exasol S3 objects; GitHub release archives retain their own checksums.")
-              if "exasol-scheduler" in bumped:
-                  summary.append("")
-                  summary.append("The five exasol-scheduler `sha256` digests were recomputed from "
-                                 "upstream's downloaded release archives.")
-              if touched:
-                  summary.append("")
-                  summary.append("Constants moved with the manifest, so a fully offline install "
-                                 "and the CI cross-check stay in step:")
-                  summary.append("")
-                  for path in sorted(touched):
-                      summary.append("- `%s`" % path)
-          else:
-              summary.append("Everything advertised is already the newest stable release.")
-
-          if notes:
-              summary.append("")
-              summary.append("Left alone:")
-              summary.extend(notes)
-
-          summary.append("")
-          summary.append("Before merging:")
-          summary.append("")
-          summary.append("- [ ] Severity is `normal` on everything above. Raise it to "
-                         "`recommended` or `critical` only if people need to know now.")
-          summary.append("- [ ] These versions were tested **together**, not just "
-                         "individually. The Tagged column is a tested set.")
-          summary.append("- [ ] `kit.version` is untouched, which is correct unless kit "
-                         "scripts changed too.")
-
-          text = "\n".join(summary) + "\n"
+          title = ("Bump advertised versions: " + ", ".join(
+              "%s %s" % (k, v[1]) for k, v in sorted(bumped.items()))) if bumped else "no change"
+          rows = []
+          for key, (old, new) in sorted(bumped.items()):
+              row = {"key": key, "old": old, "new": new,
+                     "min_kit_version": components[key].get("min_kit_version")}
+              row.update(details.get(key) or {})
+              rows.append(row)
+          checklist = [
+              "Severity is `normal` on everything above. Raise it to `recommended` or `critical` only if "
+              "people need to know now.",
+              "These versions were tested **together**, not just individually. The Tagged column is a tested set.",
+              "`kit.version` is untouched, which is correct unless kit scripts changed too.",
+              "`versions` and `windows-ps51` are green on this branch (component-smoke ran every changed "
+              "component on each OS).",
+          ]
+          if "uv" in bumped:
+              checklist.insert(0, "The offline uv tables (`exakit_uv_pinned_sha256`, `Get-ExakitUvPinnedSha256`) "
+                                  "name uv %s for every platform." % bumped["uv"][1])
+          report = {
+              "title": title,
+              "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+              "base_sha": os.environ.get("GITHUB_SHA", ""),
+              "kit_version": (doc.get("kit") or {}).get("version"),
+              "components": rows,
+              "touched": sorted(touched),
+              "left_alone": notes,
+              "workflow_checks": [
+                  "looked up the newest stable release of every advertised component at its own upstream "
+                  "(GitHub releases, PyPI); release candidates, betas, yanked and draft releases are skipped",
+                  "downloaded every asset whose digest is pinned and hashed it here; no digest is copied "
+                  "from a release page",
+                  "a component whose assets could not all be fetched (or measured) was left alone, never "
+                  "advertised with stale pins",
+                  "measured each Linux scheduler engine's glibc floor from its ELF version references",
+                  "resolved a bumped MCP version's launcher image on Docker Hub (both Linux architectures)",
+                  "moved the fallback constants that must equal the manifest (the COUPLED table)",
+                  "wrote versions.json only after proving it canonical (python -m json.tool)",
+              ],
+              "checklist": checklist,
+          }
+          text = bump_checks.render_report(report, os.environ.get("GITHUB_REPOSITORY", bump_checks.KIT_REPO),
+                                           "chore/versions-bump", "main") if bumped else (
+              "Everything advertised is already the newest stable release. No branch was made.\n"
+              + ("\nLeft alone:\n" + "\n".join(notes) + "\n" if notes else ""))
           with open("bump-summary.md", "w") as handle:
               handle.write(text)
           # Exactly the files this run changed, for the commit step: a fixed
@@ -616,13 +735,10 @@ jobs:
           if os.environ.get("GITHUB_OUTPUT"):
               with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
                   handle.write("changed=%s\n" % ("true" if bumped else "false"))
-                  handle.write("title=%s\n" % (
-                      "Bump advertised versions: " + ", ".join(
-                          "%s %s" % (k, v[1]) for k, v in sorted(bumped.items()))
-                      if bumped else "no change"))
+                  handle.write("title=%s\n" % title)
           PY
 
-      - name: open or update the pull request
+      - name: push the bump branch, start its CI, and say how to open the pull request
         if: steps.bump.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -630,22 +746,95 @@ jobs:
         run: |
           set -eu
           BRANCH="chore/versions-bump"
+          BASE="main"
+          REPORT=".github/versions-bump-report.md"
+          # This job proposes; it never publishes. Refuse any branch that is
+          # not the proposal branch, whatever edit lands above.
+          case "$BRANCH" in
+            main|master|feat/*|"") echo "::error::refusing to push the bump to '$BRANCH'"; exit 1 ;;
+          esac
+          compare="https://github.com/$GITHUB_REPOSITORY/compare/$BASE...$BRANCH?expand=1"
+          say() { echo "$1"; printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"; }
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # The branch is left alone when a person has pushed to it (their work
+          # is not this run's to replace), and when it already proposes exactly
+          # these versions (a daily rewrite would only restart its CI).
+          if git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null; then
+            git fetch -q origin "$BASE"
+            foreign="$(git log --format='%ae' "origin/$BASE..origin/$BRANCH" | grep -v '^41898282+github-actions\[bot\]@users.noreply.github.com$' || true)"
+            if [ -n "$foreign" ]; then
+              say ""
+              say "**$BRANCH has commits from someone other than this workflow, so it was left as it is.** Merge or delete it and the next run proposes afresh. What this run found is above."
+              echo "::notice::$BRANCH carries a person's commits - not rewritten"
+              exit 0
+            fi
+            same=true
+            git show "origin/$BRANCH:versions.json" > /tmp/branch-versions.json 2>/dev/null || same=false
+            if [ "$same" = true ] && python3 -c 'import json,sys; a=json.load(open("/tmp/branch-versions.json")); b=json.load(open("versions.json")); sys.exit(0 if a.get("components") == b.get("components") else 1)'; then
+              while read -r path; do
+                [ "$path" = versions.json ] && continue
+                git diff --quiet "origin/$BRANCH" -- "$path" || same=false
+              done < bump-files.txt
+            else
+              same=false
+            fi
+            if [ "$same" = true ]; then
+              say ""
+              say "**$BRANCH already proposes exactly these versions; it was not rewritten.** Open the pull request: $compare"
+              exit 0
+            fi
+          fi
+
           git switch -c "$BRANCH"
-          # Everything the bump touched (bump-files.txt), never the summary or
-          # the list itself, which are build artifacts.
+          # Everything the bump touched (bump-files.txt), then the report as a
+          # commit of its own, so a reviewer can drop it from the pull request.
           xargs git add -- < bump-files.txt
-          xargs git commit -m "$TITLE" -m "$(cat bump-summary.md)" -- < bump-files.txt
-          # One reusable branch, force-pushed. The skip step above means no PR is
-          # open on it by now, so this replaces only a branch left behind by a
-          # merged or closed proposal; the edit arm below covers the one race
-          # left (a PR opened on the branch while this run was working).
-          git push --force origin "$BRANCH"
-          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' || true)"
+          xargs git commit -q -m "$TITLE" -m "$(cat bump-summary.md)" -- < bump-files.txt
+          mkdir -p "$(dirname "$REPORT")"
+          cp bump-summary.md "$REPORT"
+          git add -- "$REPORT"
+          git commit -q -m "versions-bump: the report for this proposal" -- "$REPORT"
+          # One reusable branch, force-pushed: only ever this workflow's own
+          # commits are replaced (checked above).
+          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+          sha="$(git rev-parse HEAD)"
+          say ""
+          say "## Branch"
+          say ""
+          say "Pushed \`$BRANCH\` at \`$sha\` (base \`$BASE\` at \`$GITHUB_SHA\`). Report on the branch: https://github.com/$GITHUB_REPOSITORY/blob/$BRANCH/$REPORT"
+
+          # A push made with GITHUB_TOKEN starts no workflow; a dispatch does.
+          # So the branch gets its CI now, before anyone opens a pull request.
+          for workflow in versions.yml windows-ps51.yml; do
+            if gh workflow run "$workflow" -R "$GITHUB_REPOSITORY" --ref "$BRANCH" >/dev/null 2>&1; then
+              say "- started \`$workflow\` on $BRANCH"
+            else
+              say "- could not start \`$workflow\` on $BRANCH; it runs when the pull request is opened"
+              echo "::warning::could not dispatch $workflow on $BRANCH"
+            fi
+          done
+          say "- CI runs on this branch: https://github.com/$GITHUB_REPOSITORY/actions?query=branch%3A$(printf '%s' "$BRANCH" | sed 's|/|%2F|g')"
+
+          existing="$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty' || true)"
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$TITLE" --body-file bump-summary.md
-            echo "updated PR #$existing"
+            gh pr edit "$existing" -R "$GITHUB_REPOSITORY" --title "$TITLE" --body-file bump-summary.md || true
+            say "- pull request #$existing updated"
+          elif gh pr create -R "$GITHUB_REPOSITORY" --base "$BASE" --head "$BRANCH" --title "$TITLE" --body-file bump-summary.md 2>/tmp/pr-error.txt; then
+            say "- pull request opened"
           else
-            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file bump-summary.md
+            # Expected in this repository: Settings > Actions > General does not
+            # let the workflow token open pull requests. Not a failure of the
+            # bump - the branch, its report and its CI are all in place.
+            echo "::notice::GitHub Actions may not open the pull request here ($(head -1 /tmp/pr-error.txt)). Open it: $compare"
+            say ""
+            say "## Open the pull request by hand"
+            say ""
+            say "GitHub refused the workflow token: $(head -1 /tmp/pr-error.txt)"
+            say ""
+            say "    git fetch origin $BRANCH"
+            say "    gh pr create -R $GITHUB_REPOSITORY --base $BASE --head $BRANCH --title \"$TITLE\" --body-file <(git show origin/$BRANCH:$REPORT)"
+            say ""
+            say "or: $compare"
           fi

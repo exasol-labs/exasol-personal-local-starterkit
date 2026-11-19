@@ -72,7 +72,7 @@ has "cmd_start validates first" '_service_scope start "$@"' "$_cmd_start"
 # the bare form on the refused input. So the validator is never substituted.
 lacks "...never through a command substitution" '$(_service_scope' "$SH"
 has "a scoped stop reaches the per-service helper"  'exakit_service_stop "$EXAKIT_SERVICE_SCOPE"'  "$_cmd_stop"
-has "a scoped start reaches the per-service helper" 'exakit_service_start "$EXAKIT_SERVICE_SCOPE"' "$_cmd_start"
+has "a scoped start reaches the per-service helper" '_start_addon_reported "$EXAKIT_SERVICE_SCOPE"' "$_cmd_start"
 has "the bare stop still stops the database" 'personal) personal_stop ;;' "$_cmd_stop"
 has "the Windows bare stop still stops the database" '"personal" { Stop-Personal }' \
     "$(awk '/^function Invoke-CmdStop/{p=1} p{print; if(/^}/){exit}}' "$ROOT/setup/exakit.ps1")"
@@ -119,9 +119,8 @@ HARNESS="$WORK/harness.sh"
 {
     printf 'set -u\nEXAKIT_HOME=%s\nEXAKIT_BIN_DIR=%s\n' "$KIT" "$WORK/bin"
     printf '. "%s/setup/lib/common.sh"\n' "$ROOT"
-    printf '. "%s/setup/lib/dash-server.sh"\n' "$ROOT"
-    printf '. "%s/setup/lib/exasol-scheduler.sh"\n' "$ROOT"
     sed -n '/^_service_scope()/,/^}/p' "$CLI"
+    sed -n '/^_start_addon_reported()/,/^}/p' "$CLI"
     sed -n '/^cmd_start()/,/^}/p' "$CLI"
     sed -n '/^cmd_stop()/,/^}/p' "$CLI"
     sed -n '/^_stop_database_scoped()/,/^}/p' "$CLI"
@@ -136,7 +135,7 @@ personal_stop()           { echo "STOP database"; }
 _start_database()         { echo "START database"; }
 exakit_service_ids()      { printf 'database\nzzfake\n'; }
 zzfake_status()           { echo "${ZZ_STATUS:-running}"; }
-zzfake_start()            { echo "START zzfake"; }
+zzfake_start()            { echo "START zzfake"; [ "${ZZ_START_FAILS:-0}" != 1 ]; }
 zzfake_stop()             { echo "STOP zzfake"; }
 exakit_runtime_is_running() { [ "${DB_UP:-1}" = 1 ]; }
 _exakit_prompt_tty()      { :; }
@@ -189,13 +188,29 @@ has   "a registered add-on that is not installed is refused" "not installed" "$_
 has   "...naming the marketplace"             "exakit marketplace exasol-scheduler" "$_gone"
 lacks "...and nothing was stopped"            "STOP"           "$_gone"
 
-_bs="$(_run cmd_start)"
+_bs="$(ZZ_STATUS=stopped bash "$HARNESS" cmd_start 2>&1)"
 has   "bare start starts the database"        "START database" "$_bs"
 has   "...and the add-on"                     "START zzfake"   "$_bs"
+has   "...and says so"                        "zzfake started" "$_bs"
 
-_sa="$(_run cmd_start zzfake)"
+_sa="$(ZZ_STATUS=stopped bash "$HARNESS" cmd_start zzfake 2>&1)"
 has   "start <addon> starts that add-on"      "START zzfake"   "$_sa"
 lacks "...and does not start the database"    "START database" "$_sa"
+# `exakit start exasol-scheduler` used to print nothing at all and exit 0 (the
+# scheduler's start answers with nothing): never silent now.
+has   "...and says it started"                "zzfake started" "$_sa"
+check "...exit 0"                             "0" "$(ZZ_STATUS=stopped bash "$HARNESS" cmd_start zzfake >/dev/null 2>&1; echo $?)"
+_sr="$(_run cmd_start zzfake)"
+has   "start <addon> that already runs says so" "zzfake is already running" "$_sr"
+lacks "...and starts nothing"                 "START"          "$_sr"
+_sw="$(ZZ_STATUS='restarting (waiting for the database. Diagnose: exakit logs zzfake)' bash "$HARNESS" cmd_start zzfake 2>&1)"
+has   "start <addon> that is restarting starts it now" "START zzfake" "$_sw"
+_sf="$(ZZ_STATUS=stopped ZZ_START_FAILS=1 bash "$HARNESS" cmd_start zzfake 2>&1)"
+has   "a failed start says so"                "zzfake did not start. Diagnose: exakit logs zzfake" "$_sf"
+lacks "...in sentences, no semicolon"        ";" "$_sf"
+lacks "...and never that it started"          "zzfake started" "$_sf"
+check "...exit 1"                             "1" "$(ZZ_STATUS=stopped ZZ_START_FAILS=1 bash "$HARNESS" cmd_start zzfake >/dev/null 2>&1; echo $?)"
+has   "the Windows twin reports the same way" 'Start-ExakitServiceReported -Id $id' "$PS"
 
 _sd="$(_run cmd_start database)"
 has   "start database starts the database"    "START database" "$_sd"

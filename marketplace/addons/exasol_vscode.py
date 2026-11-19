@@ -1,0 +1,341 @@
+"""Exasol editor extension lifecycle for VS Code and compatible forks."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import urllib.request
+from pathlib import Path
+
+from runtime import AddonFailure, KitContext
+
+ID = "exasol-vscode"
+RECEIPT = "components.exasol_vscode"
+EXTENSION_ID = "exasol.exasol-vscode"
+REPO = "exasol-labs/exasol-vscode"
+
+
+def code_cli(ctx: KitContext) -> Path | None:
+    recorded = ctx.manifest.get(f"{RECEIPT}.code_cli")
+    if recorded and Path(recorded).is_file():
+        return Path(recorded)
+    for name in ("code", "code-insiders", "cursor", "windsurf", "codium"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    candidates = [
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        "~/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        "/usr/share/code/bin/code",
+        "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders",
+        "~/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code-insiders",
+        "/usr/share/code-insiders/bin/code-insiders",
+        "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        "~/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        "/usr/share/cursor/bin/cursor",
+        "/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf",
+        "~/Applications/Windsurf.app/Contents/Resources/app/bin/windsurf",
+        "/usr/share/windsurf/bin/windsurf",
+        "/Applications/VSCodium.app/Contents/Resources/app/bin/codium",
+        "~/Applications/VSCodium.app/Contents/Resources/app/bin/codium",
+        "/usr/share/codium/bin/codium",
+    ]
+    windows_candidates: list[str] = []
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        windows_candidates.extend(str(Path(local_app_data) / relative) for relative in (
+            "Programs/Microsoft VS Code/bin/code.cmd",
+            "Programs/Microsoft VS Code Insiders/bin/code-insiders.cmd",
+            "Programs/cursor/resources/app/bin/cursor.cmd",
+            "Programs/Windsurf/bin/windsurf.cmd",
+            "Programs/VSCodium/bin/codium.cmd",
+        ))
+    program_files = os.environ.get("ProgramFiles") or os.environ.get("PROGRAMFILES")
+    if program_files:
+        windows_candidates.extend(str(Path(program_files) / relative) for relative in (
+            "Microsoft VS Code/bin/code.cmd",
+            "Microsoft VS Code Insiders/bin/code-insiders.cmd",
+            "VSCodium/bin/codium.cmd",
+        ))
+    return next((candidate for raw in (*windows_candidates, *candidates)
+                 if (candidate := Path(raw).expanduser()).is_file()), None)
+
+
+def _in_wsl() -> bool:
+    return bool(os.environ.get("WSL_INTEROP") or os.environ.get("WSL_DISTRO_NAME"))
+
+
+def _wsl_windows_cli(cli: Path) -> bool:
+    """A Windows editor's .cmd or .exe run from WSL: Windows runs it, so it takes Windows paths. The bin/code launcher
+    VS Code puts on WSL's PATH (/mnt/c/.../bin/code, no suffix) is not one: inside WSL it hands its arguments to the
+    distro's VS Code Server (the WSL extension), which reads Linux paths and installs into the extensions the window
+    opened from WSL loads (~/.vscode-server/extensions)."""
+    return _in_wsl() and cli.suffix.lower() in (".cmd", ".exe", ".bat")
+
+
+def _wsl_launcher(cli: Path) -> bool:
+    """The Windows editor's bin/code launcher, run from WSL."""
+    return _in_wsl() and str(cli).startswith("/mnt/") and not _wsl_windows_cli(cli)
+
+
+def _host_path(cli: Path, path: Path) -> str:
+    if _wsl_windows_cli(cli) and shutil.which("wslpath"):
+        result = subprocess.run(["wslpath", "-w", str(path)], capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return str(path)
+
+
+def _code_args(cli: Path, *args: str) -> list[str]:
+    extdir = os.environ.get("EXAKIT_EXASOL_VSCODE_EXTDIR")
+    prefix = [str(cli)]
+    if extdir:
+        prefix += ["--extensions-dir", _host_path(cli, Path(extdir))]
+    return [*prefix, *args]
+
+
+# Where VS Code and its forks keep extensions, under the user's home (the same names on Windows, under %USERPROFILE%);
+# the -server folders hold what a window opened from WSL (or over SSH) loads.
+EXTENSION_DIRS = (".vscode/extensions", ".vscode-insiders/extensions", ".vscode-oss/extensions",
+                  ".cursor/extensions", ".windsurf/extensions",
+                  ".vscode-server/extensions", ".vscode-server-insiders/extensions", ".vscodium-server/extensions",
+                  ".cursor-server/extensions", ".windsurf-server/extensions")
+_FOLDER = re.compile(re.escape(EXTENSION_ID) + r"-(\d+\.\d+\.\d+)(?:-[\w-]+)?$", re.I)
+
+
+def _listed_folders(root: Path) -> set[str] | None:
+    """The folder names the editor's extensions.json lists - its own record of what is installed; None when the
+    folder has no readable one (an older editor), and then every folder counts. An uninstall drops the entry at once
+    and deletes the folder later (measured: the VS Code server on WSL)."""
+    try:
+        entries = json.loads((root / "extensions.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    names: set[str] = set()
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("relativeLocation")
+        if not isinstance(name, str) or not name:
+            location = item.get("location")
+            if isinstance(location, dict):
+                location = location.get("path") or location.get("fsPath")
+            name = re.split(r"[\\/]", location.rstrip("/\\"))[-1] if isinstance(location, str) else ""
+        if name:
+            names.add(name.lower())
+    return names
+
+
+def folder_version(ctx: KitContext) -> str | None:
+    """The extension's version from an editor's extensions folder - found without the editor's command-line tool,
+    which is often not on PATH. A folder the editor marked as removed (its .obsolete list), or one its extensions.json
+    no longer lists, does not count."""
+    roots = [Path(os.environ["EXAKIT_EXASOL_VSCODE_EXTDIR"])] if os.environ.get("EXAKIT_EXASOL_VSCODE_EXTDIR") else []
+    roots += [Path.home() / relative for relative in EXTENSION_DIRS]
+    found: list[tuple[tuple[int, ...], str]] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            removed = set(json.loads((root / ".obsolete").read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            removed = set()
+        listed = _listed_folders(root)
+        for entry in root.iterdir():
+            match = _FOLDER.match(entry.name)
+            if match and entry.is_dir() and entry.name not in removed and (
+                    listed is None or entry.name.lower() in listed):
+                found.append((tuple(int(x) for x in match.group(1).split(".")), match.group(1)))
+    return max(found)[1] if found else None
+
+
+def live_version(ctx: KitContext) -> str | None:
+    cli = code_cli(ctx)
+    if not cli:
+        return folder_version(ctx)
+    try:
+        result = subprocess.run(_code_args(cli, "--list-extensions", "--show-versions"),
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                check=False, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        # A slow first start of the editor (macOS checks an app it has not run for a while) must not read as "the
+        # extension is not here": the folders still answer.
+        return folder_version(ctx)
+    if result.returncode != 0:
+        return folder_version(ctx)
+    for line in result.stdout.splitlines():
+        name, _, version = line.strip().partition("@")
+        if name.lower() == EXTENSION_ID and version:
+            return version
+    # One editor's tool answered, but the extension may be in another editor (a fork) of this machine.
+    return folder_version(ctx)
+
+
+def installed_version(ctx: KitContext) -> str | None:
+    return live_version(ctx) if ctx.manifest.get(f"{RECEIPT}.version") else None
+
+
+def system_present(ctx: KitContext) -> bool:
+    """Installed by the user, not the kit: the kit lists it as managed outside the kit and never offers to install,
+    update or remove it."""
+    if ctx.manifest.get(f"{RECEIPT}.version") or ctx.manifest.get(f"{RECEIPT}.ownership") == "kit":
+        return False        # the kit's own, installed or still installing (see install)
+    # The extensions folders first: no editor started, so the answer cannot time out. The install table and the
+    # install itself ask this separately; a slow editor once let the table offer what the install then refused.
+    return bool(folder_version(ctx) or live_version(ctx))
+
+
+def applicable(ctx: KitContext) -> bool:
+    """An editor the kit can install into - or the extension already in one (then listed as managed outside the
+    kit, never as "not available": the user has it)."""
+    return code_cli(ctx) is not None or folder_version(ctx) is not None
+
+
+def _release_digest(version: str, asset_name: str) -> str | None:
+    url = f"https://api.github.com/repos/{REPO}/releases/tags/v{version}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"}),
+                                timeout=20) as response:
+        doc = json.load(response)
+    for asset in doc.get("assets", []):
+        if asset.get("name") == asset_name:
+            digest = asset.get("digest", "")
+            if digest.startswith("sha256:") and len(digest) == 71:
+                return digest[7:]
+    return None
+
+
+def expected_digest(ctx: KitContext, version: str, asset_name: str) -> str | None:
+    doc = ctx.pinned_document()                # the kit copy's own pins, never the fetched document (SEC-13)
+    block = doc.get("components", {}).get(ID, {})
+    if version == block.get("version"):
+        digest = block.get("sha256", {}).get("vsix")
+        if isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+            return digest
+    try:
+        return _release_digest(version, asset_name)
+    except (OSError, ValueError):
+        return None
+
+
+def _stage_for_wsl(cli: Path, source: Path) -> Path:
+    if not _wsl_windows_cli(cli):
+        return source
+    if shutil.which("cmd.exe") and shutil.which("wslpath"):
+        result = subprocess.run(["cmd.exe", "/c", "echo %TEMP%"], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            converted = subprocess.run(["wslpath", "-u", result.stdout.strip()],
+                                       capture_output=True, text=True, check=False)
+            if converted.returncode == 0:
+                folder = Path(converted.stdout.strip())
+                if folder.is_dir() and os.access(folder, os.W_OK):
+                    destination = folder / source.name
+                    shutil.copy2(source, destination)
+                    return destination
+    for folder in (Path("/mnt/c/Windows/Temp"), Path("/mnt/c/Temp")):
+        if folder.is_dir() and os.access(folder, os.W_OK):
+            destination = folder / source.name
+            shutil.copy2(source, destination)
+            return destination
+    raise AddonFailure("A Windows editor CLI needs a writable Windows temporary folder for the VSIX")
+
+
+def install(ctx: KitContext, *, force: bool = False) -> None:
+    from model import load_addons
+
+    if ctx.manifest.get(f"{RECEIPT}.ownership") in ("user", "unknown"):
+        return
+    if system_present(ctx):
+        return  # A user-installed extension remains the user's installation.
+    cli = code_cli(ctx)
+    if not cli:
+        raise AddonFailure("No VS Code-compatible editor CLI was found")
+    default = next(item.default_version for item in load_addons(ctx.root) if item.id == ID)
+    version = ctx.target_version(ID, default)
+    if live_version(ctx) != version or force:
+        asset = f"exasol-vscode-{version}.vsix"
+        digest = expected_digest(ctx, version, asset)
+        if not digest and os.environ.get("EXAKIT_ALLOW_UNVERIFIED_EXASOL_VSCODE") != "1":
+            raise AddonFailure("No trusted VSIX checksum is available; refusing the download")
+        url = f"https://github.com/{REPO}/releases/download/v{version}/{asset}"
+        with tempfile.TemporaryDirectory(prefix="exakit-vscode-") as temp:
+            archive = Path(temp) / asset
+            try:
+                with urllib.request.urlopen(url, timeout=30) as response, archive.open("wb") as out:
+                    if not response.url.startswith("https://"):
+                        raise AddonFailure("The VSIX download redirected away from HTTPS")
+                    shutil.copyfileobj(response, out)
+            except OSError as error:
+                raise AddonFailure(f"Could not download verified VSIX {asset}: {error}") from error
+            with archive.open("rb") as downloaded:
+                actual = hashlib.file_digest(downloaded, "sha256").hexdigest()
+            if digest and actual != digest:
+                raise AddonFailure(f"VSIX checksum mismatch for {asset}")
+            staged = _stage_for_wsl(cli, archive)
+            # The editor holds the extension from here on, before the receipt below is written: recorded as the
+            # kit's first (state=installing), so an install that fails or is interrupted after the editor took it is
+            # resumed by the next install and removed by uninstall, never listed as installed outside the kit
+            # (system_present), which refused both (audit MKT-06).
+            ctx.manifest.set_many({f"{RECEIPT}.ownership": "kit", f"{RECEIPT}.state": "installing"})
+            try:
+                ctx.run_logged("Installing Exasol for VS Code", *_code_args(cli, "--install-extension",
+                               _host_path(cli, staged), "--force"))
+            finally:
+                if staged != archive:
+                    staged.unlink(missing_ok=True)
+        if live_version(ctx) != version:
+            if _wsl_launcher(cli):
+                raise AddonFailure("VS Code does not list the requested extension version after installation. From "
+                                   "WSL, VS Code installs extensions through its WSL extension "
+                                   "(ms-vscode-remote.remote-wsl): install that in VS Code, then run: "
+                                   "exakit marketplace")
+            raise AddonFailure("VS Code does not list the requested extension version after installation")
+    with ctx.manifest.edit() as doc:
+        receipt = doc.setdefault("components", {}).setdefault("exasol_vscode", {})
+        receipt.update({"version": version, "extension_id": EXTENSION_ID, "code_cli": str(cli), "ownership": "kit",
+                        "validated": True})
+        receipt.pop("state", None)
+
+
+def validate(ctx: KitContext) -> bool:
+    valid = bool(live_version(ctx))
+    ctx.manifest.set_many({f"{RECEIPT}.validated": valid})
+    return valid
+
+
+def update(ctx: KitContext) -> None:
+    if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
+        raise AddonFailure("The extension is not kit-owned; its owner manages updates")
+    install(ctx)
+    ctx.manifest.set_many({"desired.exasol_vscode": ctx.manifest.get(f"{RECEIPT}.version")})
+
+
+def applicable_reason(ctx: KitContext) -> str:
+    return ("VS Code was not found, and neither was a compatible fork (VS Code Insiders, Cursor, "
+            "VSCodium or Windsurf). Install one and put its CLI on PATH, then run: exakit marketplace")
+
+
+def summary(ctx: KitContext) -> str:
+    return "Exasol view in VS Code's sidebar"
+
+
+def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[str]:
+    if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
+        raise AddonFailure("The extension is not kit-owned; it will not be removed")
+    if dry_run:
+        return [EXTENSION_ID] if live_version(ctx) else []
+    cli = code_cli(ctx)
+    removed: list[str] = []                 # what left the editor: nothing when it never got there (state=installing)
+    if cli and live_version(ctx):
+        ctx.run_logged("Removing Exasol for VS Code", *_code_args(cli, "--uninstall-extension", EXTENSION_ID))
+        if live_version(ctx):
+            raise AddonFailure("VS Code still lists the extension after removal")
+        removed.append(EXTENSION_ID)
+    ctx.manifest.delete(RECEIPT, "desired.exasol_vscode")
+    return removed

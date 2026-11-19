@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Profile C: a Lua adapter that reads metadata over the source's REST API,",
+    "plus the vendor's JDBC driver registered with the database's loader for",
+    "the rows (the adapter pushes queries down as IMPORT FROM JDBC). Lua is",
+    "built into the database: no language container, nothing in BucketFS for",
+    "the adapter - its text goes into CREATE LUA ADAPTER SCRIPT.",
+    "",
+    "The script is assembled from three parts: upstream's module preamble, the",
+    "dist file byte for byte (SHA-256 checked), and the kit's suffix",
+    "(lua/exakit_verified_tls.lua) carrying the pinned CA bundle. Measured on",
+    "Exasol Personal 2.3.0: the database's LuaSec loads no CA file or",
+    "directory, so the suffix verifies the REST API's certificate chain and",
+    "host name from memory instead of the upstream's verify_tls_certificate =",
+    "false."
+  ],
+  "id": "lua-jdbc",
+  "label": "C",
+  "slc": {
+    "alias": "LUA",
+    "language": "lua",
+    "needs_dns": true
+  },
+  "bucket": {
+    "service": "bfsdefault",
+    "bucket": "default",
+    "dir": "exakit/vs"
+  },
+  "loader_dir": "jdbc",
+  "adapter_script": {
+    "language": "LUA",
+    "suffix": "lua/exakit_verified_tls.lua"
+  }
+}

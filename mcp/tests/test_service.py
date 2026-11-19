@@ -127,6 +127,41 @@ class MCPSubsystemLifecycleTests(unittest.TestCase):
             self.assertIn("filesystem", remaining["mcpServers"])
             self.assertNotIn("exasol", remaining["mcpServers"])
 
+    def test_a_users_own_entry_of_the_same_name_is_kept_and_survives_uninstall(self) -> None:
+        """The user had an "exasol" entry of their own before the kit (their own Exasol MCP server). It is never
+        replaced: the kit's goes beside it as "exasol-starter-kit", a repair and a second configure keep that name,
+        and uninstall removes only the kit's - the user's entry is exactly as it was."""
+        own = {"command": "uvx", "args": ["exasol-mcp-server@1.0"], "env": {"EXA_DSN": "my-db:8563"}}
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(json.dumps({"mcpServers": {"exasol": own}}, indent=2) + "\n", encoding="utf-8")
+        with self._mock_connectivity():
+            configure = self.subsystem.execute(self._base_request("configure"))
+            self.assertEqual(configure.status, OperationStatus.SUCCESS)
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual(own, doc["exasol"], "the user's entry is not touched")
+            self.assertTrue(doc["exasol-starter-kit"]["command"].endswith("exasol-mcp-server"))
+            self.assertIn("user_entry_kept", [f.code for f in configure.findings])
+            self.assertEqual(OperationStatus.SUCCESS, self.subsystem.execute(self._base_request("validate")).status)
+            again = self.subsystem.execute(self._base_request("configure"))
+            self.assertEqual(again.status, OperationStatus.SUCCESS)
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol", "exasol-starter-kit"}, set(doc), "a second run keeps the same name, no third entry")
+            status = self.subsystem.execute(self._base_request("status"))
+            self.assertEqual(1, len(status.artifacts))
+            uninstall = self.subsystem.execute(self._base_request("uninstall"))
+            self.assertEqual(uninstall.status, OperationStatus.SUCCESS)
+            remaining = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol": own}, remaining)
+
+    def test_an_entry_the_kit_wrote_before_is_still_the_kits(self) -> None:
+        """A first configure writes "exasol"; a later one updates that same entry (it is the kit's by its record),
+        never moving aside from its own entry."""
+        with self._mock_connectivity():
+            self.subsystem.execute(self._base_request("configure"))
+            self.subsystem.execute(self._base_request("configure"))
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol"}, set(doc))
+
     def test_install_is_explicitly_blocked(self) -> None:
         result = self.subsystem.execute(self._base_request("install"))
         self.assertEqual(result.status, OperationStatus.BLOCKED)
@@ -213,6 +248,115 @@ class MCPSubsystemLifecycleTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class RemovalLeavesUnparseableFilesAloneTests(unittest.TestCase):
+    """MCP-01: a client file the kit cannot parse is never rewritten or deleted by a removal.
+
+    The removal used to be rendered from ``inspection.document or {}``: for a file that did not parse that is an
+    empty document, so Cursor's, Codex's and Claude Desktop's files were deleted and ``~/.claude.json`` and VS Code's
+    ``mcp.json`` became ``{}`` -- and the run said it had succeeded."""
+
+    FILES = {
+        "claude_desktop": ("CLAUDE_DESKTOP_CONFIG_PATH", "claude/claude_desktop_config.json"),
+        "claude_code": ("CLAUDE_CODE_CONFIG_PATH", ".claude.json"),
+        "cursor": ("CURSOR_MCP_CONFIG_PATH", ".cursor/mcp.json"),
+        "vscode_copilot": ("VSCODE_MCP_CONFIG_PATH", "Code/User/mcp.json"),
+        "gemini_cli": ("GEMINI_CLI_CONFIG_PATH", ".gemini/settings.json"),
+        "opencode": ("OPENCODE_CONFIG_PATH", ".config/opencode/opencode.json"),
+        "codex": ("CODEX_MCP_CONFIG_PATH", ".codex/config.toml"),
+    }
+    # What a user or a client's own editor leaves in a file that the client itself still reads.
+    JSON_DAMAGE = {
+        "comment": lambda text: "// my servers\n" + text,
+        "bom": lambda text: "\ufeff" + text,
+        "trailing_comma": lambda text: text.rstrip().rstrip("}").rstrip() + ",\n}\n",
+    }
+    TOML_DAMAGE = {"bad_line": lambda text: text + "this line is not toml\n"}
+
+    def setUp(self) -> None:
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="mcp-removal-untouched-"))
+        (self._temp_dir / "no-applications").mkdir()
+        env = {name: str(self._temp_dir / rel) for name, rel in self.FILES.values()}
+        env["EXAKIT_MCP_APP_ROOTS"] = str(self._temp_dir / "no-applications")
+        self.subsystem = MCPAccessSubsystem(
+            environment=ExecutionEnvironment(os_name="darwin", home=self._temp_dir, env=env)
+        )
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    def _request(self, operation: str, client: str) -> dict:
+        self.runtime_root = self._temp_dir / "runtime"
+        request = MCPSubsystemLifecycleTests._base_request(self, operation)  # same request shape
+        request["target_clients"] = [client]
+        request["validate_after_apply"] = False
+        return request
+
+    def _path(self, client: str) -> Path:
+        return self._temp_dir / self.FILES[client][1]
+
+    def test_every_adapter_leaves_a_damaged_file_byte_for_byte_and_says_what_to_delete(self) -> None:
+        for client in self.FILES:
+            damage = self.TOML_DAMAGE if client == "codex" else self.JSON_DAMAGE
+            for label, spoil in damage.items():
+                with self.subTest(client=client, damage=label):
+                    shutil.rmtree(self._temp_dir / "runtime", ignore_errors=True)
+                    path = self._path(client)
+                    configure = self.subsystem.execute(self._request("configure", client))
+                    self.assertIn(configure.status, (OperationStatus.SUCCESS, OperationStatus.SUCCESS_WITH_WARNINGS))
+                    self.assertTrue(path.exists())
+                    damaged = spoil(path.read_text(encoding="utf-8")).encode("utf-8")
+                    path.write_bytes(damaged)
+
+                    result = self.subsystem.execute(self._request("uninstall", client))
+
+                    self.assertTrue(path.exists(), "the file was deleted")
+                    self.assertEqual(path.read_bytes(), damaged, "the file was rewritten")
+                    self.assertEqual(result.status, OperationStatus.BLOCKED)
+                    untouched = [f for f in result.findings if f.code == "client_config_left_untouched"]
+                    self.assertEqual(len(untouched), 1)
+                    self.assertEqual(untouched[0].scope["path"], str(path))
+                    self.assertEqual(untouched[0].scope["entry"], "exasol")
+                    self.assertIn("'exasol'", untouched[0].recommended_action)
+                    self.assertEqual(result.details["skipped_clients"][0]["client"], client)
+                    # The record stays: once the file is fixed, the same removal takes the entry out.
+                    path.write_bytes(damaged.replace(b"\xef\xbb\xbf", b"").replace(b"// my servers\n", b"")
+                                     .replace(b",\n}\n", b"\n}\n").replace(b"this line is not toml\n", b""))
+                    again = self.subsystem.execute(self._request("uninstall", client))
+                    self.assertEqual(again.status, OperationStatus.SUCCESS)
+                    self.assertFalse(path.exists() and b'"exasol"' in path.read_bytes())
+
+    def test_a_file_that_is_not_utf8_is_left_alone_too(self) -> None:
+        path = self._path("cursor")
+        self.subsystem.execute(self._request("configure", "cursor"))
+        damaged = path.read_bytes().replace(b"exasol-mcp-server", b"exasol-mcp-server\xff")
+        path.write_bytes(damaged)
+        result = self.subsystem.execute(self._request("uninstall", "cursor"))
+        self.assertEqual(path.read_bytes(), damaged)
+        self.assertEqual(result.status, OperationStatus.BLOCKED)
+
+    def test_one_damaged_client_does_not_stop_the_others_and_the_run_warns(self) -> None:
+        for client in ("cursor", "claude_code"):
+            self.subsystem.execute(self._request("configure", client))
+        damaged = b"// mine\n" + self._path("cursor").read_bytes()
+        self._path("cursor").write_bytes(damaged)
+        request = self._request("uninstall", "cursor")
+        request["target_clients"] = ["cursor", "claude_code"]
+        result = self.subsystem.execute(request)
+        self.assertEqual(result.status, OperationStatus.SUCCESS_WITH_WARNINGS)
+        self.assertEqual(self._path("cursor").read_bytes(), damaged)
+        self.assertNotIn("exasol", json.loads(self._path("claude_code").read_text()).get("mcpServers", {}))
+
+    def test_a_removal_for_a_file_that_is_gone_creates_nothing(self) -> None:
+        for client in ("claude_code", "vscode_copilot"):
+            with self.subTest(client=client):
+                path = self._path(client)
+                self.subsystem.execute(self._request("configure", client))
+                path.unlink()
+                result = self.subsystem.execute(self._request("uninstall", client))
+                self.assertEqual(result.status, OperationStatus.SUCCESS)
+                self.assertFalse(path.exists(), "the removal created the file")
 
 
 class StatusFromFindingsTests(unittest.TestCase):

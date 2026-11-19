@@ -443,6 +443,27 @@ out="$(probe STUB_BIN="$TMP/bin-nopodman" STUB_SYSBIN="$TMP/sysbin-nodocker" -- 
 lacks "Docker usable, no Podman -> no skip warning" "database step will be skipped" "$out"
 
 echo
+echo "personal_check_requirements: the EXAKIT_DB_PORT note only when the user set it"
+# common.sh defaults EXAKIT_DB_PORT to 8563 and records whether the environment
+# named it; the note tested the defaulted value, so a plain re-run on a
+# deployment the launcher put on 8564 warned about a variable nobody set.
+# The two lines are taken from common.sh, so the test follows the real code.
+mkdir -p "$TMP/dep-8564"
+printf '{"dbPort": 8564}\n' > "$TMP/dep-8564/deployment.json"
+PORTREQ='eval "$(grep -E "^EXAKIT_DB_PORT(_EXPLICIT)?=" "'"$ROOT"'/setup/lib/common.sh")"
+EXAKIT_PERSONAL_DEPLOY_DIR="'"$TMP/dep-8564"'"
+'"$REQ"
+_saved_db_port="${EXAKIT_DB_PORT-}"; _had_db_port="${EXAKIT_DB_PORT+1}"
+unset EXAKIT_DB_PORT
+out="$(probe -- "$PORTREQ")"
+lacks    "unset, launcher on 8564 -> no note"    "EXAKIT_DB_PORT does not choose the port" "$out"
+out="$(probe EXAKIT_DB_PORT=8564 -- "$PORTREQ")"
+lacks    "set to the launcher's 8564 -> no note" "EXAKIT_DB_PORT does not choose the port" "$out"
+out="$(probe EXAKIT_DB_PORT=8565 -- "$PORTREQ")"
+contains "set to 8565, launcher on 8564 -> note" "EXAKIT_DB_PORT does not choose the port of an Exasol Personal deployment: the launcher selects it and the kit uses whatever it selected (currently 8564)." "$out"
+[ -n "$_had_db_port" ] && export EXAKIT_DB_PORT="$_saved_db_port"
+
+echo
 echo "the engine is decided once per process (LNXR-08)"
 help_calls() { grep -c 'LAUNCHER install local --help' "$TMP/calls" 2>/dev/null || true; }
 CHAIN="$REQ"'

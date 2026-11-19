@@ -8,3 +8,11 @@ setup-test-*.log
 
 # Claude Code local state (worktrees, settings, session data)
 .claude/
+
+# Python build output (setuptools reuses a stale build/lib over newer sources)
+build/
+*.egg-info/
+__pycache__/
+dist/
+# Internal release evidence stays on this machine.
+/v0.3.0 Changes.docx

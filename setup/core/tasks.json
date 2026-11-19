@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Core setup tasks: work a kit release adds that only the installer can do.",
+    "",
+    "`exakit update` compares these names with core_tasks.completed in the",
+    "laptop's manifest.json. Any name not recorded there is pending, and a",
+    "pending task makes the update rerun the downloaded installer once. The",
+    "installer holds the actual setup and its checks; this file only asks for",
+    "the rerun.",
+    "",
+    "  name   a permanent key. Append new entries and keep the old ones for users",
+    "         who skip releases. Never rename or reuse a name: a later setup pass",
+    "         for the same component gets a new one (preprocessor_v2).",
+    "  scope  the installer step that performs the task: database (Step 3,",
+    "         Setup Utilities: database features) or kit (no database needed).",
+    "",
+    "Only add a task when a new addition needs the installer to run after an",
+    "update. A component that `exakit update` can install by itself does not."
+  ],
+  "tasks": [
+    {
+      "name": "preprocessor",
+      "scope": "database"
+    }
+  ]
+}

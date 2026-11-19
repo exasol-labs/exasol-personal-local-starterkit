@@ -1,6 +1,6 @@
 ---
 name: exasol-runtime
-description: Operate the local Exasol database the starter kit deploys — an Exasol Personal local deployment on macOS, Linux and Windows x86_64 — starting and stopping it, reading its status honestly, and deciding whether it comes back after a reboot. Triggers — "start my Exasol database", "the database is not running", "exakit status says stopped", "connection refused on 8563", "make Exasol start at login", "is my database running", "stop the database", "which Exasol runtime do I have".
+description: Operate the local Exasol database the starter kit deploys — an Exasol Personal local deployment on macOS, Linux and Windows x86_64 — starting and stopping it, reading its status honestly, noticing a database clock left behind by a sleeping computer, and deciding whether it comes back after a reboot. Triggers — "start my Exasol database", "the database is not running", "exakit status says stopped", "connection refused on 8563", "make Exasol start at login", "is my database running", "stop the database", "which Exasol runtime do I have", "the database time is wrong", "certificate not yet valid", "status shows a Clock row".
 ---
 
 # The local Exasol runtime
@@ -58,6 +58,16 @@ The `--json` object includes `running`, `datasets_loaded` (verified against the 
 not just the manifest), `services`, `steps_completed`, and `remedies` — a map of component
 to the exact repair command. Read the remedy from there rather than inferring it.
 
+**The database clock can fall behind after the computer sleeps.** On macOS the database
+runs in a VM whose clock does not catch up after sleep or hibernation (measured: 32 min to
+2 h 26 min behind). Queries still answer; what breaks is anything that goes by the time —
+a remote source's TLS certificate reads as "not yet valid", scheduled jobs run late,
+`CURRENT_TIMESTAMP` is wrong. `status` measures it: `clock_skew_seconds` in the JSON
+(negative is behind), and past two minutes a `Clock` row on the screen plus
+`remedies.clock: "exakit stop"`. A restart resyncs it — `exakit stop`, then `exakit start`.
+It is deliberately **not** the top-level `remedy`: stopping ends whatever is running, so
+tell the user and let them pick the moment.
+
 ## Start and stop
 
 ```bash
@@ -88,6 +98,13 @@ EXAKIT_AUTOSTART_CHANGE=0 exakit autostart   # scripted: leave it off
 On by default from a fresh install. The mechanism differs per platform —
 launchd on macOS, `systemd --user` on Linux, a Startup entry on Windows — but
 the command is the same everywhere.
+
+**In WSL**, "after a restart" means when the *distro* starts, not the PC:
+Windows starts a distro when it is opened and stops it when idle, so after a
+Windows reboot nothing in it runs until it is opened again (or a Windows logon
+task starts it: `wsl.exe -d <distro> --exec true`). It also needs systemd on in
+the distro (`[boot] systemd=true` in `/etc/wsl.conf`); `exakit autostart` says so
+when it is off.
 
 ## When the database will not come up
 

@@ -34,10 +34,11 @@ listing="$(git archive HEAD | tar -t)" || {
 bytes="$(git archive --format=tar.gz HEAD | wc -c | tr -d ' ')"
 mb=$((bytes / 1048576))
 
-# 1. Budget. The install payload is scripts plus the bundled datasets (~7 MB).
-#    This is a ceiling to catch a heavy asset riding along unnoticed, not a
-#    target - if a dataset legitimately grows, raise it deliberately.
-budget_mb=12
+# 1. Budget. The install payload is scripts plus the two bundled samples
+#    (about 3 MB compressed). This is a ceiling to catch a heavy asset riding
+#    along unnoticed, not a target - if something legitimately grows, raise it
+#    deliberately.
+budget_mb=5
 if [ "$mb" -le "$budget_mb" ]; then
     pass "source archive is ${mb} MB (budget ${budget_mb} MB)"
 else
@@ -67,7 +68,11 @@ for needed in \
     setup/help/exakit.json \
     setup/help/exapump.json \
     setup/exakit \
-    data/datasets/tpch/data/lineitem.csv
+    setup/virtual-schemas/engine/guide.py \
+    docs/virtual-schemas/README.md \
+    docs/virtual-schemas/postgresql.md \
+    data/datasets/retail_sales/data/retail_sales.csv \
+    data/datasets/bank_transaction/data/bank_transactions.csv
 do
     if printf '%s\n' "$listing" | grep -qxF "$needed"; then
         pass "archive contains $needed"

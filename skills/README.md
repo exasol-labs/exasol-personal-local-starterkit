@@ -25,6 +25,7 @@ user's request actually needs, not a manual for the whole kit.
 | Skill | Use it when… |
 |---|---|
 | [`local-agent-ready-starter`](local-agent-ready-starter/SKILL.md) | Setting up the kit and running a first trusted, AI-assisted query — install → connect MCP → load data → ask/inspect/run/validate/rerun. |
+| [`exakit`](exakit/SKILL.md) | **The master skill — load it first.** What the kit is and what each piece is for; how to find any command, option, persona, add-on or dataset from the kit's own `--json` answers instead of guessing; and the MANDATORY order of tools: `exakit data-load` before exapump before SQL `IMPORT`, MCP before admin SQL, dash-server for dashboards; and the semantic layer, Exasol Semantic Views - read the models first and answer from their metrics. Its rules win over every other skill on this machine. |
 
 **The fixed components** — always installed
 
@@ -33,8 +34,31 @@ user's request actually needs, not a manual for the whole kit.
 | [`exasol-runtime`](exasol-runtime/SKILL.md) | Starting, stopping or diagnosing the local Exasol Personal deployment; autostart. |
 | [`exasol-exapump`](exasol-exapump/SKILL.md) | Running SQL, opening a SQL shell, bulk-loading CSV/Parquet — and knowing that the `starter-kit` profile is the **admin**, unsandboxed connection. |
 | [`exasol-mcp`](exasol-mcp/SKILL.md) | Connecting AI clients over MCP, diagnosing `mcp-doctor`, repairing config drift, proving the read-only user really is read-only. |
-| [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | Querying the database from Python — the right interpreter, the TLS setting the self-signed certificate needs, reading credentials safely. |
 | [`exakit-lifecycle`](exakit-lifecycle/SKILL.md) | Operating the kit itself — versions and what changed, updates, logs, the command surface, where the credential files live, and uninstalling with `--dry-run` first. |
+| [`exasol-virtual-schemas`](exasol-virtual-schemas/SKILL.md) | Querying an external source from local Exasol with `exakit connect` / `exakit source` — the rules every connector shares (credentials never as arguments, the `localhost` trap, the CA PEM the JDBC databases need with `verify`, the database clock, Windows PowerShell quoting, failure classes, reauth, re-point, disconnect vs remove) and the index of the connector skills below. |
+
+**External sources (virtual schemas)** — one skill per connector in `setup/virtual-schemas/catalog.json`; installed with the kit
+
+Each takes an agent from the user's request to a working `VS_<NAME>`: the
+connector's inputs, finding them with the source's own CLI, a least-privilege
+reader, the network allowlist, the unattended `exakit connect` line, verifying
+it, and that connector's failures. The shared rules stay in
+`exasol-virtual-schemas`; `tests/skills.sh` fails when a catalog connector has
+no skill here, or a skill misses one of its connector's inputs.
+
+| Skill | Use it when… |
+|---|---|
+| [`exasol-vs-postgresql`](exasol-vs-postgresql/SKILL.md) | Connecting PostgreSQL (self-hosted, RDS/Aurora, Azure, Cloud SQL) — a reader role, the CA PEM `verify` always needs, NUMERIC and domain columns. |
+| [`exasol-vs-mysql`](exasol-vs-mysql/SKILL.md) | Connecting MySQL or MariaDB — the CA PEM `verify` always needs, quoting lower-case names, `DESC NULLS LAST` for top-N. |
+| [`exasol-vs-sqlserver`](exasol-vs-sqlserver/SKILL.md) | Connecting SQL Server, Azure SQL or RDS — a schema-scoped login, named instances, a CA PEM with the intermediates on Linux. |
+| [`exasol-vs-oracle`](exasol-vs-oracle/SKILL.md) | Connecting Oracle — service names (not SIDs), TCPS on 2484 with a CA PEM, the ORA- errors. |
+| [`exasol-vs-snowflake`](exasol-vs-snowflake/SKILL.md) | Connecting a Snowflake schema — a service user, a programmatic access token, the network policy a PAT login requires; no CA file. |
+| [`exasol-vs-bigquery`](exasol-vs-bigquery/SKILL.md) | Connecting a BigQuery dataset — a service account key, who can read it in BucketFS, and why it is not re-pointed in place. |
+| [`exasol-vs-s3`](exasol-vs-s3/SKILL.md) | Querying JSON, CSV or Parquet files in S3 — an EDML mapping, a prefix-scoped IAM key, the database clock for signed requests. |
+| [`exasol-vs-azure-blob`](exasol-vs-azure-blob/SKILL.md) | Querying the same in an Azure Blob Storage container — a read-and-list container SAS kept in a file, the storage firewall, the database clock. |
+| [`exasol-vs-databricks`](exasol-vs-databricks/SKILL.md) | Connecting a Unity Catalog schema through a SQL warehouse — a PAT, CAN USE, IP access lists; no External Data Access needed. |
+| [`exasol-vs-lakehouse`](exasol-vs-lakehouse/SKILL.md) | Reading Iceberg / Delta tables from their files with no warehouse — pick the catalog (Iceberg REST, Unity Catalog, AWS Glue, or a Parquet folder) and the files (vended, S3 or S3-compatible, Azure ADLS); token or OAuth login, the second secret, the Unity grants. |
+| [`exasol-vs-mongodb`](exasol-vs-mongodb/SKILL.md) | Connecting one MongoDB collection (Atlas or self-hosted) — the Atlas IP access list, child tables, quoted names on PowerShell. |
 
 **The wider Exasol ecosystem** — installed with the kit; it catalogs tools that are *not* part of it
 
@@ -44,7 +68,7 @@ user's request actually needs, not a manual for the whole kit.
 
 **The marketplace** — opt-in add-ons
 
-`exasol-marketplace` itself installs with the kit; the other five skills below
+`exasol-marketplace` itself installs with the kit; the other seven skills below
 are **installed with their add-on**, not with the kit: each declares
 `addon: <id>` in its frontmatter, and the marketplace places it as part of
 installing that add-on and removes it again when the add-on goes.
@@ -56,9 +80,37 @@ tool that is not on the machine is worse than not shipping the skill at all.
 | [`exasol-marketplace`](exasol-marketplace/SKILL.md) | Choosing, installing, updating or removing add-ons; explaining why one is not offered at all. |
 | [`dbt-exasol`](dbt-exasol/SKILL.md) | Building SQL models with dbt against the local database; the generated profile, why `~/.dbt` is never touched, and why the command is `dbt-exasol` and not `dbt`. |
 | [`dash-server`](dash-server/SKILL.md) | Building live dashboards the agent drives over an MCP control plane while the user opens a browser URL. |
-| [`json-tables`](json-tables/SKILL.md) | Loading JSON into the database (exapump takes CSV and Parquet only); the prebuilt engine that means no Rust toolchain. |
+| [`json-tables`](json-tables/SKILL.md) | Loading JSON into the database (exapump takes CSV and Parquet only); the prebuilt engine that means no Rust toolchain; JSON-path queries on a wrapped surface, on every connection. |
 | [`exasol-scheduler`](exasol-scheduler/SKILL.md) | Scheduling SQL jobs in SCHED.SCHED_TASKS; the scheduler_svc trust boundary, task chains, and why missed runs are never replayed. |
 | [`exasol-vscode`](exasol-vscode/SKILL.md) | SQL editing and schema browsing inside VS Code; why the kit refuses to manage a copy the user installed themselves. |
+
+**From the components' own repositories** — Exasol's skills, used as they are
+
+Where a component ships skills of its own, the kit places those instead of
+writing its own: copied unchanged at the version the kit installs, with one
+line on top saying where they came from and that the `exakit` skill comes first
+on this machine. [`upstream.json`](upstream.json) names each source, its pin,
+and why the other skills in those repositories were not taken;
+`python3 tools/sync_upstream_skills.py` copies them and writes
+[`upstream.lock.json`](upstream.lock.json). Never edit a copy by hand —
+`tests/skills.sh` compares every file with the lock and fails on a pin behind
+the version the kit installs.
+
+| Skill | From | Use it when… |
+|---|---|---|
+| [`exasol-mcp-server`](exasol-mcp-server/SKILL.md) | `exasol/mcp-server` | Using the MCP server's tools: exploring the database, debugging a query, BucketFS. |
+| [`exasol-sql-dialect`](exasol-sql-dialect/SKILL.md) | `exasol/mcp-server` | Writing Exasol SQL that is correct the first time: syntax, types, functions, pitfalls. |
+| [`exasol-system-tables`](exasol-system-tables/SKILL.md) | `exasol/mcp-server` | Reading system and statistics tables (`EXA_ALL_*`, `EXA_DBA_*`, …). |
+| [`exasol-table-design`](exasol-table-design/SKILL.md) | `exasol/mcp-server` | `DISTRIBUTE BY`, `PARTITION BY`, data types, replication — designing tables for speed. |
+| [`exasol-import-export`](exasol-import-export/SKILL.md) | `exasol/mcp-server` | SQL `IMPORT` / `EXPORT` — for data the database reaches itself; local files go through `exakit data-load` first. |
+| [`exasol-udfs`](exasol-udfs/SKILL.md) | `exasol/mcp-server` | Writing `CREATE SCRIPT` UDFs on the database's own script languages. |
+| [`exasol-database`](exasol-database/SKILL.md) | `exasol-labs/exasol-agent-skills` | exapump and Exasol SQL in depth: the statement grammar, reserved words, profiling, analytics. |
+| [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | `exasol-labs/exasol-agent-skills` | The pyexasol API; this machine's interpreter, TLS setting and credentials are in the `exakit` skill. |
+| [`exasol-bucketfs`](exasol-bucketfs/SKILL.md) | `exasol-labs/exasol-agent-skills` | Files in BucketFS with exapump. |
+| [`exasol-dash`](exasol-dash/SKILL.md) | `exasol-labs/dash-server` | Writing the Dash app for a dashboard on dash-server. Placed with the dash-server add-on. |
+| [`exasol-semantic-analyst`](exasol-semantic-analyst/SKILL.md) | `exasol-labs/exasol-semantic-views` | Answering business questions through a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-modeler`](exasol-semantic-modeler/SKILL.md) | `exasol-labs/exasol-semantic-views` | Creating and maintaining a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-reviewer`](exasol-semantic-reviewer/SKILL.md) | `exasol-labs/exasol-semantic-views` | Reviewing a model and preparing it for approval. Placed with the semantic-views add-on. |
 
 The set is versioned as one component (`components.skills` in `versions.json`),
 and it updates like one: when the maintainers change a skill and bump that
@@ -73,7 +125,8 @@ adds one more key, `addon: <add-on id>` — that is the whole wiring, and it is
 what makes the skill travel with its add-on instead of with the kit. The agent always sees the name and
 description, and loads the full body only when it decides the skill is relevant
 (progressive disclosure). The `description`'s **"Triggers —"** list is how the
-agent decides when to fire it — keep it accurate.
+agent decides when to fire it — keep it accurate. A skill copied from a
+component's repository keeps that repository's description as it is.
 
 ## Seeing what you have
 
@@ -105,7 +158,12 @@ The per-user locations:
 
 - **Claude Code** → `~/.claude/skills/<name>/` — **verified**: Claude Code reads
   this and picks the skills up on its next start.
-- **Open-standard agents** → `~/.agents/skills/<name>/` — the shared
+- **Continue** → `~/.continue/skills/<name>/` — placed only when `~/.continue`
+  exists, so the kit creates no Continue folder for someone without it.
+- **Claude Desktop and claude.ai** read no folder: a skill reaches them only as a
+  ZIP uploaded in their settings.
+- **Open-standard agents** → `~/.agents/skills/<name>/` — read by Codex, Cursor,
+  GitHub Copilot, Gemini CLI and OpenCode (each one's docs, checked 2026-11-10). The shared
   **convention**. The kit writes it; whether a given tool reads it is that
   tool's business, and the kit has not verified each one. `exakit skills`
   reports that the file is in place, not that your agent read it. If your client

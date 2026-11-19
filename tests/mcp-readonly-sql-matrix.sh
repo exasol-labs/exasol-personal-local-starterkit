@@ -72,6 +72,9 @@ mkdir -p "$TMP/.exapump"
         "$HOSTP" "$PORTP" "$(cat "$ADMIN_PW_FILE")"
 } > "$TMP/.exapump/config.toml"
 chmod 600 "$TMP/.exapump/config.toml"
+# exapump reads EXAPUMP_CONFIG before $HOME/.exapump, and the kit sets it for its own
+# commands (#40): name these throwaway profiles, or a set one hides them.
+EXAPUMP_CONFIG="$TMP/.exapump/config.toml"; export EXAPUMP_CONFIG
 
 # The real reachability probe: a trivial SELECT through the very profile the
 # checks use. Anything short of a working query means this suite cannot answer
