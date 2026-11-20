@@ -29,7 +29,7 @@ $script:PersonalRepo            = "exasol/exasol-personal"
 # reached a user as a 404 mid-install.
 # Twin of EXAKIT_PERSONAL_VERSION_FALLBACK in common.sh; both move together,
 # and both were checked against the upstream release before being written.
-$script:PersonalVersionFallback = "2.4.0"
+$script:PersonalVersionFallback = "2.5.0"
 $script:PersonalPort            = 8563
 $script:PersonalProbeTimeout    = if ($env:EXAKIT_PERSONAL_PROBE_TIMEOUT) { [int]$env:EXAKIT_PERSONAL_PROBE_TIMEOUT } else { 10 }
 $script:PersonalMinRamGb        = if ($env:EXAKIT_PERSONAL_MIN_RAM_GB)  { [int]$env:EXAKIT_PERSONAL_MIN_RAM_GB }  else { 8 }

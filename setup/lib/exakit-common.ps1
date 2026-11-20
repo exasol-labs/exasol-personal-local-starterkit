@@ -623,7 +623,7 @@ $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT
 #                      (GitHub releases, PyPI).
 # anything else      - install the *Fallback versions below, no network at all.
 $script:VersionPolicy = if ($env:EXAKIT_VERSION_POLICY) { $env:EXAKIT_VERSION_POLICY } else { "manifest" }
-$script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.14.0" }
+$script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.14.1" }
 $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT_MCP_VERSION_FALLBACK } else { "2.4.0" }
 # uv is the Python tool runner: uvx runs the bridge Claude Desktop reaches the
 # MCP server through (`uvx mcp-proxy`), and uv runs the kit's managed Python
@@ -632,7 +632,7 @@ $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT
 # The MIN version is the oldest uv the kit will RUN at all: below it uv's
 # bundled CA store trusts an emSign root whose intermediate CA keys are
 # compromised (GHSA-hq85-5cpj-mr62). Twins of EXAKIT_UV_*_FALLBACK in common.sh.
-$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.8" }
+$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.9" }
 $script:UvMinVersionFallback = if ($env:EXAKIT_UV_MIN_VERSION_FALLBACK) { $env:EXAKIT_UV_MIN_VERSION_FALLBACK } else { "0.13.4" }
 $script:UvRepo = "astral-sh/uv"
 $script:UvVetted = $null
