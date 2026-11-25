@@ -15,6 +15,10 @@ function Read-Knob([string]$Name, [string]$Default) {
 }
 Add-Content -Path (Join-Path $dir "engine.calls") -Value ($args -join " ")
 
+# engine.delay_seconds: every call takes this long first, the way a call does
+# on a loaded machine. Only tests/legacy-crossing-ps.ps1 sets it.
+$delay = [int](Read-Knob "engine.delay_seconds" "0")
+if ($delay -gt 0) { Start-Sleep -Seconds $delay }
 $state = Read-Knob "engine.state" "running"
 $verb = "" + $args[0]; $noun = "" + $args[1]
 # down: the CLI is there, the daemon or machine is not (Docker Desktop stopped).

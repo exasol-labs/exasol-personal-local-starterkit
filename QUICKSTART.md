@@ -33,12 +33,16 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex
 
 You will see a short plan, then numbered steps: database, data, AI setup. The database is usually up in under 2 minutes. The install ends with a connection panel, and a first prompt for your AI client is copied to your clipboard.
 
+The kit's database is its own Exasol Personal deployment, `starter-kit-local`. Already have Exasol Personal 2.5 with databases of your own? The installer asks one question: a new database for the kit (press Enter), or one of yours, which is then renamed to `starter-kit-local`. Your other databases are not touched.
+
 ## 3. Verify it is alive
 
 ```bash
 exakit status     # Runtime … · running, and Database 127.0.0.1:8563 · reachable
 exakit info       # the connection panel, any time you need it
 ```
+
+The database listens on port 8563, or on the next free port when another Exasol uses it. `exakit info` shows the port. Typed by hand, `exasol status` looks at the launcher's `default` deployment, not the kit's: use `exakit status`.
 
 ## 4. Connect your AI assistant
 
@@ -79,14 +83,12 @@ exakit start               # bring it back
 exakit mcp-doctor          # AI connection health check
 exakit version             # what is installed vs what the maintainers advertise
 exakit update              # apply the updates that are waiting
-exakit uninstall           # remove everything the kit installed
+exakit uninstall           # remove everything the kit installed (a database of yours is kept)
 ```
 
 The quick updates take seconds and no downtime. When a **database** update is
-waiting, `exakit update` asks — `Stop the database and update the runtime now?
-[y/N]` — and on `y` it stops the database, updates it, brings it back up and says
-so. On `n` nothing is stopped and `exakit update` applies it later. Your
-data is kept either way. Full detail:
+waiting, `exakit update` stops the database, updates it, brings it back up and
+says so, with no question. Your data is kept. Full detail:
 [Staying up to date](README.md#staying-up-to-date).
 
 Re-running the installer is safe. It skips what is done and repairs what is not.
@@ -100,7 +102,7 @@ For Podman installation, connection or permission errors, see the [Podman troubl
 | I already had the starter kit, with the database in a container | Re-run the install command. It recognises the old installation before touching anything and asks whether to bring your data across: **Migrate my data** copies every non-system table into the new database, **Skip and continue** sets the new one up empty. Neither deletes the old container or its data — both stop it (it holds the port the new database needs) and print the command that removes it when you want it gone. The kit's own sample data (TPC-H, energy, weather), when unchanged, is left out of the copy: the install loads it itself |
 | I skipped that, or my container was never offered | `exakit migrate docker-nano` — the same copy, later, into the running database. It remembers the container the installer saw; name another with `--container`, `--engine docker\|podman`, `--dsn HOST:PORT`, and give the password with `--password-file` or at the prompt (never on the command line). Both databases want port 8563, so yours is stopped for the copy out and started again before the copy in. Nothing in the container is changed or removed |
 | "Podman is installed but not running" | On Windows, follow the [machine connection checks](quickstarts/podman.md#windows-connection-failures). On Linux/WSL, run `podman info` and check the [rootless prerequisites](quickstarts/podman.md#linux-and-wsl-rootless-permissions). Once Podman works, re-run the installer. The macOS kit does not use Podman. |
-| "Port 8563 is already in use" | The launcher selects the deployment's port itself and the kit reads it back — an existing Exasol on the port is adopted; a leftover Exasol runner from an interrupted install is waited for and cleared, or named with the command that frees the port (`kill <pid>`); anything else is reported with the process named. Stop that app and re-run |
+| "Port 8563 is already in use" | A new install gives the kit's database the next free port when another Exasol or another program holds 8563, and `exakit info` shows it. For the database you have, a leftover Exasol runner from an interrupted install is waited for and cleared, or named with the command that frees the port (`kill <pid>`). Anything else on its port is reported with the process named. Stop that app and run `exakit start` |
 | Setup failed mid-way | Re-run the same install command. It resumes from the failed step |
 | Assistant cannot see the database | `exakit status`, then restart the AI client |
 | Anything else | `exakit logs` has the full story. Every error message names its remedy |

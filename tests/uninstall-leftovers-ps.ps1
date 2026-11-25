@@ -53,11 +53,13 @@ foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/exakit.ps1"))) { Invok
 foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/lib/runtime-personal.ps1") @(
     "Remove-Personal", "Find-PersonalTeardownLeftovers", "Test-PersonalNamesCarryId", "Get-PersonalDeploymentId",
     "Get-PersonalLauncherCacheDir", "Get-PersonalOtherDeployments", "Get-PersonalPrunableStateDirs",
-    "Get-PersonalLauncherLeftovers"))) { Invoke-Expression $t }
+    "Get-PersonalLauncherLeftovers", "Update-PersonalDeployDir", "Update-PersonalDeploymentRecord"))) { Invoke-Expression $t }
 # The Startup-entry naming lives in the shared layer: the real functions, so
 # the sweep is tested against the prefix the kit actually writes.
 foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/lib/exakit-common.ps1") @(
-    "Get-ExakitStartupDir", "Get-ExakitAutostartPrefix", "Get-ExakitAutostartEntryPath"))) { Invoke-Expression $t }
+    "Get-ExakitStartupDir", "Get-ExakitAutostartPrefix", "Get-ExakitAutostartEntryPath",
+    "Get-ExakitProfileHome", "Resolve-PersonalDeployDir", "Read-PersonalDeploymentId",
+    "Get-PersonalDeploymentName", "Test-PersonalDeploymentFolder"))) { Invoke-Expression $t }
 foreach ($need in @("Remove-Personal", "Invoke-ExakitUninstallRun", "Invoke-CmdUninstall")) {
     if (-not (Get-Command $need -ErrorAction SilentlyContinue)) { throw "$need not found" }
 }
@@ -71,7 +73,8 @@ Set-Variable -Name HOME -Value $fakeHome -Scope Global -Force
 $script:ExakitHome = Join-Path $fakeHome ".exasol-starter-kit"
 $script:BinDir     = Join-Path $fakeHome ".local\bin"
 $script:ManifestPath = Join-Path $script:ExakitHome "manifest.json"
-$script:PersonalDeployDir = Join-Path $fakeHome ".exasol\personal\deployments\default"
+# The kit's own deployment, starter-kit-local, in the older root.
+$script:PersonalDeployDir = Join-Path $fakeHome ".exasol\personal\deployments\starter-kit-local"
 # The launcher cache lives under LOCALAPPDATA: point it into the sandbox for
 # every case (the clean uninstall runs now remove it), never at the real one.
 $env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
@@ -92,10 +95,12 @@ $env:PATH = $engineDir
 $script:out = @()
 $script:calls = @()
 $script:manifest = @{}
-function Info($m) { $script:out += "INFO $m"; Write-Host "INFO $m" }
+# STUB_QUIET=1: Info is quiet inside the run's quiet bracket, as on screen;
+# InfoStep and OkStep still print (W1-03).
+function Info($m) { if ($env:STUB_QUIET -eq "1" -and $script:ExakitQuietDetail) { return }; $script:out += "INFO $m"; Write-Host "INFO $m" }
 function Ok($m) { $script:out += "OK $m"; Write-Host "OK $m" }
 function OkStep($m) { Ok $m }
-function InfoStep($m) { Info $m }
+function InfoStep($m) { $script:out += "INFO $m"; Write-Host "INFO $m" }
 function Warn2($m) { $script:out += "WARN $m"; Write-Host "WARN $m" }
 function Fail($m) { throw $m }
 function Write-ExakitLog { param($Level, $Message) }
@@ -105,7 +110,8 @@ function Get-ExakitTilde([string]$Path) { $Path }
 function Initialize-ExakitLogging { }
 function Show-ExakitHomeNotice { }
 # runtime.engine: the engine the deployment ran on (STUB_ENGINE, Docker by default).
-function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "runtime.engine") { if ($env:STUB_ENGINE) { return $env:STUB_ENGINE } return "docker" } return "" }
+# runtime.deployment_id: the id the kit recorded at install (STUB_DEP_ID).
+function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "runtime.engine") { if ($env:STUB_ENGINE) { return $env:STUB_ENGINE } return "docker" } if ($Path -eq "runtime.deployment_id") { return ("" + $env:STUB_DEP_ID) } return "" }
 function Set-ExakitManifestValue { param($Path, $Value) $script:manifest[$Path] = $Value }
 function Remove-ExakitStepDone { param($Name) }
 function Get-RuntimeType { if ($env:STUB_NO_TYPE -eq "1") { return "" } return "personal" }
@@ -155,6 +161,7 @@ function Invoke-ExakitLogged {
 # The launcher's destroy (Invoke-PersonalDestroy runs it directly), through
 # the same stub so the calls and STUB_DESTROY_* apply.
 function Invoke-PersonalDestroy {
+    if ($env:STUB_DESTROY_THROWS -eq "1") { throw "the launcher stub threw" }
     $script:PersonalDestroyError = ""
     if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -eq 0) { return $true }
     $script:PersonalDestroyError = "stub destroy failed"
@@ -199,6 +206,8 @@ function Invoke-ExakitBounded {
         # unset stub reads as an engine that answered with no containers.
         return ("" + $env:STUB_DOCKER_PS)
     }
+    # STUB_PODMAN_PS_FAIL=1: podman refuses, as with its machine stopped.
+    if ($eng -eq "podman" -and $env:STUB_PODMAN_PS_FAIL -eq "1") { $script:ExakitBoundedOutcome = "exit 125"; return $null }
     return ""
 }
 $script:engCalls = @()
@@ -302,6 +311,85 @@ Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
 Remove-Personal
 Check "g2: an engine that answers gives no warning" "0" (@($script:PersonalTeardownWarnings).Count)
 
+# (g3) a Docker deployment, and Podman on the machine with its machine stopped
+# (W1-02): only the recorded engine is asked, so no warning names Podman. With
+# Podman recorded, or no engine recorded at all, its refusal is still said.
+Seed-Deploy; $env:STUB_PODMAN_PS_FAIL = "1"
+Remove-Personal
+Check "g3: a refusing engine the deployment never ran on gives no warning" "0" (@($script:PersonalTeardownWarnings).Count)
+Check "g3: and nothing is left" "" (Left)
+Seed-Deploy; $env:STUB_ENGINE = "podman"
+Remove-Personal
+Has   "g3: the recorded engine's refusal is still a warning" "Could not confirm the database container is gone (podman refused: exit 125). Check: podman ps -a" (@($script:PersonalTeardownWarnings) -join "; ")
+Seed-Deploy; $env:STUB_ENGINE = "none"
+Remove-Personal
+Has   "g3: no engine recorded: both are asked, as before" "podman refused: exit 125" (@($script:PersonalTeardownWarnings) -join "; ")
+$env:STUB_ENGINE = ""; $env:STUB_PODMAN_PS_FAIL = ""
+
+# (k) the folder is already gone, the container is not (scenario X, X3): the
+# id the kit recorded at install names the container, so it is checked anyway.
+if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+$script:calls = @(); $script:manifest = @{}
+$env:STUB_DEP_ID = "exa-test1"; $env:STUB_DOCKER_PS = "exa-test1-db-1`nsomebody-else"
+Remove-Personal
+Has   "k: folder gone, the container is named by the recorded id" "the docker container exa-test1-db-1" (Left)
+Has   "k: the remedy removes it" "docker rm -f exa-test1-db-1" ("" + $script:PersonalTeardownRemedy)
+Check "k: the record is not 'removed'" "" ("" + $script:manifest["runtime.status"])
+$env:STUB_DEP_ID = ""
+Remove-Personal
+Check "k: with no id recorded, as before" "" (Left)
+$env:STUB_DOCKER_PS = ""
+
+# (l) the launcher moved the deployment out of the kit's own folder
+# (launcher 2.5: %LOCALAPPDATA%\exasol\launcher\deployments\starter-kit-local). The kit
+# follows the move (Update-PersonalDeployDir), so the teardown acts on the
+# moved folder and removes it. A folder there with another name and id is the
+# user's: not named, not touched. Twin of case l in uninstall-leftovers.sh.
+$launcherRoot = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA "exasol") "launcher") "deployments"
+$moved = Join-Path $launcherRoot "starter-kit-local"
+$users = Join-Path $launcherRoot "mine"
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+New-Item -ItemType Directory -Force -Path $moved, $users | Out-Null
+Set-Content -Path (Join-Path $moved "deployment.json") -Value '{"deploymentId": "exa-test1"}'
+Set-Content -Path (Join-Path $users "deployment.json") -Value '{"deploymentId": "exa-users"}'
+$env:STUB_DEP_ID = "exa-test1"; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"; $script:calls = @()
+Remove-Personal
+Has   "l: the moved starter-kit-local folder is followed, and destroyed" "destroy" ($script:calls -join "|")
+Check "l: ...the moved folder is gone" "False" ("" + (Test-Path $moved))
+Check "l: ...nothing is left" "" (Left)
+Lacks "l: the user's own deployment is not named" $users (Left)
+Check "l: ...nor touched" "True" ("" + (Test-Path $users))
+$script:PersonalDeployDir = $dir
+Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "exasol")
+# (l2) a folder the user chose for the kit (not a launcher default, so not
+# followed) that the launcher moved: the folder whose state names the kit's
+# deployment id is named with its remedy and never removed; one with another
+# id is the user's: not named, not touched.
+$kitDir = Join-Path $fakeHome ".exasol\personal\deployments\kit"
+$moved = Join-Path $launcherRoot "kit"
+$script:PersonalDeployDir = $kitDir
+New-Item -ItemType Directory -Force -Path $moved, $users | Out-Null
+Set-Content -Path (Join-Path $moved "deployment.json") -Value '{"deploymentId": "exa-test1"}'
+Set-Content -Path (Join-Path $users "deployment.json") -Value '{"deploymentId": "exa-users"}'
+$env:STUB_DEP_ID = "exa-test1"; $env:STUB_DESTROY_RC = "1"; $env:STUB_DESTROY_REMOVES = "0"; $script:calls = @()
+Remove-Personal
+Has   "l2: the moved deployment's folder is named" "the deployment directory $moved (the database and ALL its data)" (Left)
+Has   "l2: with the command that removes it" "Remove-Item -Recurse -Force '$moved'" ("" + $script:PersonalTeardownRemedy)
+Lacks "l2: the user's own deployment is not named" $users (Left)
+Check "l2: the kit removed neither folder" "True True" ("$(Test-Path $moved) $(Test-Path $users)")
+Lacks "l2: and ran no destroy on them" "destroy" $script:calls
+$env:STUB_DEP_ID = ""
+$script:PersonalDeployDir = $dir
+Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "exasol")
+
+# (m) a Remove-Personal that throws before its own check: the uninstall
+# checks all the same, so a folder still there is no "Database removed".
+Seed-Kit; Seed-Deploy; $env:STUB_DESTROY_THROWS = "1"
+Invoke-ExakitUninstallRun
+Lacks "m: a removal that threw does not say Database removed" "Database removed" $script:out
+Check "m: the database is flagged as left" "True" ("" + $script:ExakitUninstallDbLeft)
+$env:STUB_DESTROY_THROWS = ""
+
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
 Remove-Personal
 Check "c: a clean destroy leaves nothing" "" (Left)
@@ -327,6 +415,36 @@ Seed-Kit; $script:out = @()
 Invoke-ExakitUninstallRun
 Check "no runtime recorded + nothing on disk: not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:STUB_NO_TYPE = ""
+
+Write-Host ""
+Write-Host "Invoke-ExakitUninstallRun says why an add-on's removal failed (W1-01):"
+# The hook throws what Invoke-ExakitMarketplacePythonNow throws: the module's
+# last line, "<id>: <reason>". The logs leave with the kit home, so the warning
+# is the only place the reason survives.
+function Get-ExakitMarketplaceRemovableAddons { @("semantic-views", "json-tables") }
+function Get-ExakitMarketplaceAddon {
+    param([string]$Id)
+    $fn = "Invoke-StubOkUninstall"; if ($Id -eq "semantic-views") { $fn = "Invoke-StubSvUninstall" }
+    [pscustomobject]@{ Id = $Id; UninstallFn = $fn }
+}
+function Invoke-StubOkUninstall { param([switch]$DryRun) return $true }
+function Invoke-StubSvUninstall {
+    param([switch]$DryRun)
+    if ($env:STUB_ADDON_FAIL -eq "1") { throw "semantic-views: 1 semantic model(s) are defined in the database: they are your work, so nothing was removed" }
+    return $true
+}
+Seed-Kit; Seed-Deploy; $env:STUB_DESTROY_REMOVES = "1"; $env:STUB_ADDON_FAIL = "1"
+Invoke-ExakitUninstallRun
+Has   "the warning carries the add-on's own reason" "WARN Removing the semantic-views add-on reported issues (continuing uninstall): 1 semantic model(s) are defined in the database" $script:out
+Lacks "...without the id said twice" "(continuing uninstall): semantic-views:" $script:out
+Has   "...and the run goes on" "Database removed" $script:out
+Has   "...past the add-on that failed" "Add-ons removed: json-tables" $script:out
+Seed-Kit; Seed-Deploy; $env:STUB_ADDON_FAIL = ""
+Invoke-ExakitUninstallRun
+Lacks "an add-on that is removed gives no warning" "reported issues" $script:out
+Has   "...and is named as removed" "Add-ons removed: semantic-views, json-tables" $script:out
+function Get-ExakitMarketplaceRemovableAddons { @() }
+function Get-ExakitMarketplaceAddon { param([string]$Id) $null }
 
 Write-Host ""
 Write-Host "Invoke-ExakitUninstallRun removes the launcher cache and the empty state folders:"
@@ -380,6 +498,28 @@ Invoke-ExakitUninstallRun
 Check "h3c: no other deployment anywhere: the cache goes" "False" (Test-Path $cache)
 $script:PersonalDeployDir = $savedDeploy
 Remove-Item -Recurse -Force (Join-Path $fakeHome "custom") -ErrorAction SilentlyContinue
+# (h3e) 2.5.0's cache, <LOCALAPPDATA>\exasol\launcher\resources: its two
+# parents are left empty by the cache's removal and go too, LOCALAPPDATA
+# stays, and a parent with something else in it stays (U-01).
+$cache25 = Join-Path $env:LOCALAPPDATA "exasol\launcher\resources"
+$cache25Launcher = Split-Path -Parent $cache25
+$cache25Root = Split-Path -Parent $cache25Launcher
+function Seed-Cache25 {
+    if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
+    if (Test-Path $cache25Root) { Remove-Item -Recurse -Force $cache25Root }
+    New-Item -ItemType Directory -Force -Path (Join-Path $cache25 "personal") | Out-Null
+    [System.IO.File]::WriteAllBytes((Join-Path $cache25 "personal\img"), (New-Object byte[] 1024))
+}
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache25; $script:out = @()
+Invoke-ExakitUninstallRun
+Check "h3e: the 2.5.0 cache, exasol\launcher and exasol are gone, LOCALAPPDATA stays" "False|False|False|True" `
+    "$(Test-Path $cache25)|$(Test-Path $cache25Launcher)|$(Test-Path $cache25Root)|$(Test-Path $env:LOCALAPPDATA)"
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache25; $script:out = @()
+New-Item -ItemType File -Force -Path (Join-Path $cache25Root "someone-elses") | Out-Null
+Invoke-ExakitUninstallRun
+Check "h3e: a parent with something else in it stays" "False|False|True" `
+    "$(Test-Path $cache25)|$(Test-Path $cache25Launcher)|$(Test-Path $cache25Root)"
+if (Test-Path $cache25Root) { Remove-Item -Recurse -Force $cache25Root }
 # (h3d) the launcher cache is a symlink (a reparse point): kept, never followed.
 # Creating one needs Developer Mode or admin on Windows; without it the case is
 # a counted skip.
@@ -638,6 +778,24 @@ Invoke-ExakitUninstallRun
 Has   "i3b: an in-use language container is kept with its remedy" "Kept image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc: docker did not remove it" $script:out
 Has   "i3b: the others still go" "Container images removed (docker): exasol/nano, exasol/mcp-server" $script:out
 Lacks "i3b: the kept one is not called removed" "mcp-server, script-language-container" $script:out
+$env:STUB_RMI_FAIL = ""
+# (i3q) W1-03: the dry run listed them as "will remove", and the real run's
+# per-image "Kept image" lines are quiet (the log leaves with the kit home).
+# The images it kept are named on one line that outlives the quiet run.
+Seed-Kit; Seed-ImgDeploy; $script:engCalls = @(); $env:STUB_QUIET = "1"; $env:STUB_PODMAN_IMAGES = ""
+$env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc"
+Invoke-ExakitUninstallRun
+Has   "i3q: a quiet real run says which images it kept, and why" "INFO Container images kept (docker): exasol/nano, script-language-container. docker did not remove them (a container may still use them, or docker did not answer). Remove them later with: docker rmi exasol/nano:2026.2.0-nano.8 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" $script:out
+Has   "i3q: the one removed is still said" "Container images removed (docker): exasol/mcp-server" $script:out
+Check "i3q: one line, not one per image" "1" @($script:out | Where-Object { $_ -like "*Container images kept*" }).Count
+$env:STUB_RMI_FAIL = ""
+Seed-Kit; Seed-ImgDeploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Lacks "i3q: nothing kept: no such line" "Container images kept" $script:out
+$env:STUB_QUIET = ""
+Seed-Kit; Seed-ImgDeploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"
+Invoke-ExakitUninstallRun -DryRun
+Lacks "i3q: a dry run removes nothing, so keeps nothing either" "Container images kept" $script:out
 $env:STUB_RMI_FAIL = ""
 # (i4) the engine does not answer: one hint.
 Seed-Kit; Seed-ImgDeploy; $env:STUB_DOCKER_RC = "1"

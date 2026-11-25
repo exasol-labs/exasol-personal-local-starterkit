@@ -125,7 +125,11 @@ Write-Output "registry_fns_checked=$registryChecked"
 Write-Output "summary files=$($files.Count) defined=$($defined.Count) parse_failures=$parseFailures undefined=$undefined"
 PSEOF
 
-OUT="$("$EXAKIT_PS_BIN" -NoProfile -File "$SWEEP" -Root "$ROOT")"
+# -ExecutionPolicy Bypass: a default Windows box has the Restricted policy,
+# under which `powershell -File` refuses the sweep ("running scripts is
+# disabled on this system") before it reads a file (W4-03). pwsh off Windows
+# accepts the switch and ignores it.
+OUT="$("$EXAKIT_PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$SWEEP" -Root "$ROOT")"
 printf '%s\n' "$OUT" | grep -v '^summary ' || true
 SUMMARY="$(printf '%s\n' "$OUT" | grep '^summary ' || true)"
 [ -n "$SUMMARY" ] && echo "$SUMMARY"

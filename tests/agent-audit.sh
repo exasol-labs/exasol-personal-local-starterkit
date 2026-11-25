@@ -96,6 +96,7 @@ _conf="$( (
     personal_deployment_exists() { return 0; }
     port_in_use() { return 0; }
     personal_db_answers() { return 1; }
+    personal_starting() { return 1; }
     personal_status
     personal_deployment_running && echo running || echo not-running ) 2>&1 | tr '\n' ' ')"
 check "status is conflict, and the start probe says not running" "conflict not-running " "$_conf"
@@ -234,6 +235,24 @@ check "a non-syntax error with TOP in the text stays quiet" "" "$(exakit_db_erro
 has "tls handshake eof points at exakit status" "exakit status" "$(exakit_db_error_remedy 'Error: Failed to connect to 127.0.0.1:8563: TLS error: tls handshake eof')"
 lacks "...and is not mistaken for a stopped database" "stopped or unreachable" "$(exakit_db_error_remedy 'TLS error: tls handshake eof')"
 has "cmd_sql hands the statement to the matcher" 'exakit_db_error_remedy "$_sql_out" "$_sql_text"' "$(sed -n '/^cmd_sql()/,/^}/p' "$CLI")"
+
+echo "M-03. SQL state 42500 names a refused write only for a write; a disconnected source names its reconnect:"
+_m03_dbx="Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1127: F-UDF-CL-SL-LUA-1003: connection EXAKIT_SRC_DBXM does not exist (Session: 1882294472) (SQL state: 42500)"
+lacks "a SELECT answered with 42500 is not called a refused write" "That write was refused" "$(exakit_db_error_remedy "$_m03_dbx" 'SELECT COUNT(*) FROM VS_DBXM.FINANCIAL_TRANSACTIONS')"
+lacks "...nor sent to --write" "exakit sql --write" "$(exakit_db_error_remedy "$_m03_dbx" 'SELECT COUNT(*) FROM VS_DBXM.FINANCIAL_TRANSACTIONS')"
+has "an INSERT refused with 42500 is still the read-only guardrail" "That write was refused" "$(exakit_db_error_remedy 'insert failed (SQL state: 42500)' 'INSERT INTO T VALUES (1)')"
+has "...and so is any insufficient-privileges text" "That write was refused" "$(exakit_db_error_remedy 'insufficient privileges for creating table' 'SELECT 1')"
+has "...and 42500 with no statement known (a load path)" "That write was refused" "$(exakit_db_error_remedy 'refused (SQL state: 42500)')"
+mkdir -p "$EXAKIT_HOME/sources/dbxm" "$EXAKIT_HOME/sources/pgm"
+printf '{\n  "connector": "databricks",\n  "inputs": {}\n}\n' > "$EXAKIT_HOME/sources/dbxm/config.json"
+printf '{\n  "connector": "postgresql",\n  "inputs": {}\n}\n' > "$EXAKIT_HOME/sources/pgm/config.json"
+check "M-06: a disconnected Databricks source (42500): one hint, the reconnect from its record" \
+    "VS_DBXM is disconnected, so its tables cannot be read. Reconnect it with its credential: exakit connect databricks --name dbxm --password-file <file>" \
+    "$(exakit_db_error_remedy "$_m03_dbx" 'SELECT COUNT(*) FROM VS_DBXM.FINANCIAL_TRANSACTIONS')"
+_m06_jdbc="$(printf 'Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1126: F-UDF-CL-SL-JAVA-1006: F-UDF-CL-SL-JAVA-1026:\ncom.exasol.adapter.jdbc.RemoteConnectionException: E-VSCJDBC-29: Could not access the connection information of connection %s.\nCaused by: com.exasol.ExaConnectionAccessException: E-UDF-CL-SL-JAVA-1099: connection EXAKIT_SRC_PGM does not exist\n (Session: 1) (SQL state: 22002)' "'EXAKIT_SRC_PGM'")"
+has "...a JDBC source's raw F-UDF-CL error gets the same hint" "exakit connect postgresql --name pgm --password-file <file>" "$(exakit_db_error_remedy "$_m06_jdbc" 'SELECT COUNT(*) FROM VS_PGM.ACTOR')"
+has "...the lakehouse engine's words" "VS_LHS3M is disconnected" "$(exakit_db_error_remedy "VM error: F-UDF-CL-RUST-9001: UDF error: CONNECTION 'EXAKIT_SRC_LHS3M' could not be resolved: connection EXAKIT_SRC_LHS3M does not exist (Session: 1)" 'SELECT 1')"
+has "...MongoDB's words, a source with no record: the connector left to fill in" "exakit connect <connector> --name mongom" "$(exakit_db_error_remedy "VM error: F-UDF-CL-RUST-9001: UDF error: could not resolve Exasol CONNECTION 'EXAKIT_SRC_MONGOM'; verify that it exists and is accessible" 'SELECT 1')"
 
 echo "R2-4. a successful start retires only a runtime failure note:"
 exakit_note_failure "Port 8563 is held by another process (pid 1, Python), not by Exasol, so the database cannot start. Stop that process, then: exakit start"

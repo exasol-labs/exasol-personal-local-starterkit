@@ -30,7 +30,9 @@ database and inspect it afterwards:
     list; default all) and "key_id" (the access key it accepts)
     A lakehouse folder with no catalog (CATALOG_KIND DIRECT_STORAGE) is keyed
     by the host part of its s3:// or abfss:// URL and takes "tables" and the
-    keys it accepts ("key_id"/"secret_key", or "account_key"/"sas_token").
+    keys it accepts ("key_id"/"secret_key", or "account_key"/"sas_token");
+    "fail": "denied" -> S3 refuses the key the listing of the folder (403
+    AccessDenied, in object_store's words).
     A catalog source with its own storage keys takes "key_id"/"secret_key" or
     "account_name" with "account_key"/"sas_token" too, checked at the read;
     an OAuth client is "client_id"/"client_secret".
@@ -99,6 +101,9 @@ database and inspect it afterwards:
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
                 its query => field printing the statement back, secret and
                 all, across as many lines as the statement has
+
+FAKE_VS_PAUSE / FAKE_VS_PAUSE_DIR hold the first run whose statement matches
+at a barrier until the test lets it go (_barrier): two engine processes at once.
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -238,6 +243,26 @@ def _inferred(error, source):
                      "* Fix the root cause or specify the 'mapping' element in the JSON EDML definition to skip auto "
                      "inference.\ncom.exasol.ExaWrapper.runSingleCall(ExaWrapper.java:101)\nCaused by: %s"
                      % (source, source, cause))
+
+
+def _loader_driver(doc, connection):
+    # Seen live (L-01, Snowflake on Exasol Personal 2.4.0): a loader whose
+    # settings.cfg names a jar that is not in its folder has no driver, and
+    # every IMPORT FROM JDBC through it fails.
+    con = doc["connections"].get(connection)
+    if not con or not os.environ.get("FAKE_VS_EXA"):
+        return      # a suite that gives no runtime folder checks no loader
+    folder = os.path.join(os.environ["FAKE_VS_EXA"], "jdbc")
+    for name in (os.listdir(folder) if os.path.isdir(folder) else []):
+        cfg = os.path.join(folder, name, "settings.cfg")
+        lines = open(cfg).read().splitlines() if os.path.isfile(cfg) else []
+        prefix = next((line[len("PREFIX="):] for line in lines if line.startswith("PREFIX=")), None)
+        if not prefix or not con["url"].startswith(prefix):
+            continue
+        if any(not os.path.isfile(os.path.join(folder, name, line[len("JAR="):]))
+               for line in lines if line.startswith("JAR=")):
+            raise Exception("ETL-5402: JDBC-Client-Error: Connecting to '%s' as user='%s' failed: No suitable driver "
+                            "found for %s" % (con["url"], con["user"], con["url"]))
 
 
 def _loader_trust(doc, connection):
@@ -478,6 +503,16 @@ def _direct_source(src, con, cred, at_read):
     elif cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing LIST: "
                         "InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our records.")
+    elif src.get("fail") == "denied":
+        # Measured (0.3.0, a prefix the key may not list): object_store's line ends at S3's XML declaration,
+        # and the body with S3's code is on the next line.
+        folder = con["url"].split("/", 3)[3].rstrip("/") if con["url"].count("/") >= 3 else ""
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to list '%s': Generic S3 error: Error "
+                        "performing list request: Error performing GET https://s3.ap-south-1.amazonaws.com/%s?"
+                        "delimiter=%%2F&list-type=2&prefix=%s%%2F in 89.889958ms - Server returned non-2xx status "
+                        "code: 403 Forbidden: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied"
+                        "</Code><Message>Access Denied</Message><RequestId>R1</RequestId></Error>"
+                        % (folder, _host(con["url"]), folder))
     return {"tables": [t.upper() for t in src.get("tables", [])]}
 
 
@@ -536,8 +571,28 @@ def _adapter_users(doc, script):
                                                 (script.endswith(".") and _adapter_of(name, vs).startswith(script))))
 
 
+def _barrier(sql):
+    """FAKE_VS_PAUSE (a regex) and FAKE_VS_PAUSE_DIR: the first process whose
+    statement matches creates <dir>/paused and waits (at most 60 s) for
+    <dir>/go before the statement runs - a barrier a test holds a run at,
+    in the middle of its connect, while it starts another. Every later
+    match runs at once."""
+    pattern, folder = os.environ.get("FAKE_VS_PAUSE"), os.environ.get("FAKE_VS_PAUSE_DIR")
+    if not pattern or not folder or not re.search(pattern, sql):
+        return
+    try:
+        os.close(os.open(os.path.join(folder, "paused"), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        return
+    import time
+    deadline = time.time() + 60
+    while not os.path.exists(os.path.join(folder, "go")) and time.time() < deadline:
+        time.sleep(0.05)
+
+
 class Fake(object):
     def query(self, sql):
+        _barrier(sql)
         doc = _load()
         doc["statements"].append(sql)
         try:
@@ -546,6 +601,7 @@ class Fake(object):
             _save(doc)
 
     def execute(self, sql):
+        _barrier(sql)
         doc = _load()
         doc["statements"].append(sql)
         try:
@@ -670,6 +726,7 @@ class Fake(object):
             return [{"TABLE_NAME": t} for t in (vs["tables"] if vs else [])]
         m = re.match(r"SELECT \* FROM \(IMPORT FROM JDBC AT \"([^\"]+)\" STATEMENT '", sql)
         if m:
+            _loader_driver(doc, m.group(1))
             _loader_trust(doc, m.group(1))
             src = _source_for(doc, m.group(1), "loader")
             if "''missing''" in sql:
@@ -687,6 +744,7 @@ class Fake(object):
             if vs is None:
                 raise Exception("schema %s not found" % m.group(1))
             # A JDBC adapter pushes the read down as IMPORT FROM JDBC: the loader runs it.
+            _loader_driver(doc, vs["connection"])
             _loader_trust(doc, vs["connection"])
             src = _source_for(doc, vs["connection"], "loader")
             if src.get("read_error"):

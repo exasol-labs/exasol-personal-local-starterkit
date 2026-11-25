@@ -666,7 +666,9 @@ def command_rows(name):
         return []
     rows = catalog_rows(include_hidden=True)
     first = needle.split()[0]
-    if first not in {r["tool"] for r in rows}:
+    # A command of exakit's own wins over a tool of the same name (exasol).
+    if first not in {r["tool"] for r in rows} or \
+            any(r["invocation"].lower() == "exakit " + needle for r in rows):
         needle = "exakit " + needle
     return [r for r in rows
             if r["invocation"].lower() == needle or

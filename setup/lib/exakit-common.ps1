@@ -181,6 +181,288 @@ function Get-ExakitProfileHome {
     return $HOME
 }
 
+# THE KIT'S DATABASE IS THE LAUNCHER DEPLOYMENT NAMED starter-kit-local
+# (with hyphens; the scheme is starter-kit-<target>). The name is only the
+# folder's basename to the launcher, so the kit keeps addressing it by folder
+# (--deployment-dir <root>\starter-kit-local), and `exasol deployments list`
+# lists it by that name. A deployment of the user's, `default` among them,
+# becomes the kit's only when they pick it in the installer's one question,
+# which renames it to this name. Twin of EXAKIT_PERSONAL_DEPLOYMENT in
+# runtime-personal.sh and KIT_DEPLOYMENT in marketplace/runtime.py.
+$script:PersonalDeploymentName = "starter-kit-local"
+
+# Get-PersonalDeploymentName - the name above. A function as well, because
+# the suites load this file's function definitions only, and a definition
+# must not depend on a variable they never set.
+function Get-PersonalDeploymentName {
+    $name = "" + (Get-Variable -Name PersonalDeploymentName -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if ($name) { return $name }
+    return "starter-kit-local"
+}
+
+# Resolve-PersonalDeployDir [-Path <dir>] [-Recorded] - where the Exasol
+# Personal deployment folder is NOW, found the way the launcher finds it. THE
+# ONE PLACE the PowerShell side decides which folder holds a deployment; every
+# reader goes through it (Update-PersonalDeployDir in runtime-personal.ps1,
+# the ownership compare, the TLS disk check, the virtual-schema engine's
+# --deployment-dir). Twin of detect_personal_deploy_resolve in detect.sh,
+# which says why.
+# THE LAUNCHER'S ROOTS: %LOCALAPPDATA%\exasol\launcher\deployments (2.5.0+,
+# which moves the folders earlier launchers left under
+# %USERPROFILE%\.exasol\personal\deployments there by itself) and that older
+# one, plus wherever the launcher listed a deployment when it was asked
+# (Get-PersonalLauncherDeployments: $script:PersonalLauncherListed and
+# $script:PersonalLauncherDeployments).
+# Returns New and Legacy (the kit's starter-kit-local in each root; New is ""
+# without LOCALAPPDATA, where the launcher cannot run either), NewRoot and
+# LegacyRoot (the roots themselves), Name (starter-kit-local), Status (the
+# launcher's word for the answer, "" when it did not list it) and Dir, the
+# answer:
+#   - <dir> itself when it is none of the launcher's folders (a folder the
+#     user chose);
+#   - with -Recorded, <dir> itself while it is still on disk (a recorded path
+#     follows only a folder that moved away from it);
+#   - with -Recorded, a recorded launcher folder that is gone, WHATEVER ITS
+#     NAME (`default` from kit 0.3.0, or starter-kit-local), follows another
+#     of the launcher's folders ONLY when the deployment there carries the
+#     kit's id (-DeploymentId, or runtime.deployment_id from the manifest):
+#     a listed one, or any folder in either root. No id recorded, or another
+#     id there: <dir> itself, gone. That deployment is the user's own, and a
+#     kit claim on it would let uninstall destroy it;
+#   - <dir> itself when it is a launcher folder of another name (the one the
+#     kit is acting on: a recorded 0.3.0 `default`, or the user's database a
+#     status names);
+#   - else the kit's own by its name: New when it is there, else Legacy when
+#     it is there (a renamed folder the launcher could not move), else the one
+#     the launcher listed under that name, else <dir> as given (a deployment
+#     just removed keeps naming its folder), or New when none is given (where
+#     a fresh install deploys).
+# NEVER THE FIRST DEPLOYMENT LISTED: a deployment of the user's is never the
+# kit's because it is there. That fallback (and the launcher's `default`
+# sorted first) made the user's own database the kit's on any machine with
+# Exasol Personal 2.5.
+function Resolve-PersonalDeployDir {
+    param([AllowEmptyString()][AllowNull()][string]$Path = "", [switch]$Recorded,
+          [AllowEmptyString()][AllowNull()][string]$DeploymentId = "")
+    $name = Get-PersonalDeploymentName
+    $newRoot = ""
+    if ($env:LOCALAPPDATA) { $newRoot = Join-Path $env:LOCALAPPDATA "exasol\launcher\deployments" }
+    $legacyRoot = Join-Path (Get-ExakitProfileHome) ".exasol\personal\deployments"
+    $new = ""
+    if ($newRoot) { $new = Join-Path $newRoot $name }
+    $legacy = Join-Path $legacyRoot $name
+    $answer = [pscustomobject]@{ Dir = ""; New = $new; Legacy = $legacy; Status = ""; NewRoot = $newRoot; LegacyRoot = $legacyRoot; Name = $name }
+    # A recorded folder that is gone: the launcher is asked where its
+    # deployments are (once per process, Get-PersonalLauncherDeployments).
+    if ($Recorded -and $Path -and -not (Test-Path -LiteralPath $Path) -and
+        (Get-Command Get-PersonalLauncherDeployments -ErrorAction SilentlyContinue)) {
+        $null = Get-PersonalLauncherDeployments
+    }
+    $rows = @()
+    $listed = Get-Variable -Name PersonalLauncherListed -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($listed) {
+        # Not @( ): -ValueOnly hands the array over as ONE object.
+        $listedRows = Get-Variable -Name PersonalLauncherDeployments -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        foreach ($d in $listedRows) {
+            if ($d -and $d.Path) { $rows += [pscustomobject]@{ Path = "$($d.Path)"; Status = "$($d.Status)"; Name = "$($d.Name)" } }
+        }
+    }
+    $roots = @()
+    foreach ($root in @($newRoot, $legacyRoot)) { if ($root -and $roots -notcontains $root) { $roots += $root } }
+    foreach ($row in $rows) {
+        $parent = Split-Path -Parent $row.Path
+        if ($parent -and $roots -notcontains $parent) { $roots += $parent }
+    }
+    $statusOf = {
+        param([string]$Dir)
+        foreach ($row in $rows) { if ($row.Path -eq $Dir) { return $row.Status } }
+        return ""
+    }
+    $isLauncher = (-not $Path) -or ($new -and $Path -eq $new) -or ($Path -eq $legacy) -or
+        (@($rows | Where-Object { $_.Path -eq $Path }).Count -gt 0) -or
+        ($roots -contains (Split-Path -Parent $Path))
+    if (-not $isLauncher) { $answer.Dir = $Path; return $answer }
+    if ($Recorded -and $Path) {
+        $answer.Dir = $Path
+        if (Test-Path -LiteralPath $Path) { $answer.Status = & $statusOf $Path; return $answer }
+        # Gone: followed only to another of the launcher's folders, and only
+        # when the deployment there carries the kit's id.
+        $want = "" + $DeploymentId
+        if (-not $PSBoundParameters.ContainsKey('DeploymentId') -and
+            (Get-Command Get-ExakitManifestValue -ErrorAction SilentlyContinue)) {
+            try { $want = "" + (Get-ExakitManifestValue "runtime.deployment_id") } catch { $want = "" }
+        }
+        if (-not $want) { return $answer }
+        $candidates = @()
+        foreach ($row in $rows) { $candidates += $row.Path }
+        foreach ($root in $roots) {
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+            foreach ($e in @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue)) { $candidates += $e.FullName }
+        }
+        foreach ($to in $candidates) {
+            if (-not $to -or $to -eq $Path -or -not (Test-Path -LiteralPath $to -PathType Container)) { continue }
+            if ((Read-PersonalDeploymentId -Dir $to) -ceq $want) { $answer.Dir = $to; $answer.Status = & $statusOf $to; return $answer }
+        }
+        return $answer
+    }
+    if ($Path -and $Path -ne $new -and $Path -ne $legacy) {
+        $answer.Dir = $Path
+        $answer.Status = & $statusOf $Path
+        return $answer
+    }
+    if ($new -and (Test-Path -LiteralPath $new -PathType Container)) { $answer.Dir = $new }
+    elseif (Test-Path -LiteralPath $legacy -PathType Container) { $answer.Dir = $legacy }
+    else {
+        foreach ($row in $rows) {
+            if ((Split-Path -Leaf $row.Path) -ceq $name -and (Test-Path -LiteralPath $row.Path -PathType Container)) { $answer.Dir = $row.Path; break }
+        }
+    }
+    if (-not $answer.Dir) {
+        if ($Path) { $answer.Dir = $Path }
+        elseif ($new) { $answer.Dir = $new }
+        else { $answer.Dir = $legacy }
+    }
+    $answer.Status = & $statusOf $answer.Dir
+    return $answer
+}
+
+# Test-PersonalDeploymentFolder <dir> - does <dir> hold an Exasol Personal
+# deployment, by its own files (.exasolLauncherState.json, deployment.json)?
+# No launcher is asked: the scan of the older root, the leftover
+# starter-kit-local and the rename's checks read files only.
+function Test-PersonalDeploymentFolder {
+    param([AllowEmptyString()][AllowNull()][string]$Dir = "")
+    if (-not $Dir -or -not (Test-Path -LiteralPath $Dir -PathType Container)) { return $false }
+    foreach ($file in @(".exasolLauncherState.json", "deployment.json")) {
+        if (Test-Path -LiteralPath (Join-Path $Dir $file) -PathType Leaf) { return $true }
+    }
+    return $false
+}
+
+# Read-PersonalDeploymentId -Dir <dir> - the launcher's id for the deployment
+# in <dir>, or "". THE ONE PLACE the PowerShell side reads it (the follow of a
+# moved folder, the id the kit records, the leftover scan, the language
+# container lookup). The launcher's own state first: it names its containers
+# from .exasolLauncherState.json, and deployment.json can be older than it, or
+# say "local" (what the launcher writes there when it cannot read its state).
+# Read as JSON, the top-level key only; empty, blank and "local" are no id.
+# Twin of detect_personal_deployment_id (detect.sh).
+function Read-PersonalDeploymentId {
+    param([AllowEmptyString()][AllowNull()][string]$Dir = "")
+    if (-not $Dir -or -not (Test-Path -LiteralPath $Dir -PathType Container)) { return "" }
+    foreach ($name in @(".exasolLauncherState.json", "deployment.json")) {
+        $file = Join-Path $Dir $name
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+        try { $doc = [System.IO.File]::ReadAllText($file) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        if ($null -eq $doc -or $doc -is [array]) { continue }
+        $property = $doc.PSObject.Properties["deploymentId"]
+        if ($property -and ($property.Value -is [string]) -and $property.Value.Trim() -and $property.Value.Trim() -ne "local") {
+            return $property.Value.Trim()
+        }
+    }
+    return ""
+}
+
+# Get-ExakitPersonalKitDir - the folder the kit's own Exasol Personal database
+# was recorded in: its ownership receipt when the kit owns it, the recorded
+# deployment folder when no receipt was ever written (kits up to 0.2.4).
+# "" for a database recorded as the user's. Twin of exakit_personal_kit_dir.
+function Get-ExakitPersonalKitDir {
+    $owner = "" + (Get-ExakitManifestValue "runtime.ownership")
+    if ($owner -eq "kit") { return ("" + (Get-ExakitManifestValue "runtime.ownership_path")) }
+    if (-not $owner) { return ("" + (Get-ExakitManifestValue "runtime.deployment_dir")) }
+    return ""
+}
+
+# Get-ExakitPersonalKitMissing - "<kit folder>|<folder found>" when the kit's
+# own deployment is gone from the folder it recorded, and the launcher's
+# folder holds a deployment that is not provably the kit's (another id, or no
+# id recorded). "" otherwise. That deployment is the user's: the record is
+# left as it is, the kit never manages it as its own, and status and
+# uninstall say that the kit's own was not found. Twin of
+# exakit_personal_kit_missing.
+function Get-ExakitPersonalKitMissing {
+    if (("" + (Get-ExakitManifestValue "runtime.type")) -ne "personal") { return "" }
+    $kit = Get-ExakitPersonalKitDir
+    if (-not $kit -or (Test-Path -LiteralPath $kit)) { return "" }
+    if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
+    if ((Resolve-PersonalDeployDir -Path $kit -Recorded).Dir -ne $kit) { return "" }
+    $found = "" + (Get-Variable -Name PersonalDeployDir -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if (-not $found -or $found -eq $kit -or -not (Test-Path -LiteralPath $found -PathType Container)) { return "" }
+    return "$kit|$found"
+}
+
+# Get-ExakitPersonalDbState - "kit_database_missing|<kit folder>|<folder
+# found>" when the deployment folder in use is not one the kit may act on, ""
+# otherwise. THE ONE RULE for every lifecycle or write action on the database:
+# the folder is used only when it is the kit's own (the deployment id the kit
+# recorded) or one the user adopted on purpose (runtime.ownership "user",
+# written by the installer's adoption answer, for that folder). Else: the
+# kit's own folder is gone and another deployment was found
+# (Get-ExakitPersonalKitMissing); the kit's own folder holds a deployment with
+# another id (MCU-02, found = kit); an adopted folder is gone and another was
+# found. The remedy is the installer, which asks which database to use.
+# Twin of exakit_personal_db_state, which says more.
+function Get-ExakitPersonalDbState {
+    if (("" + (Get-ExakitManifestValue "runtime.type")) -ne "personal") { return "" }
+    $missing = "" + (Get-ExakitPersonalKitMissing)
+    if ($missing) { return "kit_database_missing|$missing" }
+    if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
+    $dir = "" + (Get-Variable -Name PersonalDeployDir -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if (-not $dir) { return "" }
+    if (("" + (Get-ExakitManifestValue "runtime.ownership")) -eq "user") {
+        $rec = "" + (Get-ExakitManifestValue "runtime.ownership_path")
+        if (-not $rec) { $rec = "" + (Get-ExakitManifestValue "runtime.deployment_dir") }
+        if (-not $rec -or (Test-Path -LiteralPath $rec)) { return "" }
+        if ((Resolve-PersonalDeployDir -Path $rec -Recorded).Dir -ne $rec) { return "" }
+        if ($dir -eq $rec -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return "" }
+        return "kit_database_missing|$rec|$dir"
+    }
+    $kit = "" + (Get-ExakitPersonalKitDir)
+    if (-not $kit -or $kit -ne $dir -or -not (Test-Path -LiteralPath $kit -PathType Container)) { return "" }
+    $want = "" + (Get-ExakitManifestValue "runtime.deployment_id")
+    if (-not $want) { return "" }
+    $has = "" + (Read-PersonalDeploymentId -Dir $kit)
+    if (-not $has -or $has -ceq $want) { return "" }
+    return "kit_database_missing|$kit|$kit"
+}
+
+# Test-ExakitKitDatabaseGuard [-Json] - $true when the kit may act on the
+# database folder in use (Get-ExakitPersonalDbState is ""). Otherwise it says
+# so, with no launcher call, and answers $false: on the screen (once per
+# process), or with -Json as one JSON object on stdout in the shape `status
+# --json` gives this state. Every lifecycle command asks it before it touches
+# the launcher, and the functions they reach ask it again. Twin of
+# exakit_kit_database_guard.
+$script:ExakitKitDbGuardSaid = $false
+function Test-ExakitKitDatabaseGuard {
+    param([switch]$Json)
+    $state = ""
+    try { $state = "" + (Get-ExakitPersonalDbState) } catch { $state = "" }
+    if (-not $state) { return $true }
+    $parts = @($state.Split("|"))
+    $kit = "" + $parts[1]
+    $found = "" + $parts[2]
+    if ($Json) {
+        $answer = [pscustomobject]@{
+            ok = $false; installed = $true; status = "no database"
+            error = "the kit's own database was not found at $kit, and the deployment at $found is not the kit's"
+            remedy = (Get-ExakitInstallCommand)
+            remedy_hint = "the installer asks which database to use"
+            runtime = [pscustomobject]@{ state = "kit_database_missing"; deployment_dir = $kit; found = $found }
+        }
+        [Console]::Out.WriteLine(($answer | ConvertTo-Json -Depth 4 -Compress))
+        return $false
+    }
+    if (-not $script:ExakitKitDbGuardSaid) {
+        $script:ExakitKitDbGuardSaid = $true
+        Write-ExakitError "The kit's own database was not found at $kit."
+        Info "The deployment at $found is not the kit's, so the kit does not act on it."
+        Info "To use it with the kit, re-run the installer: $(Get-ExakitInstallCommand)"
+    }
+    return $false
+}
+
 # Get-ExakitHomeBase - the directory the kit's own state hangs off.
 #
 # PowerShell's $HOME comes from the account's home-directory attribute, which on
@@ -254,6 +536,9 @@ function Test-ExakitLegacyKitOwned {
             if (-not (Test-ExakitLegacyKitOwned 'personal')) { return $false }
             $dir = "" + (Get-ExakitManifestValue "runtime.deployment_dir")
             if (-not $dir) { return $false }
+            # Followed to where launcher 2.5.0 moved it, as the live folder is.
+            $dir = (Resolve-PersonalDeployDir -Path $dir -Recorded).Dir
+            if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
             $deployDir = Get-Variable -Name PersonalDeployDir -Scope Script -ValueOnly -ErrorAction SilentlyContinue
             return [bool](-not $deployDir -or (& $same $dir $deployDir))
         }
@@ -280,18 +565,55 @@ function Get-ExakitComponentOwnership {
     if ($Id -in @('exakit','kit2','skills')) { return 'kit' }
     $key = Get-ExakitOwnershipKey $Id
     $owner = Get-ExakitManifestValue "$key.ownership"
+    $changed = $false
     if ($owner -eq 'kit') {
         $file = Get-ExakitManifestValue "$key.ownership_path"
         $digest = Get-ExakitManifestValue "$key.ownership_sha256"
         $live = ""
         if ($Id -in @('personal','launcher','exasol') -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { $live = Get-PersonalCli }
         elseif ($Id -eq 'exapump' -and (Get-Command Get-ExapumpCli -ErrorAction SilentlyContinue)) { $live = Get-ExapumpCli }
-        elseif ($Id -in @('database','runtime')) { $live = $script:PersonalDeployDir }
+        elseif ($Id -in @('database','runtime')) {
+            # The folder as it is now, and the receipt followed to where the
+            # launcher moved it: a database launcher 2.5.0 moved is still the kit's.
+            if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
+            $live = $script:PersonalDeployDir
+            if ($file) { $file = (Resolve-PersonalDeployDir -Path ("" + $file) -Recorded).Dir }
+            # ANOTHER DEPLOYMENT IN THE KIT'S FOLDER (MCU-02): the kit's own
+            # destroyed and the user's made in the same place carries another
+            # id. It is the user's. Twin of the same check in
+            # exakit_component_ownership.
+            $want = "" + (Get-ExakitManifestValue "runtime.deployment_id")
+            if ($want -and $live -and (Get-Command Read-PersonalDeploymentId -ErrorAction SilentlyContinue)) {
+                $has = Read-PersonalDeploymentId -Dir ("" + $live)
+                if ($has -and $has -cne $want) { $owner = 'user' }
+            }
+        }
         if ($file -and $live -and $file -ne $live) { $owner = 'user' }
         if ($digest -and $file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
-            try { if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $digest) { $owner = 'user' } }
-            catch { $owner = 'unknown' }
+            try { if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $digest) { $owner = 'user'; $changed = $true } }
+            catch { $owner = 'unknown'; $changed = $true }
         }
+    }
+    # A RECEIPT OF THE KIT'S CUT SHORT WHILE IT WAS WRITTEN (Set-ExakitComponentOwnership
+    # writes `unknown` first): a launcher that still has the checksum on record
+    # is the file the kit recorded. A receipt of the user's has no checksum.
+    if ($owner -eq 'unknown' -and $Id -in @('personal','launcher','exasol')) {
+        $file = "" + (Get-ExakitManifestValue "$key.ownership_path")
+        $digest = "" + (Get-ExakitManifestValue "$key.ownership_sha256")
+        if ($file -and $digest -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            $live = $file
+            if (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue) { $live = "" + (Get-PersonalCli) }
+            try { if ($live -eq $file -and (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $digest) { return 'kit' } } catch { }
+        }
+    }
+    # THE LAUNCHER IN THE KIT'S FOLDER IS THE KIT'S BY ITS PLACE, with no
+    # receipt (an install cut short, a lost record) or with one that names
+    # another path. Only a file that changed since the kit recorded it there
+    # keeps the answer above.
+    if ($owner -ne 'kit' -and -not $changed -and $Id -in @('personal','launcher','exasol') -and
+        (Get-Command Get-PersonalSeparateBinPath -ErrorAction SilentlyContinue) -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) {
+        $kitFolder = "" + (Get-PersonalSeparateBinPath)
+        if ($kitFolder -and (Test-Path -LiteralPath $kitFolder -PathType Leaf) -and ("" + (Get-PersonalCli)) -eq $kitFolder) { return 'kit' }
     }
     if ($owner -in @('kit','user','unknown')) { return $owner }
     # NO RECEIPT AT ALL: an install made before receipts existed (every kit up
@@ -322,13 +644,32 @@ function Set-ExakitComponentOwnership {
     } else { Remove-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_sha256" }
     Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership" $Ownership
 }
+# Get-ExakitLegacyKitPath <id> - the file Test-ExakitLegacyKitOwned proves the
+# kit installed, from what the old kit recorded; empty for an id whose proof
+# names no file (the database's proof already pins the deployment folder).
+# Twin of _exakit_legacy_kit_path in common.sh.
+function Get-ExakitLegacyKitPath {
+    param([string]$Id)
+    switch ($Id) {
+        { $_ -in @('personal','launcher','exasol') } { return "" + (Get-ExakitManifestValue "runtime.launcher") }
+        'exapump' { return "" + (Get-ExakitManifestValue "components.exapump.path") }
+        'uv' { return "" + (Get-ExakitManifestValue "components.uv.path") }
+    }
+    return ""
+}
 function Set-ExakitReusedOwnership {
     param([string]$Id, [string]$OwnedPath = "")
     $receipt = Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path"
     $existing = Get-ExakitComponentOwnership $Id
-    if ($existing -eq 'kit' -and -not (Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership")) {
+    $legacyPath = Get-ExakitLegacyKitPath $Id
+    $legacyPathMatches = (-not $OwnedPath) -or (-not $legacyPath) -or [string]::Equals($legacyPath, $OwnedPath, [StringComparison]::OrdinalIgnoreCase)
+    if ($existing -eq 'kit' -and -not (Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership") -and $legacyPathMatches) {
         # The kit's own install from before receipts: write the receipt it
         # never had. Twin of the same arm in exakit_reuse_ownership.
+        # Only for the path that proof is about (#40): Get-ExapumpCli answers
+        # the copy first on PATH, which can be the user's own, and a kit
+        # receipt on it let a repair and the uninstall delete it. Any other
+        # path is the user's, as below.
         Set-ExakitComponentOwnership $Id 'kit' $OwnedPath
     } elseif ($existing -ne 'kit' -or ($OwnedPath -and $receipt -ne $OwnedPath)) { Set-ExakitComponentOwnership $Id 'user' $OwnedPath }
 }
@@ -623,7 +964,7 @@ $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT
 #                      (GitHub releases, PyPI).
 # anything else      - install the *Fallback versions below, no network at all.
 $script:VersionPolicy = if ($env:EXAKIT_VERSION_POLICY) { $env:EXAKIT_VERSION_POLICY } else { "manifest" }
-$script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.14.0" }
+$script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.14.1" }
 $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT_MCP_VERSION_FALLBACK } else { "2.4.0" }
 # uv is the Python tool runner: uvx runs the bridge Claude Desktop reaches the
 # MCP server through (`uvx mcp-proxy`), and uv runs the kit's managed Python
@@ -632,7 +973,7 @@ $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT
 # The MIN version is the oldest uv the kit will RUN at all: below it uv's
 # bundled CA store trusts an emSign root whose intermediate CA keys are
 # compromised (GHSA-hq85-5cpj-mr62). Twins of EXAKIT_UV_*_FALLBACK in common.sh.
-$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.8" }
+$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.9" }
 $script:UvMinVersionFallback = if ($env:EXAKIT_UV_MIN_VERSION_FALLBACK) { $env:EXAKIT_UV_MIN_VERSION_FALLBACK } else { "0.13.4" }
 $script:UvRepo = "astral-sh/uv"
 $script:UvVetted = $null
@@ -1139,11 +1480,37 @@ function Get-ExakitDbErrorRemedy {
             $lines += 'If the table was loaded from a file, its columns keep the file''s exact spelling and case and must be quoted: SELECT "visits" ..., not VISITS. DESCRIBE the table to see them.'
         }
     }
+    # A virtual schema whose source is disconnected: its CONNECTION is gone,
+    # and each adapter says so in its own words. The fix is the reconnect the
+    # source's record names, never a write path: Databricks answers it with
+    # SQL state 42500. Twin of the same case in common.sh.
+    $src = ""
+    if ($Text -cmatch 'connection EXAKIT_SRC_[A-Z0-9_]+ does not exist' -or $Text -cmatch "resolve Exasol CONNECTION 'EXAKIT_SRC_") {
+        $found = [regex]::Match($Text, "(?i)connection '?EXAKIT_SRC_([A-Z0-9_]+)")
+        if ($found.Success) { $src = $found.Groups[1].Value.ToLowerInvariant() }
+    }
+    if ($src) {
+        $conn = ""
+        $record = Join-Path (Join-Path (Join-Path $script:ExakitHome "sources") $src) "config.json"
+        try {
+            if (Test-Path -LiteralPath $record) { $conn = "" + (Get-Content -Raw -LiteralPath $record | ConvertFrom-Json).connector }
+        } catch { $conn = "" }
+        if (-not $conn) { $conn = "<connector>" }
+        $lines += "VS_$($src.ToUpperInvariant()) is disconnected, so its tables cannot be read. Reconnect it with its credential: exakit connect $conn --name $src --password-file <file>"
+        return $lines
+    }
     # A write refused for lack of privilege is the read-only guardrail doing its
     # job, and the tempting next move - re-run it through `exapump -p
     # starter-kit`, which connects as admin - is the one thing that breaks the
     # trust model. Say so where the error appears, not only in the docs.
-    if ($Text -match '(?i)insufficient privileges' -or $Text -match '42500') {
+    # SQL state 42500 alone is any refused access, a read included: it names a
+    # refused write only for a statement that writes (or when none is known).
+    $write = ($Text -match '(?i)insufficient privileges')
+    if (-not $write -and $Text -match '42500') {
+        $head = (($Statement -replace '[\r\n\t]', ' ').ToUpperInvariant()) -replace '^[\s(]+', ''
+        if (-not $head -or $head -match '^(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|RENAME|COMMENT|IMPORT|EXPORT)') { $write = $true }
+    }
+    if ($write) {
         # Written for BOTH readers - the person at the terminal and an agent
         # driving the CLI. Twin of the same rewrite in common.sh.
         $lines += "That write was refused by the DATABASE: the connection that ran it is read-only by design - the guardrail working as intended."
@@ -1906,6 +2273,17 @@ function Test-ExakitInteractive {
     return $true
 }
 
+# Clear-ExakitPromptLine - a question is about to be asked: whatever spinner or
+# step bar animates this line stops now. A question under a live animation is
+# repainted away by its next frame, and the install looks hung (MX-05: the
+# exapump password question inside the Data Loader item). A live table is left
+# to its owner. Twin of ui_line_release in ui.sh.
+function Clear-ExakitPromptLine {
+    if ($script:UiTableLive) { return }
+    if ($null -eq $script:UiSpinFlag) { return }
+    try { Stop-ExakitSpinnerAll } catch { }
+}
+
 # Confirm-ExakitPrompt "Question?" [DefaultYes] - non-interactive runs
 # (no console input available, e.g. piped install) take the default.
 function Confirm-ExakitPrompt {
@@ -1914,6 +2292,7 @@ function Confirm-ExakitPrompt {
         return $DefaultYes
     }
     $hint = if ($DefaultYes) { "[Y/n]" } else { "[y/N]" }
+    Clear-ExakitPromptLine
     if ($script:UiFancy) {
         Write-Host ("    {0}?{1} {2} {3}{4}{5} " -f $script:UiAsk, $script:UiReset, $Question, $script:UiDim, $hint, $script:UiReset) -NoNewline
     } else {
@@ -1953,6 +2332,7 @@ function Read-ExakitPrompt {
     if (-not (Test-ExakitInteractive)) {
         return $Default
     }
+    Clear-ExakitPromptLine
     if ($script:UiFancy) {
         if ($Default) {
             Write-Host ("    {0}?{1} {2} {3}[{4}]{5} " -f $script:UiAsk, $script:UiReset, $Question, $script:UiDim, $Default, $script:UiReset) -NoNewline
@@ -2118,17 +2498,19 @@ function Get-ExakitUvPinnedVersion {
 function Get-ExakitUvPinnedSha256 {
     param([Parameter(Mandatory)][string]$Key)
     switch ($Key) {
-        "uv-0.13.8-windows-x86_64" { return "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8" }
+        "uv-0.13.9-windows-x86_64" { return "edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb" }
         default { return $null }
     }
 }
 
 # Get-ExakitUvBinarySha256 uv-<version>-<platform> - the SHA-256 of the uv
 # binary inside each release archive a kit pinned and verified (0.13.6 in kit
-# 0.2.3, 0.13.7 in 0.2.4 and 0.2.5, 0.13.8 since): how a uv those kits put in
-# the bin folder, with no ownership receipt, is told apart from one the user
-# put there. Every uv the kit installs from now on gets a receipt
-# (Set-ExakitUvManifest), so this table never has to grow. Twin of
+# 0.2.3, 0.13.7 in 0.2.4 and 0.2.5, 0.13.8 in 0.3.0, 0.13.9 since): how a uv
+# the kit put in the bin folder is told apart from one the user put there when
+# no ownership receipt says so. Kits 0.2.3 to 0.2.5 wrote none, and a full
+# uninstall keeps uv but removes the manifest that held its receipt, so THE
+# ADVERTISED VERSION MUST BE LISTED for every platform
+# (tests/component-ownership-ps.ps1 checks it against versions.json). Twin of
 # exakit_uv_binary_sha256.
 function Get-ExakitUvBinarySha256 {
     param([Parameter(Mandatory)][string]$Key)
@@ -2148,6 +2530,11 @@ function Get-ExakitUvBinarySha256 {
         "uv-0.13.8-macos-aarch64"  { "f98066c132dc37b83a8861f9b538d732b5aad41d3b3a69e47abf27cdaef842a9" }
         "uv-0.13.8-macos-x86_64"   { "afdbf4b93ab474668f8ad99da2fb7fb6562c020a4bbd860e9b1909181498b1b6" }
         "uv-0.13.8-windows-x86_64" { "03fa174894b9d0cbe08762d40d1c2c64d10e875bd56f1a1e334ee1e00d60cdbe" }
+        "uv-0.13.9-linux-aarch64"  { "6109e47a75f2380d1cc90b00a6ee82b7b5792ddf66588625ec168545ae17512e" }
+        "uv-0.13.9-linux-x86_64"   { "b73acdf73b96c3ac9e56d2fa933427b3ee6a901e3cce6ba1e3ecb3f91ca0d86a" }
+        "uv-0.13.9-macos-aarch64"  { "0e17c316d23b33b4e840669f516f5cb7f5c1faa816ebd3824052ab50082ecefb" }
+        "uv-0.13.9-macos-x86_64"   { "9d275208c058354f9b300ea46a499c7a29de3249ae839503cadff2c01c159d69" }
+        "uv-0.13.9-windows-x86_64" { "7e6349bc24cfc7249f892c41298e4371826a19008c3cbcfe13eacd08ac398470" }
         default { return $null }
     }
 }
@@ -2770,6 +3157,7 @@ function Get-ExakitTlsLiveFingerprint {
 function Get-ExakitTlsDiskFingerprint {
     $dir = "" + (Get-ExakitManifestValue "runtime.deployment_dir")
     if (-not $dir) { return "" }
+    $dir = (Resolve-PersonalDeployDir -Path $dir -Recorded).Dir
     try {
         $pem = [System.IO.Path]::Combine($dir, "local", "runtime", "exa", "certificates", "fullchain.pem")
         if (-not (Test-Path -LiteralPath $pem -PathType Leaf)) { return "" }
@@ -3183,6 +3571,23 @@ function Clear-ExakitRuntimeFailureNote {
     } catch { }
 }
 
+# Clear-ExakitUpdateFailureNote - the reason an update of the database left
+# in the failure note when it did not happen (Update-Personal and its kin: a
+# rename or a launcher swap that was put back, a launcher that could not be
+# replaced), dropped once an update of the database has gone through, so
+# status --json never reports it after it stopped being true. Any other note
+# stays. Twin of exakit_forget_update_failure.
+function Clear-ExakitUpdateFailureNote {
+    try {
+        if (-not (Test-Path -LiteralPath $script:FailureNotePath)) { return }
+        $first = "$(@(Get-Content -LiteralPath $script:FailureNotePath -ErrorAction Stop)[0])"
+        if ($first -match "^The database '[^']*' was not renamed to " -or $first.StartsWith("Exasol Personal was not updated") -or
+            $first.StartsWith("Your Exasol Personal launcher") -or $first.StartsWith("The database did not stop, so it was not updated")) {
+            Remove-Item -LiteralPath $script:FailureNotePath -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+}
+
 function Read-ExakitFailureNote {
     $empty = [pscustomobject]@{ reason = ""; at = "" }
     try {
@@ -3466,15 +3871,30 @@ function Write-ExakitSoftFailures {
     }
     Write-Host ""
     # Not "the database" when the database is what failed: the summary used to
-    # list it as missing and then, one line on, as ready.
+    # list it as missing and then, one line on, as ready. And not "ready" at
+    # all then: with no database nothing of the kit is usable.
     # Twin of exakit_print_soft_failures.
     if ($script:ExakitSoftFailed.Contains("runtime")) {
-        Info "Everything that does not need the database is ready, including the exakit command itself."
+        Info "No database is usable, so the steps that need one were skipped. The exakit command is installed."
     } else {
         Info "Everything else is ready - the database, and the exakit command itself."
     }
     if ($script:LogFile) { Info "Full detail for each failure: $script:LogFile" }
     Info "See where you stand any time with: exakit status"
+}
+
+# THE INSTALLER'S EXIT CODE, FROM WHAT IT LEFT. A database step that did not
+# finish is a soft failure: the steps that do not need a database still run,
+# and the installer used to end with 0 over a machine with no usable database,
+# so a script or an agent read that run as a working install. 7 says "no
+# database" (documented in AGENTS.md). Any other step that did not complete
+# leaves a working database and still ends with 0, as before.
+# Twin of EXAKIT_EXIT_NO_DATABASE and exakit_install_exit_code (common.sh).
+$script:ExakitExitNoDatabase = 7
+
+function Get-ExakitInstallExitCode {
+    if ($script:ExakitSoftFailed.Contains("runtime")) { return $script:ExakitExitNoDatabase }
+    return 0
 }
 
 # Invoke-ExakitBounded - run an external command and give up on it after
@@ -3548,6 +3968,10 @@ function Invoke-ExakitBounded {
         $errReader = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try { $process.Kill() } catch { }
+            # And waited for, briefly: a killed program holds its file until
+            # it is gone, and a caller may write that file next (the undo of
+            # an update puts the old launcher back over the one it killed).
+            try { [void]$process.WaitForExit(5000) } catch { }
             $script:ExakitBoundedOutcome = "timeout"
             Write-ExakitLog "WARN" "$FilePath did not answer within ${TimeoutSeconds}s; giving up"
             return $null
@@ -4202,6 +4626,9 @@ function Get-ExakitVersionsValue {
 function Add-ExakitUpdateNote {
     param([string]$Component, [string]$Outcome, [string]$From = "", [string]$To = "", [string]$Remedy = "",
           [string]$ErrorText = "", [string]$Hint = "")
+    # The database updated, or current: an earlier update's reason for not
+    # happening is history (Clear-ExakitUpdateFailureNote).
+    if ($Component -eq "personal" -and @("updated", "current") -contains $Outcome) { Clear-ExakitUpdateFailureNote }
     # A run handed over by the previous kit's updater (see
     # Invoke-ExakitUpdateHandover) writes its rows where that run can merge
     # them, so `exakit update --json` still answers with ONE object.
@@ -4534,8 +4961,26 @@ function Get-ExakitStepArtifactState {
         }
         return "present"
     }
-    # runtime, mcp, pyexasol - and "launcher": nothing a file test can settle
-    # without risking a destructive false "missing". See rule 1 above.
+    if ($Step -eq "launcher" -and (Get-Command Get-PersonalLauncherPlan -ErrorAction SilentlyContinue)) {
+        # A TICK LEFT BY A RUN THAT USED THE USER'S LAUNCHER: a 0.3.0 kit
+        # answered No ticked Step 1 and recorded the launcher it found as
+        # theirs (components.personal.ownership user), with no database. That
+        # tick is not the kit's launcher: when the new install's plan
+        # (Get-PersonalLauncherPlan) is S or A6, or U or K with no launcher of
+        # the kit's in its folder yet, Step 1 runs (A6 stops there): the kit
+        # never runs theirs. An install the kit records keeps the tick as
+        # before. Twin of the mode P branch of step_artifact_state in common.sh.
+        # Nothing is said about the tick then (Krishna, 24 Nov): it was never
+        # the kit's, so "Recorded as done, but ..." would only confuse.
+        if (("" + (Get-ExakitManifestValue "components.personal.ownership")) -eq "user") {
+            $planned = "" + (Get-PersonalLauncherPlan).Mode
+            $kitHas = (Get-Command Get-PersonalSeparateBinPath -ErrorAction SilentlyContinue) -and
+                (Test-Path -LiteralPath ("" + (Get-PersonalSeparateBinPath)) -PathType Leaf)
+            if ((@("A6", "S") -contains $planned) -or ((@("U", "K") -contains $planned) -and -not $kitHas)) { $script:ExakitStepRerunQuiet = $true; return "missing" }
+        }
+    }
+    # runtime, mcp, pyexasol - and "launcher" otherwise: nothing a file test
+    # can settle without risking a destructive false "missing". See rule 1 above.
     return "unknown"
 }
 
@@ -4552,6 +4997,24 @@ function Write-ExakitStepHeading {
         Write-Host ("  {0} {1}" -f $script:UiArrow, $Title) -ForegroundColor Blue
     }
     Write-ExakitLog "STEP" $Title
+}
+
+# Get-ExakitStepVersionDrift <step> - "installed X, this kit installs Y" when
+# the component a step owns is behind what this run installs, else "". Only
+# the launcher step asks (MAC-01): without it a re-run over a 0.3.0 kit said
+# "already done, skipping" and kept launcher 2.4.0. Equal versions skip as
+# before, and a launcher ahead of the pin is left alone. Twin of the launcher
+# arm of step_version_drift.
+function Get-ExakitStepVersionDrift {
+    param([string]$Step)
+    if ($Step -ne "launcher") { return "" }
+    if (-not (Get-Command Get-PersonalTargetVersion -ErrorAction SilentlyContinue)) { return "" }
+    $want = "" + (Get-PersonalTargetVersion)
+    if (-not $want) { return "" }
+    $have = "" + (Get-ExakitComponentCurrent "personal")
+    if (-not $have -or $have -eq "unknown") { return "" }
+    if (-not (Test-ExakitVersionNewer $want $have)) { return "" }
+    return "personal $have is installed and this kit installs $want - updating it"
 }
 
 # Begin-ExakitStep <name> <description> - announces a step, returns $false
@@ -4574,10 +5037,18 @@ function Begin-ExakitStep {
     # better explanation than the generic line below. Twin of
     # EXAKIT_STEP_RERUN_REASON.
     $script:ExakitStepRerunReason = ""
+    $script:ExakitStepRerunQuiet = $false
     if (Test-ExakitStepDone $Name) {
+        # A tick says "installed", not "current": a launcher that is merely
+        # BEHIND is present on disk, so the version is asked before the
+        # artifact. Twin of the same question in begin_step.
+        $drift = "" + (Get-ExakitStepVersionDrift $Name)
+        if ($drift) {
+            $script:ExakitStepRerunReason = $drift
+            $rerun = $true
         # "unknown" (and "present") keep the manifest's answer: only a proven
         # "missing" is allowed to override the tick.
-        if ((Get-ExakitStepArtifactState $Name) -eq "missing") {
+        } elseif ((Get-ExakitStepArtifactState $Name) -eq "missing") {
             $rerun = $true
         } elseif ($script:ExakitStepGroup) {
             # An item of a grouped step: one line at the item column, under the
@@ -4596,7 +5067,7 @@ function Begin-ExakitStep {
     # In a grouped step the group printed the heading; the item draws itself.
     if ($script:ExakitStepGroup) { Write-ExakitLog "STEP" $Description }
     else { Write-ExakitStepHeading $Description }
-    if ($rerun) {
+    if ($rerun -and -not $script:ExakitStepRerunQuiet) {
         if ($script:ExakitStepRerunReason) {
             Info "Recorded as done, but $($script:ExakitStepRerunReason)"
         } else {
@@ -4640,12 +5111,22 @@ function Get-ExakitCmdShimContent {
     # `cmd /c exit 1` sets the exit code without `exit`, which would close an
     # interactive cmd.exe once the batch context is gone. A label and goto, not a
     # parenthesised if-block, because the message itself contains parentheses.
+    #
+    # `exakit exasol <args>` does not go through the -File binder, which takes
+    # and drops the launcher's own options (-d, -c, -v, -o): the line goes over
+    # as it was typed, and exakit.ps1 splits it.
     $nl = "`r`n"
     return "@echo off" + $nl +
         "if exist `"$target`" goto run" + $nl +
         ">&2 echo exakit is no longer installed here (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To install exakit again, run the installer from the starter kit README." + $nl +
         "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" + $nl +
         ":run" + $nl +
+        "if /i not `"%~1`"==`"exasol`" goto kit" + $nl +
+        "setlocal DisableDelayedExpansion" + $nl +
+        "set EXAKIT_EXASOL_LINE=%*" + $nl +
+        "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" exasol" + $nl +
+        "exit /b %errorlevel%" + $nl +
+        ":kit" + $nl +
         "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*" + $nl
 }
 
@@ -5432,7 +5913,7 @@ function Start-ExakitNoticePlanRefresh {
         $quotedPid = $pidFile.Replace("'", "''")
         $quotedCli = $cli.Replace("'", "''")
         [void]$lines.Add("try { Set-Content -Path '$quotedPid' -Value `$PID } catch { }")
-        [void]$lines.Add("try { . '$quotedCli' -Command help *> `$null; Update-ExakitNoticePlan *> `$null } catch { }")
+        [void]$lines.Add("try { . '$quotedCli' help *> `$null; Update-ExakitNoticePlan *> `$null } catch { }")
         [void]$lines.Add("Remove-Item -Force -Path '$quotedPid' -ErrorAction SilentlyContinue")
         $script = $lines -join "`n"
         $started = $false
@@ -6109,7 +6590,11 @@ function New-ExakitPassword {
     # works on both.
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-    -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+    $password = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+    # Twin of generate_password: nothing, never a short password, when the
+    # random source gave fewer bytes than asked.
+    if ($password.Length -ne 24) { return $null }
+    $password
 }
 
 # Written atomically (temp file + rename) so an interrupted run can never
@@ -7192,6 +7677,7 @@ function Test-ExakitRuntimeAnswersQuick {
         foreach ($name in @("Get-PersonalDbPort", "Test-PersonalTlsAnswers", "Test-ExakitPortInUse")) {
             if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { return $false }
         }
+        if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
         if (-not $script:PersonalDeployDir -or -not (Test-Path $script:PersonalDeployDir)) { return $false }
         if (-not (Test-ExakitPortInUse (Get-PersonalDbPort))) { return $false }
         return [bool](Test-PersonalTlsAnswers)
@@ -7203,6 +7689,9 @@ function Confirm-ExakitRuntimeRunning {
     $runtimeType = Get-ExakitManifestValue "runtime.type"
     if ($runtimeType -eq "personal") {
         if (-not (Get-Command Get-PersonalStatus -ErrorAction SilentlyContinue)) { return }
+        # Not a start, a deploy or a heal of a deployment that is not the
+        # kit's (Get-ExakitPersonalDbState): refused, said, nothing run.
+        if (-not (Test-ExakitKitDatabaseGuard)) { return }
         if (Test-PersonalDeploymentRunning) { return }
         if (Test-PersonalDeploymentExists) {
             # Asked for (exakit start, Start-ExakitDatabase): a start, not a heal.
@@ -9925,7 +10414,10 @@ function Get-ExakitStartupDir {
 # before any update runs. Twin of `exakit_update_targets ... || reject`.
 function Test-ExakitUpdateTarget {
     param([string]$Target = "all")
-    if ($Target -in @("all", "runtime", "database", "db", "personal", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2")) { return $true }
+    # uv is a target here as it is in Get-ExakitUpdateTargets and the shell
+    # twin: the status remedy for a uv below the floor is `exakit update uv`,
+    # and leaving it out refused that remedy as an unknown target.
+    if ($Target -in @("all", "runtime", "database", "db", "personal", "exakit", "exapump", "uv", "mcp", "pyexasol", "skills", "kit2")) { return $true }
     return [bool](Get-ExakitMarketplaceAddon $Target)
 }
 

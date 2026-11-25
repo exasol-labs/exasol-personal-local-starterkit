@@ -190,15 +190,15 @@
     },
     {
       "command": "exakit update",
-      "options": "[<component>] [--yes] [--json]",
+      "options": "[<component>...] [--yes] [--json]",
       "summary": "Update the binary; job definitions and history are untouched.",
       "examples": [
         "exakit update exasol-scheduler"
       ],
       "parameters": [
         {
-          "name": "<component>",
-          "description": "Update a kit-owned component or add-on. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. For this add-on, use exasol-scheduler.",
+          "name": "<component>...",
+          "description": "Update only these kit-owned components or add-ons, each once and in any order. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. An add-on that is not installed is not updated: install it with exakit marketplace <id>. For this add-on, use exasol-scheduler.",
           "default": "all",
           "required": false
         },

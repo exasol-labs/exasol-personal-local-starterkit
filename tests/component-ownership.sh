@@ -46,9 +46,13 @@ printf 'user profiles\n' > "$HOME/.exapump/config.toml"
 exapump_before="$(shasum -a 256 "$EXAKIT_BIN_DIR/exapump")"
 export EXAKIT_FORCE_COMPONENT_INSTALL=1
 exapump_install
-personal_install_launcher
 check 'exapump reused despite force flag' user "$(exakit_component_ownership exapump)"
-check 'launcher reused despite force flag' user "$(exakit_component_ownership personal)"
+# The user's launcher is never reused (0.3.1): the kit installs its own in the
+# kit folder, asked for here through the download stub, and theirs is untouched.
+exasol_before="$(shasum -a 256 "$EXAKIT_BIN_DIR/exasol")"
+launcher_out="$( (detect_os(){ printf macos; }; personal_install_launcher) 2>&1 || true )"
+check "the kit downloads its own launcher, not the one on PATH" yes "$(printf '%s' "$launcher_out" | grep -q 'Unexpected download' && echo yes || echo no)"
+check "the user's launcher is untouched" "$exasol_before" "$(shasum -a 256 "$EXAKIT_BIN_DIR/exasol")"
 check 'actual reused version recorded' 0.14.0 "$(manifest_get components.exapump.version)"
 check 'reused binary unchanged' "$exapump_before" "$(shasum -a 256 "$EXAKIT_BIN_DIR/exapump")"
 exakit_record_ownership exapump kit "$EXAKIT_BIN_DIR/exapump"
@@ -201,6 +205,22 @@ manifest_set runtime.deployment_dir "$HOME/legacy-deployment"
 check 'pre-receipt: a launcher outside the kit bin stays unknown' unknown "$(exakit_component_ownership personal)"
 check '...and so does the database it deployed' unknown "$(exakit_component_ownership database)"
 check 'pre-receipt: an explicit user receipt is never overridden' user "$(manifest_set components.exapump.ownership user; manifest_set components.exapump.path "$EXAKIT_BIN_DIR/exapump"; exakit_component_ownership exapump)"
+# The receipt a re-run writes names only the path the old kit recorded (#40):
+# the copy found first on PATH can be the user's own. Twin of the Windows check
+# in component-ownership-ps.ps1, where Get-ExapumpCli answers the PATH copy.
+printf '{}\n' > "$EXAKIT_MANIFEST"
+manifest_set installed_at fixture
+manifest_set components.exapump.path "$EXAKIT_BIN_DIR/exapump"
+printf '#!/bin/sh\nexit 0\n' > "$HOME/user-first-on-path-exapump"; chmod +x "$HOME/user-first-on-path-exapump"
+check 'pre-receipt: the exapump the old kit recorded is the kit'"'"'s' kit "$(exakit_component_ownership exapump)"
+exakit_reuse_ownership exapump "$HOME/user-first-on-path-exapump"
+check 'pre-receipt: a user copy elsewhere gets no kit receipt' user "$(manifest_get components.exapump.ownership)"
+printf '{}\n' > "$EXAKIT_MANIFEST"
+manifest_set installed_at fixture
+manifest_set components.exapump.path "$EXAKIT_BIN_DIR/exapump"
+exakit_reuse_ownership exapump "$EXAKIT_BIN_DIR/exapump"
+check '...while the recorded path still gets the kit receipt' kit "$(manifest_get components.exapump.ownership)"
+rm -f "$HOME/user-first-on-path-exapump"
 
 # THE KIT'S OWN uv (audit UPG-06): kits 0.2.3 to 0.2.5 installed the pinned,
 # verified uv into the kit's bin folder and recorded only path, version and
@@ -262,6 +282,15 @@ unset EXAKIT_UV_BIN _EXAKIT_UV_VETTED _EXAKIT_UV_KIT_INSTALLED
 check 'release table: uv 0.13.7 macOS arm64' 0f333833a6d011710d3edc0e45b55d3d934aef15bb83a25b29848c241ac513b4 "$(exakit_uv_binary_sha256 uv-0.13.7-macos-aarch64)"
 check 'release table: uv 0.13.7 Linux x86_64' 4b5e59bc557ff2cd70934beb59d0eaa92820702853d49f0066b50aa11a8f0c52 "$(exakit_uv_binary_sha256 uv-0.13.7-linux-x86_64)"
 check 'release table: an unpinned release has no entry' '' "$(exakit_uv_binary_sha256 uv-0.13.5-linux-x86_64)"
+# The advertised uv is in the table for every platform: a full uninstall keeps
+# uv but removes its receipt, and the next install could tell the kit's own uv
+# from the user's only by this table (it recorded 0.13.9 as not the kit's).
+_uv_adv="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["uv"]["version"])' "$ROOT/versions.json")"
+_uv_missing=""
+for _uv_pf in linux-aarch64 linux-x86_64 macos-aarch64 macos-x86_64 windows-x86_64; do
+    [ -n "$(exakit_uv_binary_sha256 "uv-$_uv_adv-$_uv_pf")" ] || _uv_missing="$_uv_missing $_uv_pf"
+done
+check "release table: the advertised uv $_uv_adv is listed for every platform" "" "$_uv_missing"
 rm -f "$EXAKIT_BIN_DIR/uv"
 
 # AN ADD-ON KIT 0.2.5 INSTALLED (audit UPG-01): 0.2.5 recorded Dash Server and
@@ -381,5 +410,153 @@ _kept="$(_kept_cli --dry-run)"
 check 'kept add-on: the preview exits 0' 0 "${_kept%%|*}"
 case "${_kept#*|}" in *"Nothing would be removed"*) _k=says ;; *) _k="${_kept#*|}" ;; esac
 check '...and says nothing would be removed' says "$_k"
+
+# A LAUNCHER OF THE USER'S IN ~/.local/bin THAT IS NOT ON PATH (#41). That folder
+# is not on a fresh macOS PATH, so `command -v exasol` missed a launcher the
+# user put there: the install wrote over it and gave it a kit receipt, and the
+# uninstall then removed it. The kit's own launcher now always goes to the kit
+# folder (0.3.1), so theirs is left as it is, whether or not it is new enough,
+# and gets no receipt. The download is reached: the stub ends the run and leaves
+# a mark. Twin of the off-PATH checks in component-ownership-ps.ps1.
+_offpath_install() { # <launcher body> -> what the install did; the launcher stays at $EXAKIT_BIN_DIR/exasol
+    printf '{}\n' > "$EXAKIT_MANIFEST"; manifest_set installed_at fixture
+    rm -f "$WORK/would-download" "$EXAKIT_PERSONAL_BIN"
+    printf '#!/bin/sh\n%s\n' "$1" > "$EXAKIT_BIN_DIR/exasol"; chmod +x "$EXAKIT_BIN_DIR/exasol"
+    _oi_before="$(shasum -a 256 "$EXAKIT_BIN_DIR/exasol")"
+    ( PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$EXAKIT_BIN_DIR" | paste -sd: -)"
+      personal_refuse_launcher_downgrade() { touch "$WORK/would-download"; exit 1; }
+      personal_install_launcher ) >/dev/null 2>&1 && _oi_rc=0 || _oi_rc=$?
+    printf 'rc=%s download=%s same=%s owner=%s kit=%s' "$_oi_rc" "$([ -e "$WORK/would-download" ] && echo yes || echo no)" \
+        "$([ "$_oi_before" = "$(shasum -a 256 "$EXAKIT_BIN_DIR/exasol")" ] && echo yes || echo no)" \
+        "$(manifest_get components.personal.ownership 2>/dev/null || true)" "$([ -e "$EXAKIT_PERSONAL_BIN" ] && echo yes || echo no)"
+}
+check 'off-PATH user launcher, new enough: the kit installs its own, theirs untouched, no receipt' 'rc=1 download=yes same=yes owner= kit=no' \
+    "$(_offpath_install 'printf "Commands:\n  local  Install locally\n"')"
+check 'off-PATH user launcher, too old: the kit installs its own, theirs untouched, no receipt' 'rc=1 download=yes same=yes owner= kit=no' \
+    "$(_offpath_install 'echo no presets here')"
+
+# THE KIT'S OWN LAUNCHER, BEHIND THE PIN (MAC-01). Re-running the installer
+# over a 0.3.0 kit kept launcher 2.4.0: the reuse branch took the kit's own
+# launcher as it was, so there was no folder move and the 20-session limit
+# stayed. The launcher step now updates it as `exakit update` does (a running
+# database only for an answer), replaces it like a first install when no
+# deployment is recorded, and leaves a user's launcher and a current one alone.
+# The "download" is the S3 path with its real checksum check; the launcher
+# probes are fake launchers that answer `version` and `install --help`.
+_fake_launcher() { # <file> <version>
+    mkdir -p "$(dirname "$1")"
+    printf '#!/bin/sh\ncase "$1" in version) echo %s ;; install) printf "Commands:\\n  local  Install locally\\n" ;; esac\nexit 0\n' "$2" > "$1"
+    chmod +x "$1"
+}
+_fake_launcher "$WORK/new-exasol" 2.5.0
+_behind_new_sha="$(sha256_of "$WORK/new-exasol")"
+_behind_run() { # <launcher version> <kit|user|userdb> <deployment yes|no> <stopped|running> [VAR=value...] -> what the step did
+    _br_ver="$1"; _br_owner="$2"; _br_dep="$3"; _br_status="$4"; shift 4
+    printf '{}\n' > "$EXAKIT_MANIFEST"; manifest_set installed_at fixture
+    rm -rf "$WORK/downloaded" "$WORK/lifted" "$WORK/said" "$WORK/restarts" "$HOME/kitdb"
+    # The database's state, which a stop and a start change: the update stops
+    # a running database before the launcher swap and starts it once after.
+    printf '%s\n' "$_br_status" > "$WORK/dbstate"
+    # The kit's launcher is the kit folder's. A launcher of the user's is the one
+    # the 0.3.0 kit ran, at ~/.local/bin/exasol with their receipt. userdb: theirs
+    # too, over a database the user let the 0.3.0 kit use.
+    rm -f "$EXAKIT_PERSONAL_BIN" "$EXAKIT_BIN_DIR/exasol"
+    _br_bin="$EXAKIT_PERSONAL_BIN"; _br_receipt=kit
+    case "$_br_owner" in user|userdb) _br_bin="$EXAKIT_BIN_DIR/exasol"; _br_receipt=user ;; esac
+    _fake_launcher "$_br_bin" "$_br_ver"
+    exakit_record_ownership personal "$_br_receipt" "$_br_bin"
+    if [ "$_br_dep" = yes ]; then
+        mkdir -p "$HOME/kitdb"
+        manifest_set runtime.type personal
+        manifest_set runtime.version "$_br_ver"
+        manifest_set runtime.deployment_dir "$HOME/kitdb"
+        [ "$_br_owner" != userdb ] || exakit_record_ownership database user "$HOME/kitdb"
+    fi
+    _br_before="$(sha256_of "$_br_bin")"
+    ( for _br_kv in "$@"; do export "$_br_kv"; done
+      EXAKIT_PERSONAL_VERSION=2.5.0; export EXAKIT_PERSONAL_VERSION
+      unset EXAKIT_FORCE_COMPONENT_INSTALL
+      _EXAKIT_PERSONAL_LIST_DECIDED=""; EXAKIT_PERSONAL_DEPLOY_DIR="$HOME/kitdb"
+      exakit_core_rerun_active() { [ "${EXAKIT_CORE_RERUN:-0}" = 1 ]; }
+      # STUB_DB_STATE: the kit's own database missing, as exakit_personal_db_state says it.
+      exakit_personal_db_state() { [ -z "${STUB_DB_STATE:-}" ] || printf '%s\n' "$STUB_DB_STATE"; }
+      # This file stubbed the version answers for the table checks above.
+      exakit_component_available() { printf '%s\n' "$EXAKIT_PERSONAL_VERSION"; }
+      exakit_component_current() { manifest_get runtime.version; }
+      personal_status() { cat "$WORK/dbstate"; }
+      personal_stop() { printf 'stopped\n' > "$WORK/dbstate"; printf 'stop\n' >> "$WORK/restarts"; }
+      personal_start() { printf 'running\n' > "$WORK/dbstate"; printf 'start\n' >> "$WORK/restarts"; }
+      personal_wait_ready_or_deploy() { :; }
+      personal_s3_source() { printf 'https://fixture.invalid/exasol\n%s' "$_behind_new_sha"; }
+      fetch_soft() { touch "$WORK/downloaded"; cp "$WORK/new-exasol" "$2"; }
+      personal_record_manifest() { manifest_set runtime.version "$(personal_launcher_version)"; }
+      personal_refresh_changed_password() { EXAKIT_PERSONAL_PASSWORD_CHANGE=same; }
+      personal_lift_session_limit() { touch "$WORK/lifted"; }
+      ensure_path_hint() { :; }
+      warn() { printf '%s\n' "$*" >> "$WORK/said"; }
+      info() { printf '%s\n' "$*" >> "$WORK/said"; }
+      personal_install_launcher ) </dev/null >/dev/null 2>&1 && _br_rc=0 || _br_rc=$?
+    printf 'rc=%s download=%s version=%s same=%s owner=%s lifted=%s' "$_br_rc" \
+        "$([ -e "$WORK/downloaded" ] && echo yes || echo no)" "$("$_br_bin" version)" \
+        "$([ "$_br_before" = "$(sha256_of "$_br_bin")" ] && echo yes || echo no)" \
+        "$(manifest_get components.personal.ownership 2>/dev/null || true)" \
+        "$([ -e "$WORK/lifted" ] && echo yes || echo no)"
+}
+check 'kit launcher 2.4.0, kit deployment stopped: updated to 2.5.0 as exakit update does' \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=yes' "$(_behind_run 2.4.0 kit yes stopped)"
+check '...the record says 2.5.0' 2.5.0 "$(manifest_get runtime.version)"
+check '...and the kit receipt names the new launcher' "$_behind_new_sha" "$(manifest_get components.personal.ownership_sha256)"
+check 'kit launcher 2.4.0, database running, no terminal and no answer: updated, nothing asked' \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=yes' "$(_behind_run 2.4.0 kit yes running)"
+check '...and it says the database stops first' yes "$(grep -q 'needs the database stopped' "$WORK/said" && echo yes || echo no)"
+check '...and it never defers' no "$(grep -q 'not part of a routine update' "$WORK/said" && echo yes || echo no)"
+check '...stopped before the swap and started once after it' 'stop start|running' "$(tr '\n' ' ' < "$WORK/restarts" | sed 's/ $//')|$(cat "$WORK/dbstate")"
+check 'kit launcher 2.4.0, database running, EXAKIT_CONFIRM_RUNTIME_UPDATE=1: updated' \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=yes' "$(_behind_run 2.4.0 kit yes running EXAKIT_CONFIRM_RUNTIME_UPDATE=1)"
+check 'kit launcher 2.4.0, database running, EXAKIT_CONFIRM_RUNTIME_UPDATE=0: left alone' \
+    'rc=0 download=no version=2.4.0 same=yes owner=kit lifted=no' "$(_behind_run 2.4.0 kit yes running EXAKIT_CONFIRM_RUNTIME_UPDATE=0)"
+check '...not stopped' 'running|no' "$(cat "$WORK/dbstate")|$([ -e "$WORK/restarts" ] && echo yes || echo no)"
+check 'kit launcher 2.4.0, no deployment recorded: replaced like a first install' \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=no' "$(_behind_run 2.4.0 kit no stopped)"
+# THE KIT'S OWN DATABASE MISSING (H1): a hand-installed 2.5 moved a 0.3.0
+# kit's `default`, or another deployment sits in the kit's folder. The kit's
+# 2.4.0 cannot list that deployment for the one question, so it is replaced
+# like a first install, and nothing is stopped or started: the deployment
+# found is not the kit's.
+check "kit launcher 2.4.0, the kit's database gone (moved by a 2.5 of theirs): replaced" \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=no' \
+    "$(_behind_run 2.4.0 kit no stopped STUB_DB_STATE="kit_database_missing|$HOME/kitdb|$HOME/moved")"
+check "kit launcher 2.4.0, another deployment running in the kit's folder: replaced" \
+    'rc=0 download=yes version=2.5.0 same=no owner=kit lifted=no' \
+    "$(_behind_run 2.4.0 kit yes running STUB_DB_STATE="kit_database_missing|$HOME/kitdb|$HOME/kitdb")"
+check '...that deployment is not stopped or started' 'running|no' "$(cat "$WORK/dbstate")|$([ -e "$WORK/restarts" ] && echo yes || echo no)"
+check 'user launcher 2.4.0, a database whose owner is not recorded: untouched, recorded as the user'"'"'s' \
+    'rc=0 download=no version=2.4.0 same=yes owner=user lifted=no' "$(_behind_run 2.4.0 user yes stopped)"
+# A DATABASE THE USER LET THE 0.3.0 KIT USE (runtime.ownership user), run by
+# their own 2.4.0: that permission never covers their launcher (#41). It is as
+# it was, and the kit's own 2.5.0 runs the database from the kit folder, as
+# `exakit update` does it (personal_update_user); the limit of their database
+# goes with it.
+check 'user launcher 2.4.0 over a database they let the kit use: their launcher as it was, the kit runs its own' \
+    'rc=0 download=yes version=2.4.0 same=yes owner=kit lifted=yes' "$(_behind_run 2.4.0 userdb yes stopped)"
+check '...theirs is theirs, the kit receipt names its own, the database stays theirs' \
+    "$EXAKIT_BIN_DIR/exasol|$EXAKIT_PERSONAL_BIN|2.5.0|user" \
+    "$(manifest_get components.personal.user_launcher)|$(manifest_get components.personal.ownership_path)|$("$EXAKIT_PERSONAL_BIN" version)|$(manifest_get runtime.ownership)"
+check '...running: stopped before, started once after' 'rc=0 download=yes version=2.4.0 same=yes owner=kit lifted=yes|stop start|running' \
+    "$(_behind_run 2.4.0 userdb yes running)|$(tr '\n' ' ' < "$WORK/restarts" | sed 's/ $//')|$(cat "$WORK/dbstate")"
+check '...an installer that exakit update started leaves it to the update' \
+    'rc=0 download=no version=2.4.0 same=yes owner=user lifted=no' "$(_behind_run 2.4.0 userdb yes stopped EXAKIT_CORE_RERUN=1)"
+check '...at the pin: theirs untouched, the kit installs its own' \
+    'rc=0 download=yes version=2.5.0 same=yes owner=kit lifted=yes' "$(_behind_run 2.5.0 userdb yes stopped)"
+check '...theirs is recorded by name only, the database stays theirs' "$EXAKIT_BIN_DIR/exasol|$EXAKIT_PERSONAL_BIN|user" \
+    "$(manifest_get components.personal.user_launcher)|$(manifest_get components.personal.ownership_path)|$(manifest_get runtime.ownership)"
+check '...newer than the pin, the database not: theirs untouched, the kit runs its own' \
+    'rc=0 download=yes version=2.6.0 same=yes owner=kit lifted=yes' "$(_behind_run 2.6.0 userdb yes stopped)"
+check 'kit launcher at the pin: reused, no download' \
+    'rc=0 download=no version=2.5.0 same=yes owner=kit lifted=no' "$(_behind_run 2.5.0 kit yes stopped)"
+check 'kit launcher ahead of the pin: reused, never downgraded' \
+    'rc=0 download=no version=2.6.0 same=yes owner=kit lifted=no' "$(_behind_run 2.6.0 kit yes stopped)"
+check 'an installer that exakit update started: the update decides, the step reuses' \
+    'rc=0 download=no version=2.4.0 same=yes owner=kit lifted=no' "$(_behind_run 2.4.0 kit yes stopped EXAKIT_CORE_RERUN=1)"
 
 printf '%s ownership checks passed\n' "$PASS"

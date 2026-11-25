@@ -22,7 +22,8 @@ The kit registers a module itself - verify its artifact, create its scripts,
 That command needs the framework's Python registry resolver, which the kit
 leaves out: local deployments ship no script language container. A module's own
 code is Lua (Exasol preprocessors are Lua); a module whose Lua calls a Python UDF
-needs the Python container installed with it (`exasol slc install python3`).
+needs the Python container installed with it (`exakit exasol slc install python3 -d starter-kit-local`,
+the kit's deployment).
 
 ## The modules
 

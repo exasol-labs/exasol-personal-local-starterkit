@@ -33,6 +33,8 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 is required"; exit 1; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 DEFS="$WORK/defs"; HOME_K="$WORK/kit"; DEPLOY="$WORK/deploy"; EXA="$DEPLOY/local/runtime/exa"
 cp -R "$ROOT/setup/virtual-schemas" "$DEFS"
+# The engine loads ../../core/state.py next to its own folder, as in the kit.
+cp -R "$ROOT/setup/core" "$WORK/core"
 mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
 printf 'kept\n' > "$EXA/jdbc/java.security"
 SECRET='s3cr3t-Pa55'"'"'word'
@@ -307,7 +309,7 @@ Caused by: java.sql.SQLInvalidAuthorizationSpecException: Connection exception -
 # raises it. The line under "message =>" is the session's dsn, not the error.
 RAW_ETL="$(printf '\n(\n    message     =>  JDBC-Client-Error: Connecting to %s as user=%s failed: Connection exception - authentication failed. (Session: 1880237644681707520)\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n    code        =>  ETL-5\n    query       =>  SELECT 1\n)\n' "'jdbc:exa:10.0.0.9:8563'" "'READER'")"
 check "a pyexasol error is summarized by its message field, and classifies" \
-    "JDBC-Client-Error: Connecting to 'jdbc:exa:10.0.0.9:8563' as user='READER' failed: Connection exception - authentication failed. auth" \
+    "JDBC-Client-Error: Connecting to the source as user='READER' failed: Connection exception - authentication failed. auth" \
     "$(python3 - "$ROOT" "$RAW_ETL" <<'PYC'
 import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
 import sql
@@ -786,6 +788,7 @@ printf '\n== disconnect and reconnect ==\n'
 run disconnect sales --dry-run; check "disconnect --dry-run changes nothing" "true" "$(dbq '"EXAKIT_SRC_SALES" in d["connections"]' | tr A-Z a-z)"
 has "...and says what it keeps" "virtual schema VS_SALES" "$OUT"
 run disconnect sales
+has "W2-06: the disconnect answer says the source's state" '"status": "disconnected"' "$OUT"
 check "disconnect drops only the CONNECTION" "false true true" \
     "$(dbq '"EXAKIT_SRC_SALES" in d["connections"]' | tr A-Z a-z) $(dbq '"VS_SALES" in d["virtual"]' | tr A-Z a-z) $(dbq '"EXAKIT_VS.ADAPTER_SALES" in d["scripts"]' | tr A-Z a-z)"
 run check sales; has "a disconnected source is skipped by check" '"skipped": true' "$OUT"
@@ -1007,6 +1010,7 @@ prep() {
       _exakit_prompt_tty() { [ "$_p_tty" = 1 ] && printf '/dev/tty\n'; return 0; }
       prompt_text() { echo "ASKED $1" >> "$WORK/prep.calls"; printf 'y\n'; }
       personal_cli() { printf 'exasol\n'; }
+      EXAKIT_PERSONAL_DEPLOY_DIR="$WORK/kit-deployment"
       personal_auto_approve_flag() { :; }
       personal_slc_dns_prepare() { :; }
       personal_slc_dns_repair() { return "${PREP_DNS:-0}"; }
@@ -1015,20 +1019,26 @@ prep() {
       EXAKIT_BIN_DIR="$WORK/prepbin"
       "$@"; echo "rc=$?" ) 2>&1
 }
-calls() { tr '\n' '|' < "$WORK/prep.calls"; }
+# The launcher calls name the kit's deployment folder (launcher 2.4.0 would
+# otherwise act on one in the current folder): checked, then left out.
+calls() { sed "s# --deployment-dir $WORK/kit-deployment##" "$WORK/prep.calls" | tr '\n' '|'; }
 OUT="$(prep 1 0 0 1 _exakit_vs_install_java)"
 check "a connect at a terminal, Java missing: installed with no question, one restart" \
     "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
 has "...one line says what it does and why" "Database configured for your sources" "$OUT"
 lacks "...the screen names no language container" "Java language container installed" "$OUT"
 lacks "...and nothing asked" "ASKED" "$(calls)"
-OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
+OUT="$(_EXAKIT_VS_CONNECTOR=postgresql prep 1 1 0 1 _exakit_vs_install_java)"
 check "--json at the same terminal: the contract - nothing installed, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
-has "...and the remedy said" "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start" "$OUT"
+has "...and the remedy said, as the kit's own command for that connector" "Install it later with: exakit connect postgresql --yes. It installs the Java language container and restarts the database once." "$OUT"
+lacks "...never a bare launcher command (WSL-04)" "exasol slc install" "$OUT"
+OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
+has "...with no connector named, the placeholder" "Install it later with: exakit connect <connector> --yes." "$OUT"
 OUT="$(prep 0 0 0 0 _exakit_vs_install_java)"
 check "no terminal, no --yes: nothing installed, nothing asked (exit 21 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
 OUT="$(prep 0 0 1 0 _exakit_vs_install_java)"
 check "no terminal, --yes: installed" "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...naming the kit's deployment folder" "RUN exasol slc install java --no-restart --deployment-dir $WORK/kit-deployment" "$(cat "$WORK/prep.calls")"
 OUT="$(prep 0 0 0 1 _exakit_vs_install_java)"
 check "a terminal but not a connect (exakit source refresh): still asked, as before" "ASKED Set up connector support now? [y/N]" \
     "$(grep '^ASKED' "$WORK/prep.calls")"
@@ -1419,7 +1429,7 @@ PYE
 )"
 check "R3: a CRLF + BOM PEM gives the same certificates as the LF one" "same" "$(printf '%s\n' "$E10" | sed -n 1p)"
 check "...with no carriage return left (Oracle's wallet parser refuses one)" "no-cr" "$(printf '%s\n' "$E10" | sed -n 2p)"
-has "...an Oracle wallet in an error is said as its size" "wallet_location=data:<wallet, 2000 bytes>" "$(printf '%s\n' "$E10" | sed -n 3p)"
+lacks "...an Oracle URL with its wallet is not shown (M-02)" "base64," "$(printf '%s\n' "$E10" | sed -n 3p)"
 has "...and the cause after it stays visible" "ORA-17957" "$(printf '%s\n' "$E10" | sed -n 3p)"
 lacks "...Oracle's TLS remedy never offers tls=require (it has no such level)" "tls=require" "$(printf '%s\n' "$E10" | sed -n 4p)"
 has "...PostgreSQL's still names it, as a knowing choice" "tls=require encrypts without checking it" "$(printf '%s\n' "$E10" | sed -n 5p)"
@@ -1666,7 +1676,7 @@ run_secret "$SECRET" connect snowflake --name sf $SF_SET --secret-stdin
 check "Snowflake on a loader without a CA store: exit 0" "0" "$RC"
 has "...the loader is registered trusting the container's CA store" "registered for IMPORT FROM JDBC (trusting the language container's CA store)" "$OUT"
 has "...its main class is the kit's, which hands over to the Snowflake driver" "DRIVERMAIN=exakit.loader.TrustStoreDriver" "$(cat "$SFLOADER/settings.cfg")"
-has "...the Snowflake driver stays on the loader's classpath" "JAR=snowflake-jdbc-4.4.0.jar" "$(cat "$SFLOADER/settings.cfg")"
+has "...the Snowflake driver stays on the loader's classpath" "JAR=snowflake-jdbc-4.4.1.jar" "$(cat "$SFLOADER/settings.cfg")"
 has "...with the kit's jar beside it" "JAR=exakit-loader.jar" "$(cat "$SFLOADER/settings.cfg")"
 check "...which is staged there" "yes" "$([ -f "$SFLOADER/exakit-loader.jar" ] && echo yes || echo no)"
 check "...built once in the database, the build script dropped" "1 no" \
@@ -1967,7 +1977,7 @@ s.pop(sys.argv[3], None) if sys.argv[4] == "null" else s.__setitem__(sys.argv[3]
 dbxdb
 run plan databricks --name dbx $DBX_SET
 check "plan: exit 0" "0" "$RC"
-has "...the CA bundle is a pinned download of its own" '"role": "trust", "asset": "cacert-2026-10-20.pem"' "$OUT"
+has "...the CA bundle is a pinned download of its own" '"role": "trust", "asset": "cacert-2026-11-05.pem"' "$OUT"
 has "...the plan says what the kit adds to the adapter" "plus the kit's check of the REST API's certificate and host name against the pinned CA bundle" "$OUT"
 for bad in "http_path=/sql/1.0/warehouses/abc;UID=x" "catalog=main&x=1" "schema=a#b" "http_path=/api/2.0/x"; do
     run plan databricks --name dbx $DBX_SET --set "$bad"
@@ -2021,6 +2031,41 @@ check "reauth with a token the source refuses: exit 1, the old one kept" "1 true
 has "...tried through the loader first, in the driver's short words" "DatabricksSQLException: HTTP 403: Invalid access token." "$OUT"
 run_secret "$SECRET" reauth dbx --secret-stdin
 check "reauth with the token it accepts: exit 0" "0" "$RC"
+# L-02: the CA bundle lives in the Lua adapter's script text, so a bundle
+# update reaches a connected source only by a move, and only when the pins
+# name the bundle.
+dbxpins() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["pins"]; print(eval(sys.argv[2], {"d": d}))' "$HOME_K/sources/dbx/state.json" "$1"; }
+check "L-02: the source records the CA bundle it runs" "2026-11-05" "$(dbxpins 'd.get("trust_version")')"
+cp "$DEFS/connectors/databricks/connector.json" "$WORK/dbx-connector.json"
+python3 - "$DEFS" "$HOME_K" <<'PYT'
+import hashlib, json, os, sys
+defs, home = sys.argv[1:3]
+path = os.path.join(defs, "connectors", "databricks", "connector.json")
+doc = json.load(open(path))
+data = ("## Bundle of CA Root Certificates\n\n-----BEGIN CERTIFICATE-----\nQUJDRA==\n-----END CERTIFICATE-----\n\n"
+        "-----BEGIN CERTIFICATE-----\nSUpLTA==\n-----END CERTIFICATE-----\n").encode()
+doc["trust"].update(version="2026-12-01", asset="cacert-2026-12-01.pem", size=len(data), sha256=hashlib.sha256(data).hexdigest())
+folder = os.path.join(home, "cache", "virtual-schemas", doc["trust"]["sha256"])
+os.makedirs(folder, exist_ok=True)
+open(os.path.join(folder, doc["trust"]["asset"]), "wb").write(data)
+json.dump(doc, open(path, "w"), indent=2)
+PYT
+N_DBX="$(dbq 'len(d["statements"])')"
+run check dbx
+check "L-02: after a CA bundle update, check dbx: exit 0" "0" "$RC"
+has "...it moved to the new bundle, said with the move line" "Moved dbx from Databricks adapter 1.0.2 to 1.0.2" "$OUT"
+DBXM="$(dbq '[x for x in d["statements"]['"$N_DBX"':] if "LUA ADAPTER SCRIPT \"EXAKIT_VS\".\"ADAPTER_DBX\"" in x][-1:]')"
+has "...its adapter script re-created with the new bundle's certificates" "SUpLTA==" "$DBXM"
+lacks "...and without the one the new bundle dropped" "RUZHSA==" "$DBXM"
+check "...the new bundle recorded" "2026-12-01" "$(dbxpins 'd.get("trust_version")')"
+run check dbx
+lacks "...a second check moves nothing" "Moved" "$OUT"
+cp "$WORK/dbx-connector.json" "$DEFS/connectors/databricks/connector.json"
+# A source recorded by an earlier kit names no bundle: it moves once.
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); [d["pins"].pop(k) for k in ("trust", "trust_version")]; json.dump(d, open(p, "w"))' "$HOME_K/sources/dbx/state.json"
+run check dbx
+has "L-02: a record that names no bundle moves to the pinned one" "Moved dbx from Databricks adapter 1.0.2 to 1.0.2" "$OUT"
+check "...and records it" "2026-11-05" "$(dbxpins 'd.get("trust_version")')"
 run remove dbx
 check "remove: the script, schema and connection gone, the loader cleaned up" "false false false no" \
     "$(dbq '"EXAKIT_VS.ADAPTER_DBX" in d["scripts"]' | tr A-Z a-z) $(dbq '"VS_DBX" in d["virtual"]' | tr A-Z a-z) $(dbq '"EXAKIT_SRC_DBX" in d["connections"]' | tr A-Z a-z) $([ -f "$EXA/jdbc/DATABRICKS/settings.cfg" ] && echo yes || echo no)"
@@ -2044,43 +2089,57 @@ printf '\n== a source that shows no tables is "empty", not "ready" ==\n'
 # misspelled dataset as an empty list, not an error, so the connect answered
 # ok: true, status: ready, tables: 0 and the first query failed far from the
 # cause. Every connector now answers status "empty" with a warning naming the
-# scope input, and the check, the re-point and the refresh say the same.
+# scope input, and the check, the re-point and the refresh say the same -
+# except BigQuery, which cannot tell a dataset it may not read from an empty
+# one, so its connect is refused (C-05, below).
 jget() { python3 -c 'import json,sys
 d = json.loads(sys.stdin.read() or "{}")
 for k in sys.argv[1].split("."):
     d = d.get(k) if isinstance(d, dict) else (d[int(k)] if isinstance(d, list) and len(d) > int(k) else None)
 print(json.dumps(d) if not isinstance(d, str) else d)' "$1"; }
+# C-05 (20 Nov, measured live): BigQuery also lists a dataset the service account may not read as one with no
+# tables, so a denied dataset connected ok:true, status empty, and was kept. A BigQuery connect that shows no
+# tables is refused as missing or not granted (Oracle's and Snowflake's kind), nothing kept.
 db '{"sources": {"www.googleapis.com": {"tables": [], "key_id": "kid1"}}}'
-OUT="$(eng --json connect bigquery --name bqe --set project=proj --set dataset=sales_typo --secret-stdin < "$WORK/bq1.json" 2>/dev/null)"; RC=$?
-check "BigQuery with a dataset that shows no tables: exit 0, ok, status empty, 0 tables" "0 true empty 0" \
-    "$RC $(printf '%s' "$OUT" | jget ok) $(printf '%s' "$OUT" | jget status) $(printf '%s' "$OUT" | jget tables)"
-check "...with a warning that names the dataset input" \
-    "Virtual schema VS_BQE connected, but the source shows no tables for this scope: check the dataset name (--set dataset=...)" \
-    "$(printf '%s' "$OUT" | jget warnings.0)"
-check "...and no first query on a table that is not there" "null" "$(printf '%s' "$OUT" | jget example)"
-check "...recorded as empty" "empty" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/bqe/state.json")"
-OUT="$(eng --json check bqe 2>/dev/null)"; RC=$?
-check "check says empty too, exit 0" "0 empty" "$RC $(printf '%s' "$OUT" | jget status)"
-has "...with the same warning" "check the dataset name (--set dataset=...)" "$(printf '%s' "$OUT" | jget warnings.0)"
-OUT="$(eng --json issues 2>/dev/null)"
-check "issues lists it, with the scope to check and the refresh" \
-    "bqe|the source shows no tables for this scope: check the dataset name (--set dataset=...); once it has tables: exakit source refresh bqe" \
-    "$(printf '%s' "$OUT" | jget issues.0.name)|$(printf '%s' "$OUT" | jget issues.0.remedy)"
-OUT="$(eng --json card bqe 2>/dev/null)"
-check "the card: not ready, no tables in scope, the fix a refresh" "false|no tables in scope|refresh" \
-    "$(printf '%s' "$OUT" | jget ready)|$(printf '%s' "$OUT" | jget reason)|$(printf '%s' "$OUT" | jget fix.action)"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["www.googleapis.com"]["tables"]=["orders"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
-run refresh bqe
-check "a refresh that finds tables makes it ready" "0 ready" \
-    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/bqe/state.json")"
-OUT="$(eng --json check bqe 2>/dev/null)"
-check "...and the check agrees, with no warning" "ready null" "$(printf '%s' "$OUT" | jget status) $(printf '%s' "$OUT" | jget warnings)"
-run remove bqe
+OUT="$(eng --json connect bigquery --name bqe --set project=proj --set dataset=exakit_private --secret-stdin < "$WORK/bq1.json" 2>/dev/null)"; RC=$?
+check "BigQuery with a dataset that shows no tables (missing, denied or empty): exit 1, missing_or_denied, nothing kept" \
+    "1 false missing_or_denied none" \
+    "$RC $(printf '%s' "$OUT" | jget ok) $(printf '%s' "$OUT" | jget kind) $([ -e "$HOME_K/sources/bqe" ] && echo kept || echo none)"
+check "...the error names the dataset and the three causes" \
+    "BigQuery shows this service account no tables in dataset exakit_private of project proj: the dataset does not exist, the account may not read it, or it has no tables yet" \
+    "$(printf '%s' "$OUT" | jget error)"
+has "...the fix names the name to check and the grant" \
+    "check that name as the source spells it, or grant the account BigQuery Job User on the project and BigQuery Data Viewer on the dataset" \
+    "$(printf '%s' "$OUT" | jget remedy)"
+check "...no virtual schema, connection or key file left" "[false, false] gone" \
+    "$(dbq '["VS_BQE" in d["virtual"], "EXAKIT_SRC_BQE" in d["connections"]]') $([ -e "$EXA/bucketfs/bfsdefault/default/exakit/vs/keys/bqe.json" ] && echo kept || echo gone)"
+# A source whose scope shows no tables (PostgreSQL: a schema with none) is kept as "empty", with the warning,
+# the check, the issue and the refresh that makes it ready.
 db '{"sources": {"pg.example.com": {"tables": []}}}'
 OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name pge $PG_SET --set schema=public --secret-stdin 2>/dev/null)"; RC=$?
-check "PostgreSQL with a schema that holds no tables: empty too, naming the schema" \
-    "0 empty Virtual schema VS_PGE connected, but the source shows no tables for this scope: check the schema name (--set schema=...)" \
-    "$RC $(printf '%s' "$OUT" | jget status) $(printf '%s' "$OUT" | jget warnings.0)"
+check "PostgreSQL with a schema that holds no tables: exit 0, ok, status empty, 0 tables" "0 true empty 0" \
+    "$RC $(printf '%s' "$OUT" | jget ok) $(printf '%s' "$OUT" | jget status) $(printf '%s' "$OUT" | jget tables)"
+check "...with a warning that names the schema input" \
+    "Virtual schema VS_PGE connected, but the source shows no tables for this scope: check the schema name (--set schema=...)" \
+    "$(printf '%s' "$OUT" | jget warnings.0)"
+check "...and no first query on a table that is not there" "null" "$(printf '%s' "$OUT" | jget example)"
+check "...recorded as empty" "empty" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/pge/state.json")"
+OUT="$(eng --json check pge 2>/dev/null)"; RC=$?
+check "check says empty too, exit 0" "0 empty" "$RC $(printf '%s' "$OUT" | jget status)"
+has "...with the same warning" "check the schema name (--set schema=...)" "$(printf '%s' "$OUT" | jget warnings.0)"
+OUT="$(eng --json issues 2>/dev/null)"
+check "issues lists it, with the scope to check and the refresh" \
+    "pge|the source shows no tables for this scope: check the schema name (--set schema=...); once it has tables: exakit source refresh pge" \
+    "$(printf '%s' "$OUT" | jget issues.0.name)|$(printf '%s' "$OUT" | jget issues.0.remedy)"
+OUT="$(eng --json card pge 2>/dev/null)"
+check "the card: not ready, no tables in scope, the fix a refresh" "false|no tables in scope|refresh" \
+    "$(printf '%s' "$OUT" | jget ready)|$(printf '%s' "$OUT" | jget reason)|$(printf '%s' "$OUT" | jget fix.action)"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["tables"]=["orders"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run refresh pge
+check "a refresh that finds tables makes it ready" "0 ready" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/pge/state.json")"
+OUT="$(eng --json check pge 2>/dev/null)"
+check "...and the check agrees, with no warning" "ready null" "$(printf '%s' "$OUT" | jget status) $(printf '%s' "$OUT" | jget warnings)"
 run remove pge
 db '{"loader_cacerts": false, "sources": {"'"$DBX_HOST"'": {"tables": [], "secret": "'"$SECRET"'"}}}'
 OUT="$(printf '%s' "$SECRET" | eng --json connect databricks --name dbxe $DBX_SET --secret-stdin 2>/dev/null)"; RC=$?
@@ -2336,6 +2395,7 @@ json.dump({"sources": {
     "192.168.64.1": {"catalog": "rest", "warehouse": "lake", "token": e["IR_TOKEN"], "key_id": "minioadmin", "secret_key": e["MINIO_SECRET"],
                      "namespaces": {"sales": ["orders"]}, "region": "us-east-1"},
     "dbc-1234.cloud.databricks.com": uc(),
+    "uc-s3.example.com": uc(),
     "dbc-closed.cloud.databricks.com": uc(fail="external"),
     "dbc-managed.cloud.databricks.com": uc(fail="managed"),
 }}, open(sys.argv[1], "w"))
@@ -2392,7 +2452,11 @@ check "REST without a warehouse: exit 2" "2" "$RC"; has "...named" "warehouse is
 run plan lakehouse --name uc --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=sales --set region=us-east-2
 check "Unity namespace that is not catalog.schema: exit 2" "2" "$RC"; has "...said how" "namespace must be catalog.schema, e.g. main.sales" "$OUT"
 run plan lakehouse --name uc --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales
-check "Unity with vended files and no region: the region is optional, exit 0" "0" "$RC"
+check "M-04: Unity on an AWS workspace with vended files and no region: refused at plan time, exit 2" "2" "$RC"
+has "...the region named, and how to give it" "region is required for a Unity Catalog workspace on AWS" "$OUT"
+check "...the fix, with --json" "input|1" "$(eng --json plan lakehouse --name uc --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s|%d" % (d["kind"], "--set region=<the bucket" in d["remedy"]))')"
+run plan lakehouse --name uc --set catalog=unity --set workspace_url=https://adb-1234567890123456.7.azuredatabricks.net --set namespace=main.sales
+check "...on an Azure workspace (no S3 files) the region stays optional, exit 0" "0" "$RC"
 run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
 check "plain http to a public host: exit 2" "2" "$RC"; has "...said why" "is plain http to rest.example.com, a public host" "$OUT"
 run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
@@ -2556,7 +2620,9 @@ has "...named as External Data Access, not a grant guess" "switch External Data 
 has "...with the other route" "exakit connect databricks" "$OUT"
 run_secret "$UC_TOKEN" connect lakehouse --name ucmanaged --set catalog=unity --set workspace_url=https://dbc-managed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
 check "a catalog-managed table: exit 1" "1" "$RC"; has "...named as not readable yet" "catalog-managed table, which this adapter version cannot read yet" "$OUT"
-UC_NOREGION="--set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales"
+# A Unity Catalog that vends S3 credentials on a host the plan cannot place
+# (a workspace on AWS needs the region at plan time, M-04): the connect says it.
+UC_NOREGION="--set catalog=unity --set workspace_url=https://uc-s3.example.com --set namespace=main.sales"
 run_secret "$UC_TOKEN" connect lakehouse --name ucnoreg $UC_NOREGION --secret-stdin
 check "vended S3 credentials and no region: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCNOREG" in d["connections"]' | tr A-Z a-z)"
 has "...said as no region given, with the bucket" "the catalog vended S3 credentials but no region was given, so 'uc-bucket-1' could not be reached" "$OUT"
@@ -2639,7 +2705,9 @@ for label, given, secret, storage in cases:
 values = plan.validate_inputs(raw, dict(REST, catalog="iceberg-rest", login="oauth", client_id="reader",
                                         token_endpoint="https://rest.example.com/api/catalog/v1/oauth/tokens", scope="PRINCIPAL_ROLE:ALL"))
 print("oauth|" + json.dumps(json.loads(document.lakehouse(values, "csecret", None)[0]), sort_keys=True))
-values = plan.validate_inputs(raw, dict(UC, catalog="unity", login="oauth", client_id="sp-1"))
+# An Azure workspace: no region to give (M-04 asks it of a workspace on AWS).
+values = plan.validate_inputs(raw, dict(UC, catalog="unity", login="oauth", client_id="sp-1",
+                                        workspace_url="https://adb-1.2.azuredatabricks.net"))
 print("oauth-min|" + json.dumps(json.loads(document.lakehouse(values, "csecret", None)[0]), sort_keys=True))
 # SAS or key, either order of the query string
 for s in ("sv=2024-11-04&ss=b&sp=rl&sig=a", "?sv=2024&sig=a", "se=2099-01-01T00:00Z&sp=rl&sv=2024-11-04&sig=a",
@@ -2658,7 +2726,7 @@ for given in ({"catalog": "glue", "files": "azure"}, {"catalog": "none", "files"
     except plan.PlanError as error:
         print("invalid|%d|%s|%s" % (error.code, error, error.remedy))
 # Defaults
-for given in (dict(REST), dict(UC), {"database": "d", "region": "ap-south-1"},
+for given in (dict(REST), dict(UC, region="us-east-2"), {"database": "d", "region": "ap-south-1"},
               {"path": "abfss://lake@acct1.dfs.core.windows.net/p/"}, {"path": "s3://b-1/p/", "region": "ap-south-1"}):
     v = plan.validate_inputs(raw, given)
     print("default|%s|%s|%s" % (v["catalog"], v["files"], v.get("login", "-")))
@@ -3417,6 +3485,16 @@ tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT
     [ -z "${TTY_REPLAY_RAW:-}" ] || rm -f "$TTY_REPLAY_RAW"
     TUI_OUT="$(TTY_REPLAY_COLS="${TUI_COLS:-100}" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/$1" "$ROOT" "$2" "$4" "$3" 2>&1)"
     TUI_RC=$?
+    # A busy macOS runner now and then loses every key typed at a menu that is
+    # already on screen: the replay then waits its full time with nothing
+    # written. That stall gets one more run, and the log says so.
+    case "$TUI_OUT" in
+        *"=== WAIT FAILED"*)
+            echo "  note: the replay of $1 stalled, running it once more"
+            [ -z "${TTY_REPLAY_RAW:-}" ] || rm -f "$TTY_REPLAY_RAW"
+            TUI_OUT="$(TTY_REPLAY_COLS="${TUI_COLS:-100}" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/$1" "$ROOT" "$2" "$4" "$3" 2>&1)"
+            TUI_RC=$? ;;
+    esac
     if [ -n "${TTY_REPLAY_RAW:-}" ] && [ ! -f "$TTY_REPLAY_RAW" ]; then
         fail "the replay of $1 wrote no stream to $TTY_REPLAY_RAW"
         : > "$TTY_REPLAY_RAW"
@@ -3952,9 +4030,91 @@ has "...the sources already there moved first" "Moved rp_m1 from MongoDB adapter
 check "...all three record the pins the shared script runs; the old .so is gone" "0.1.5 0.1.5 0.1.5 no" \
     "$(rpstate rp_m1 'd["pins"]["adapter_version"]') $(rpstate rp_m2 'd["pins"]["adapter_version"]') $(rpstate rp_m3 'd["pins"]["adapter_version"]') $([ -d "$RP_VS/mongodb/0.1.4" ] && echo yes || echo no)"
 
+# L-01: every source of a JDBC connector reads through one loader driver
+# (exa/jdbc/<DRIVERNAME>/settings.cfg names a single jar). Seen live: after
+# a driver update, a new connect pointed the loader at the new jar for the
+# old sources too, and removing the new source deleted that jar, so the old
+# ones failed with "No suitable driver found".
+cfgjars() { for j in $(sed -n 's/^JAR=//p' "$RP_LOADER/settings.cfg"); do [ -f "$RP_LOADER/$j" ] || { echo "missing $j"; return; }; done; echo all-present; }
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["d.example.com"]={"tables": ["T4"]}; d["sources"]["e.example.com"]={"tables": ["T5"]}; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+repin postgresql 4.3.0 42.7.16
+run_secret "$SECRET" connect postgresql --name rp_d --set host=d.example.com --set database=d --set user=reader --secret-stdin
+check "L-01: a new connect after a driver update: exit 0" "0" "$RC"
+has "...the sources already there move to the new driver first" "Moved rp_a from PostgreSQL adapter 4.2.0 to 4.3.0 and driver 42.7.15 to 42.7.16" "$OUT"
+check "...each records the driver the shared loader now runs" "42.7.16 42.7.16 42.7.16 42.7.16 JAR=postgresql-42.7.16.jar" \
+    "$(rpstate rp_a 'd["pins"]["driver_version"]') $(rpstate rp_b 'd["pins"]["driver_version"]') $(rpstate rp_c 'd["pins"]["driver_version"]') $(rpstate rp_d 'd["pins"]["driver_version"]') $(grep '^JAR=postgresql' "$RP_LOADER/settings.cfg")"
+check "...the old loader jar went with its last consumer" "no" "$([ -f "$RP_LOADER/postgresql-42.7.15.jar" ] && echo yes || echo no)"
+run remove rp_d
+check "L-01: removing the new source: exit 0" "0" "$RC"
+check "...the loader keeps every jar its settings.cfg names" "all-present" "$(cfgjars)"
+run check rp_a
+check "...an old source still reads through the loader, with nothing to repair" "0" "$RC"
+lacks "...no move was needed to get it back" "Moved" "$OUT"
+
+# The second guard: a source whose move fails keeps its old pins, the loader
+# runs the new driver all the same, and removing the source that brought it
+# keeps that jar for the sources still reading through the loader.
+repin postgresql 4.4.0 42.7.17
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["script_fail"]=["EXAKIT_VS.ADAPTER_RP_A", "EXAKIT_VS.ADAPTER_RP_B", "EXAKIT_VS.ADAPTER_RP_C"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run_secret "$SECRET" connect postgresql --name rp_e --set host=e.example.com --set database=e --set user=reader --secret-stdin
+check "L-01: a new connect whose older sources cannot move: exit 0" "0" "$RC"
+check "...they keep their pins, and the loader names the new jar" "42.7.16 JAR=postgresql-42.7.17.jar" \
+    "$(rpstate rp_a 'd["pins"]["driver_version"]') $(grep '^JAR=postgresql' "$RP_LOADER/settings.cfg")"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("script_fail"); json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run --json remove rp_e --dry-run
+check "...a remove preview does not offer the jar the loader names" "kept" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json,re,sys; t=sys.stdin.read(); d=json.JSONDecoder().raw_decode(t[re.search(r"^\{", t, re.M).start():])[0]; d=next((v for v in [d] + list(d.values()) if isinstance(v, dict) and "delete_files" in v), {}); print("offered" if any(p.endswith("POSTGRES_JDBC_DRIVER/postgresql-42.7.17.jar") for p in d.get("delete_files", [])) else "kept" if any(p.endswith("POSTGRES_JDBC_DRIVER/postgresql-42.7.17.jar") for p in d.get("keep_files", [])) else "absent")' 2>&1)"
+run remove rp_e
+check "L-01: removing it: exit 0, the loader keeps every jar its settings.cfg names" "0 all-present" "$RC $(cfgjars)"
+check "...that jar now belongs to the sources still reading through the loader" '["rp_a", "rp_b", "rp_c"]' "$(rpreg jdbc/POSTGRES_JDBC_DRIVER/postgresql-42.7.17.jar)"
+run --json check --all
+has "...check --all then moves them" "Moved rp_a from PostgreSQL adapter 4.3.0 to 4.4.0 and driver 42.7.16 to 42.7.17" "$OUT"
+check "...and the jar they left is deleted, the one they read is kept" "no all-present" \
+    "$([ -f "$RP_LOADER/postgresql-42.7.16.jar" ] && echo yes || echo no) $(cfgjars)"
+
 cp "$WORK/pg-connector.json" "$DEFS/connectors/postgresql/connector.json"
 cp "$WORK/mg-connector.json" "$DEFS/connectors/mongodb/connector.json"
 HOME_K="$RP_SAVED_HOME"; DEPLOY="$RP_SAVED_DEPLOY"; EXA="$RP_SAVED_EXA"
+
+printf '\n== the launcher moves the deployment folder: the sources keep their files ==\n'
+# Launcher 2.5.0 moves ~/.exasol/personal/deployments/default to
+# ~/.exasol/launcher/deployments/default as a whole, and the kit then names the
+# new folder (--deployment-dir). The registry recorded the staged files under
+# the old one (MCU-03, WPS-01, UPG-01): a driver move was refused as a
+# "conflict" with the kit's own loader driver, a new connect too, and a remove
+# never found the jar's other consumers.
+MV_SAVED_HOME="$HOME_K"; MV_SAVED_DEPLOY="$DEPLOY"; MV_SAVED_EXA="$EXA"
+HOME_K="$WORK/kit-moved"; MV_OLD="$WORK/moved/.exasol/personal/deployments/default"
+MV_NEW="$WORK/moved/.exasol/launcher/deployments/default"
+DEPLOY="$MV_OLD"; EXA="$DEPLOY/local/runtime/exa"
+mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
+cp -R "$MV_SAVED_HOME/cache" "$HOME_K/cache"
+cp "$DEFS/connectors/postgresql/connector.json" "$WORK/pg-connector-mv.json"
+db '{"sources": {"a.example.com": {"tables": ["T1"]}, "b.example.com": {"tables": ["T2"]}, "c.example.com": {"tables": ["T3"]}}}'
+for n in a b; do
+    run_secret "$SECRET" connect postgresql --name mv_$n --set host=$n.example.com --set database=$n --set user=reader --secret-stdin
+done
+check "moved: two sources connected on the old folder" "0" "$RC"
+mkdir -p "$(dirname "$MV_NEW")"; mv "$MV_OLD" "$MV_NEW"
+DEPLOY="$MV_NEW"; EXA="$DEPLOY/local/runtime/exa"
+MV_LOADER="$EXA/jdbc/POSTGRES_JDBC_DRIVER"
+repin postgresql 4.9.0 42.9.1
+run check mv_a
+check "moved: a check after a driver update: exit 0" "0" "$RC"
+has "...the source moves to the new driver" "Moved mv_a from PostgreSQL adapter" "$OUT"
+lacks "...not refused as a stranger's loader driver" "was not set up by the kit" "$OUT"
+check "...the registry names the new folder only" "0" \
+    "$(python3 -c 'import json,sys; print(sum(1 for k in json.load(open(sys.argv[1]))["artifacts"] if k.startswith(sys.argv[2])))' "$HOME_K/sources/registry.json" "$WORK/moved/.exasol/personal")"
+run_secret "$SECRET" connect postgresql --name mv_c --set host=c.example.com --set database=c --set user=reader --secret-stdin
+check "moved: a new connect of that connector: exit 0, no conflict" "0" "$RC"
+lacks "...not refused as a stranger's loader driver" "was not set up by the kit" "$OUT"
+run remove mv_c
+check "moved: removing one source: exit 0" "0" "$RC"
+check "...the jar its loader names stays for the others" "yes" \
+    "$(j="$(sed -n 's/^JAR=//p' "$MV_LOADER/settings.cfg" | head -1)"; [ -n "$j" ] && [ -f "$MV_LOADER/$j" ] && echo yes || echo no)"
+check "...and belongs to them" '["mv_a", "mv_b"]' "$(rpreg "jdbc/POSTGRES_JDBC_DRIVER/postgresql-42.9.1.jar")"
+cp "$WORK/pg-connector-mv.json" "$DEFS/connectors/postgresql/connector.json"
+HOME_K="$MV_SAVED_HOME"; DEPLOY="$MV_SAVED_DEPLOY"; EXA="$MV_SAVED_EXA"
 
 printf '\n== a pasted connection string: exakit connect <connector> --url ==\n'
 # eng paste reads the string on stdin and answers the inputs it names; each
@@ -4281,6 +4441,38 @@ urlsh() {
       exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/url.argv"; eng "$@"; }
       "$@" ) 2>&1
 }
+# M-01: a lakehouse source reconnected by name and credential alone: the
+# secrets asked are those of the combination it was connected with, read from
+# its record, not from --set pairs it was not given.
+python3 - "$STATE" <<'PYM1'
+import json, sys
+json.dump({"sources": {"rest.example.com": {"catalog": "rest", "warehouse": "wh", "token": "t0k-AZ",
+                                            "account_name": "acct1", "account_key": "QUFB" * 21 + "QQ==",
+                                            "namespaces": {"sales": ["orders"]}},
+                       "lake@acct1.dfs.core.windows.net": {"tables": ["orders"], "sas_token": "sv=2024-11-04&sp=rl&sig=Zz9"},
+                       "lake-bkt": {"tables": ["orders"], "key_id": "AKIAIOSFODNN7EXAMPLE", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}}},
+          open(sys.argv[1], "w"))
+PYM1
+printf '%s' 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' > "$WORK/m01.key"; chmod 600 "$WORK/m01.key"
+run_secret "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" connect lakehouse --name m01s3 --set path=s3://lake-bkt/orders/ --set region=ap-south-1 --set access_key_id=AKIAIOSFODNN7EXAMPLE --secret-stdin
+run disconnect m01s3
+run inputs lakehouse --name m01s3
+check "M-01: inputs --name of a recorded lakehouse source: its combination's fields" "name catalog files path region access_key_id secret endpoint" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["inputs"]))')"
+OUT="$(urlsh cmd_connect lakehouse --name m01s3 --password-file "$WORK/m01.key" --yes --json </dev/null)"; RC=$?
+check "M-01: a disconnected lakehouse source reconnects with --name and --password-file alone: exit 0, ready" "0 ready" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/m01s3/state.json")"
+lacks "...not refused for a credential on standard input" "on standard input" "$OUT"
+printf '%s' 't0k-AZ' > "$WORK/m01.tok"; printf '%s' "$(printf 'QUFB%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)QQ==" > "$WORK/m01.sto"
+run_pair "t0k-AZ" "$(cat "$WORK/m01.sto")" connect lakehouse --name m01az --set catalog=iceberg-rest --set files=azure --set catalog_url=https://rest.example.com/api --set warehouse=wh --set namespace=sales --set account_name=acct1 --secret-pair-base64
+run disconnect m01az
+OUT="$(urlsh cmd_connect lakehouse --name m01az --password-file "$WORK/m01.tok" --storage-secret-file "$WORK/m01.sto" --yes --json </dev/null)"; RC=$?
+check "M-01: a two-secret lakehouse source reconnects by name with both files: exit 0" "0" "$RC"
+run disconnect m01az
+OUT="$(urlsh cmd_connect lakehouse --name m01az --password-file "$WORK/m01.tok" --yes --json </dev/null)"; RC=$?
+check "...without the storage file: exit 2, the storage secret named" "2" "$RC"
+has "...with --storage-secret-file" "--storage-secret-file <file>" "$OUT"
+run remove m01s3; run remove m01az
 db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
 rm -f "$WORK/url.argv"
 OUT="$(urlsh cmd_connect pg --name urlpg --url "postgres://reader:$PW@pg.example.com:5433/sales?sslmode=require" --set port=5432 --dry-run </dev/null)"; RC=$?
@@ -5519,6 +5711,22 @@ OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name leak $PG_SET
 check "review 2: --json: the error field holds none of them" "[False, False, False, False]" \
     "$(JOUT="$OUT" one '[n in d["error"] for n in ("Leak-Uri-1", "Leak-Param-2", "Leak-Ident-3", "Leak-Pwd-4")]')"
 
+# M-02, measured live (RDS PostgreSQL, tls verify with the region's CA, a wrong
+# password): the database's message was whole, but the URL with the PEM in it
+# filled the 600 characters shown, so the reason was cut and the kind was error.
+M02PEM="-----BEGIN%20CERTIFICATE-----%0A$(printf 'MIIEBjCCAu6gAwIBAgIJAMc0ZzaSUK51%.0s' $(seq 1 46))%0A-----END%20CERTIFICATE-----%0A"
+python3 - "$STATE" "$M02PEM" <<'PYM02'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "JDBC-Client-Error: Connecting to 'jdbc:postgresql://pg.example.com:5432/sales?sslmode=verify-full&sslfactory="
+    "org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg=" + sys.argv[2] + "' as user='reader' failed: "
+    "FATAL: password authentication failed for user \"reader\""}}}, open(sys.argv[1], "w"))
+PYM02
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name m02pg $PG_SET --secret-stdin 2>/dev/null)"; RC=$?
+check "M-02: a wrong password with a CA in the URL: exit 1, kind auth" "1 auth" "$RC $(JOUT="$OUT" one 'd["kind"]')"
+has "...the database's reason is shown" 'password authentication failed for user \"reader\"' "$OUT"
+lacks "...not the PEM" "BEGIN" "$OUT"; lacks "...nor the URL" "jdbc:postgresql" "$OUT"
+
 # Through the shell, as a person runs it: the credential from --password-file,
 # and the log named once when the command fails.
 logsh() {
@@ -6521,6 +6729,104 @@ RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null
 check "W21: never mid-word (ConnCatalog=workspa / ce), each continuation under the string" "Read: jdbc:databricks://|      dbc-1234abcd-5678.cloud.databricks.com:443/|      default;transportMode=http;ssl=1;AuthMech=3;|      httpPath=/sql/1.0/warehouses/abc;|      ConnCatalog=workspace;ConnSchema=sales;|      user=EXAKIT_READER|" "$RW"
 RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null; _exakit_vs_read_wrap "Read: postgres://reader@h:5432/db" 52; printf '%s|' "$_UI_WRAP_N" "${_UI_WRAP[0]}" )"
 check "...a string that fits stays on one line" "1|Read: postgres://reader@h:5432/db|" "$RW"
+
+printf '\n== connector matrix (20 Nov) ==\n'
+# Findings of the extended live connector matrix on 0.3.0 (overnight/mac/connector-matrix.md), each as the
+# database answered it. jfield reads one field of the one JSON object --json prints.
+jfield() { printf '%s' "$OUT" | python3 -c 'import json,sys
+d = json.loads(sys.stdin.read() or "{}")
+for k in sys.argv[1].split("."):
+    d = d.get(k) if isinstance(d, dict) else None
+print(json.dumps(d) if not isinstance(d, str) else d)' "$1"; }
+kept() { [ -e "$HOME_K/sources/$1/config.json" ] && echo kept || echo none; }
+
+# C-03: a PostgreSQL database the server does not have was kind error, "see the log". MySQL's scope check says
+# schema_missing for the same mistake, with "check the name"; PostgreSQL's own FATAL (3D000) says it now too.
+db '{"sources": {"pg.example.com": {"tables": ["FILM"], "fail": "echo", "message": "JDBC-Client-Error: Connecting to '"'"'jdbc:postgresql://pg.example.com:5432/nosuchdb?sslmode=require'"'"' as user='"'"'reader'"'"' failed: FATAL: database \"nosuchdb\" does not exist"}}}'
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name cfdb --set host=pg.example.com --set database=nosuchdb --set user=reader --set schema=public --secret-stdin 2>/dev/null)"; RC=$?
+check "C-03 a PostgreSQL database that does not exist: exit 1, kind schema_missing, nothing kept" "1 schema_missing none" \
+    "$RC $(jfield kind) $(kept cfdb)"
+check "...with MySQL's fix for the same mistake" \
+    "check the name and that the account has access to it; nothing was kept - connect again with the corrected name" \
+    "$(jfield remedy)"
+
+# C-04: a SQL Server database that does not exist was kind auth, "correct the credentials": error 4060 ends with
+# "Login failed for user". The login was taken - the database is missing, or the login has no user in it.
+db '{"sources": {"ms.example.com": {"tables": ["ORDERS"], "fail": "echo", "message": "JDBC-Client-Error: Connecting to '"'"'jdbc:sqlserver://ms.example.com:1433;databaseName=nosuchdb;encrypt=true;trustServerCertificate=true'"'"' as user='"'"'reader'"'"' failed: Cannot open database \"nosuchdb\" requested by the login. The login failed. ClientConnectionId:eb6d162f-a2f2-419f-9bc7-46c765c2da64, Login failed for user '"'"'reader'"'"'. ClientConnectionId:eb6d162f-a2f2-419f-9bc7-46c765c2da64"}}}'
+OUT="$(printf '%s' "$SECRET" | eng --json connect sqlserver --name cfmsdb --set host=ms.example.com --set database=nosuchdb --set user=reader --set tls=require --secret-stdin 2>/dev/null)"; RC=$?
+check "C-04 a SQL Server database it cannot open: exit 1, kind missing_or_denied, nothing kept" "1 missing_or_denied none" \
+    "$RC $(jfield kind) $(kept cfmsdb)"
+has "...the error names the database" 'Cannot open database \"nosuchdb\"' "$OUT"
+has "...the fix names the name to check and the grant: a database user for the login" \
+    "check that name as the source spells it, or grant the account SELECT on the schema, through a database user mapped to its login" \
+    "$(jfield remedy)"
+lacks "...not the credentials" "rejected the credentials" "$(jfield remedy)"
+
+# C-06: lakehouse catalog none x files s3 on a prefix the key may not list was kind error, "see the log":
+# object_store's line ends at S3's XML declaration, and S3's AccessDenied is on the line under it.
+db '{"sources": {"lake-bkt": {"tables": ["orders"], "fail": "denied", "key_id": "AKIAIOSFODNN7EXAMPLE", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}}}'
+OUT="$(printf '%s' "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" | eng --json connect lakehouse --name cflhs3priv --set path=s3://lake-bkt/private/ --set region=ap-south-1 --set access_key_id=AKIAIOSFODNN7EXAMPLE --secret-stdin 2>/dev/null)"; RC=$?
+check "C-06 none x s3, a prefix the key may not list: exit 1, kind denied, nothing kept" "1 denied none" \
+    "$RC $(jfield kind) $(kept cflhs3priv)"
+has "...the error says S3's own answer" "403 Forbidden - caused by S3 AccessDenied: Access Denied" "$(jfield error)"
+has "...the fix names the grant" "grant it what the message names (read on the catalog's namespace" "$(jfield remedy)"
+
+# C-02: an Oracle connect whose message the database cut inside the connection string (a wrong service name, the
+# CA's wallet in the URL) was told "connect once with --set tls=require", which Oracle refuses as input.
+WALLET="$(python3 -c 'print("QUJD" * 700)')"
+db '{"sources": {"ora.example.com": {"tables": ["EMPLOYEES"], "fail": "echo", "message": "JDBC-Client-Error: Connecting to '"'"'jdbc:oracle:thin:@tcps://ora.example.com:2484/NOSUCHPDB?ssl_server_dn_match=true&wallet_location=data:;base64,'"$WALLET"'... (Session: 1881629674401234944)"}}}'
+OUT="$(printf '%s' "$SECRET" | eng --json connect oracle --name cforasvc --set host=ora.example.com --set port=2484 --set service=NOSUCHPDB --set schema=HR --set user=EXA_READER --set tls=disable --secret-stdin 2>/dev/null)"; RC=$?
+check "C-02 Oracle, a message cut before its reason: exit 1, kind error, nothing kept" "1 error none" "$RC $(jfield kind) $(kept cforasvc)"
+has "...it says the message was cut" "its message was cut before the reason" "$(jfield error)"
+lacks "...and never names tls=require as the way to read it" "connect once with --set tls=require" "$OUT"
+has "...it names what to check instead" "the service name as the listener knows it, the host, and the TCPS port (often 2484)" "$(jfield error)"
+
+# C-01: two connects of one new name at the same moment. Measured live: A connected; B had decided "a first
+# connect" before the sources lock, then found A's objects and failed "conflict ... not a source the kit set up",
+# and its rollback deleted A's record - VS_, CONNECTION and ADAPTER left that the kit could neither remove nor
+# reuse. Here A is held at a barrier in the fake database, inside its connect (and the lock), while B starts.
+BAR="$WORK/barrier"; rm -rf "$BAR"; mkdir -p "$BAR"
+db '{"sources": {"pg.example.com": {"tables": ["FILM"]}}}'
+race() { printf '%s' "$SECRET" | FAKE_VS_PAUSE='^CREATE CONNECTION "EXAKIT_SRC_CCONCDUP"' FAKE_VS_PAUSE_DIR="$BAR" \
+    eng --json connect postgresql --name cconcdup $PG_SET --set schema=public --secret-stdin > "$BAR/$1.out" 2>/dev/null
+    echo $? > "$BAR/$1.rc"; }
+race a & PA=$!
+i=0; while [ ! -e "$BAR/paused" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+check "C-01 run A is held inside its connect" "yes" "$([ -e "$BAR/paused" ] && echo yes || echo no)"
+race b & PB=$!
+# B starts, plans and reaches the lock while A holds it.
+sleep 2
+touch "$BAR/go"; wait "$PA"; wait "$PB"
+OUT="$(cat "$BAR/a.out")"
+check "...A: exit 0, connected" "0 connected" "$(cat "$BAR/a.rc") $(jfield action)"
+OUT="$(cat "$BAR/b.out")"
+check "...B waits for A and finds its source connected, as a second run after it would: exit 0, re-pointed" \
+    "0 true repointed" "$(cat "$BAR/b.rc") $(jfield ok) $(jfield action)"
+lacks "...B never says the kit's own source is not the kit's" "not a source the kit set up" "$OUT"
+check "...A's record is kept" "kept" "$(kept cconcdup)"
+check "...and its objects in the database" "[true, true]" \
+    "$(dbq '["EXAKIT_SRC_CCONCDUP" in d["connections"], "VS_CCONCDUP" in d["virtual"]]')"
+run remove cconcdup
+check "...so the kit can still remove it, and does: exit 0, nothing left" "0 [false, false]" \
+    "$RC $(dbq '["EXAKIT_SRC_CCONCDUP" in d["connections"], "VS_CCONCDUP" in d["virtual"]]')"
+
+# ...and a failed first connect's rollback removes only what that run made: a record that appeared while it ran
+# (another run's, where the lock could not be had - Windows goes on unlocked after 5 s) is never deleted.
+rm -rf "$BAR"; mkdir -p "$BAR"
+db '{"sources": {"pg.example.com": {"tables": ["FILM"], "fail": "auth"}}}'
+printf '%s' "$SECRET" | FAKE_VS_PAUSE='^CREATE CONNECTION "EXAKIT_SRC_CGUARD"' FAKE_VS_PAUSE_DIR="$BAR" \
+    eng --json connect postgresql --name cguard $PG_SET --set schema=public --secret-stdin > "$BAR/g.out" 2>/dev/null &
+PG_=$!
+i=0; while [ ! -e "$BAR/paused" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+printf '%s\n' '{"schema_version": 1, "id": "cguard", "connector": "postgresql", "profile": "java-jdbc", "inputs": {}, "objects": {}}' \
+    > "$HOME_K/sources/cguard/config.json"
+touch "$BAR/go"; wait "$PG_"
+OUT="$(cat "$BAR/g.out")"
+check "...a first connect that fails (auth) while another run's record appears: it fails" "auth" "$(jfield kind)"
+check "...and the other run's record is kept" "kept" "$(kept cguard)"
+rm -rf "$HOME_K/sources/cguard"
+
+printf '\n== end of the connector matrix ==\n'
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

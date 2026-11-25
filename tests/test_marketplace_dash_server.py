@@ -70,6 +70,108 @@ class DashServerTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def _update(self, *, installed: str, env_port: str, running_on: int) -> tuple[Mock, Mock, Mock, Mock]:
+        """dash_server.update with the service, the package and the AI-client registration stood in. The fake
+        service runs on `running_on` only; install records the port it settles, as the real one does."""
+        self.manifest.set_many({"components.dash_server.ownership": "kit", "components.dash_server.version": installed,
+                                "components.dash_server.port": 5100})
+        service = Mock()
+        service.status.side_effect = lambda port: "running" if port == running_on else "stopped"
+
+        def install(ctx: KitContext) -> None:
+            ctx.manifest.set_many({"components.dash_server.port": dash_server._port(ctx),
+                                   "components.dash_server.version": "0.2.0"})
+
+        installer = Mock(side_effect=install)
+        start = Mock()
+        register = Mock(return_value="")
+        import integration
+        with patch.object(dash_server, "_service", return_value=service), \
+             patch.object(dash_server, "package_version", return_value=installed), \
+             patch.object(dash_server, "_target", return_value="0.2.0"), \
+             patch.object(dash_server, "install", installer), \
+             patch.object(dash_server, "validate", return_value=True), \
+             patch.object(dash_server, "_settle_port", side_effect=lambda ctx: dash_server._port(ctx)), \
+             patch.object(dash_server, "start", start), \
+             patch.object(integration, "register_mcp_endpoint", register), \
+             patch.dict(os.environ, {"EXAKIT_DASH_SERVER_PORT": env_port}):
+            dash_server.update(self.ctx)
+        return service, installer, start, register
+
+    def test_an_update_to_a_new_port_stops_the_server_on_the_recorded_port(self) -> None:
+        """#48 / DOC-05: EXAKIT_DASH_SERVER_PORT=5200 exakit update dash-server looked for the server on 5200, found
+        nothing, and left the old one serving the old code on 5100. It is stopped on 5100 and started on 5200, and
+        the AI clients are pointed at 5200."""
+        service, installer, start, register = self._update(installed="0.1.0", env_port="5200", running_on=5100)
+        self.assertEqual(5100, service.status.call_args_list[0].args[0])
+        service.stop.assert_called_once_with(5100)
+        installer.assert_called_once()
+        start.assert_called_once_with(self.ctx)
+        self.assertEqual(5200, self.manifest.get("components.dash_server.port"))
+        register.assert_called_once()
+
+    def test_a_new_port_moves_the_server_at_the_same_version(self) -> None:
+        service, installer, start, register = self._update(installed="0.2.0", env_port="5200", running_on=5100)
+        service.stop.assert_called_once_with(5100)
+        installer.assert_not_called()
+        start.assert_called_once_with(self.ctx)
+        self.assertEqual(5200, self.manifest.get("components.dash_server.port"))
+        register.assert_called_once()
+
+    def test_the_same_version_on_the_same_port_changes_nothing(self) -> None:
+        service, installer, start, register = self._update(installed="0.2.0", env_port="", running_on=5100)
+        service.stop.assert_not_called()
+        installer.assert_not_called()
+        start.assert_not_called()
+        register.assert_not_called()
+
+    def test_a_version_update_on_the_same_port_restarts_and_registers_nothing(self) -> None:
+        service, installer, start, register = self._update(installed="0.1.0", env_port="", running_on=5100)
+        service.stop.assert_called_once_with(5100)
+        start.assert_called_once_with(self.ctx)
+        self.assertEqual(5100, self.manifest.get("components.dash_server.port"))
+        register.assert_not_called()
+
+    def test_a_stopped_server_stays_stopped_when_its_port_moves(self) -> None:
+        service, installer, start, register = self._update(installed="0.2.0", env_port="5200", running_on=0)
+        service.stop.assert_not_called()
+        start.assert_not_called()
+        self.assertEqual(5200, self.manifest.get("components.dash_server.port"))
+        register.assert_called_once()
+
+    def _states(self, *, installed: str, running: bool, force: str = "") -> list[str]:
+        """dash_server.update on the same port, in the order things happened: the service's stop and start, the
+        install and the validation, all recorded on one parent mock (QAT-01, QAT-05)."""
+        self.manifest.set_many({"components.dash_server.ownership": "kit", "components.dash_server.version": installed,
+                                "components.dash_server.port": 5100})
+        order = Mock()
+        order.service.status.side_effect = lambda port: "running" if running and port == 5100 else "stopped"
+        order.validate.return_value = True
+        import integration
+        with patch.object(dash_server, "_service", return_value=order.service), \
+             patch.object(dash_server, "package_version", return_value=installed), \
+             patch.object(dash_server, "_target", return_value="0.2.0"), \
+             patch.object(dash_server, "install", order.install), \
+             patch.object(dash_server, "validate", order.validate), \
+             patch.object(dash_server, "start", order.start), \
+             patch.object(integration, "register_mcp_endpoint", order.register), \
+             patch.dict(os.environ, {"EXAKIT_DASH_SERVER_PORT": "", "EXAKIT_FORCE_COMPONENT_INSTALL": force}):
+            dash_server.update(self.ctx)
+        return [name for name, _, _ in order.mock_calls if name in ("service.stop", "install", "validate", "start", "register")]
+
+    def test_a_running_server_is_stopped_updated_then_started_on_the_new_version(self) -> None:
+        self.assertEqual(["service.stop", "install", "validate", "start"], self._states(installed="0.1.0", running=True))
+
+    def test_a_stopped_server_is_updated_and_stays_stopped(self) -> None:
+        self.assertEqual(["install", "validate"], self._states(installed="0.1.0", running=False))
+
+    def test_the_same_version_leaves_a_running_server_alone(self) -> None:
+        self.assertEqual([], self._states(installed="0.2.0", running=True))
+
+    def test_a_forced_same_version_update_restarts_a_running_server(self) -> None:
+        self.assertEqual(["service.stop", "install", "validate", "start"],
+                         self._states(installed="0.2.0", running=True, force="1"))
+
     def test_busy_default_port_moves_but_explicit_port_refuses(self) -> None:
         service = Mock()
         service.status.side_effect = lambda port: "foreign" if port == 5100 else "stopped"

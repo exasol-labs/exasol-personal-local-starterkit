@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# Guard: nothing a user can read names a component after `exakit update`.
+# Guard: the learn-the-kit surfaces teach bare `exakit update`, and the
+# command reference documents the component form once.
 #
-# The per-component form still WORKS -- `exakit_update_targets` accepts it and
-# `exakit update all` iterates it -- but it is deliberately not advertised: the
-# everyday command is `exakit update`, and a reader who never learns the
-# component form never has to choose between two ways of doing one thing.
+# The component form is supported and documented (#47): `exakit update <id>
+# [<id>...]` updates only those, each once and in any order. Where a reader
+# LEARNS the kit (README, quickstarts, AGENTS.md, the starter skill) the
+# everyday command stays bare `exakit update`, and no concrete component name
+# follows it: a reader who never meets the component form there never has to
+# choose between two ways of doing one thing. The command reference
+# (setup/help/exakit.json, what `exakit help update` and `exakit catalog
+# --json` print) is where the form is documented: it says `[<component>...]`,
+# its first example stays bare, and its one component example names several
+# ids, never one.
 #
 # This is the opposite of the uninstall case, where the advertised form was
-# rejected by the parser. Here the capability is real and stays; only its
-# documentation goes. So the guard cannot simply run the command and check for
-# an error -- it has to read the surfaces a user reads.
+# rejected by the parser. Here the capability is real and stays, so the guard
+# cannot simply run the command and check for an error -- it has to read the
+# surfaces a user reads.
 #
 #   bash tests/update-command-surface.sh
 set -u
@@ -21,6 +28,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # non-https URL is refused without a request, as in tests/versions-manifest.sh.
 EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
 export EXAKIT_VERSIONS_URL
+# The add-ons' GitHub About look-up an update warms (_exakit_marketplace_warm_about)
+# asked api.github.com once per add-on from every fixture that reached it.
+EXAKIT_ABOUT_OFFLINE=1
+export EXAKIT_ABOUT_OFFLINE
 PASS=0; FAIL=0
 pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
@@ -45,7 +56,7 @@ COMPONENTS='dash-server runtime pyexasol exakit json-tables exapump personal exa
 # missing, repair with: ...") CANNOT use the bare form: it would print a
 # command that does nothing. The kit's own contract says a remedy is a command
 # you can run, so those messages name the component on purpose.
-GUIDANCE_FILES="README.md QUICKSTART.md AGENTS.md setup/help/exakit.json skills/local-agent-ready-starter/SKILL.md"
+GUIDANCE_FILES="README.md QUICKSTART.md AGENTS.md skills/local-agent-ready-starter/SKILL.md"
 GUIDANCE_GLOBS="quickstarts"
 
 printf '\n== no learn-the-kit surface names a component after "exakit update" ==\n'
@@ -80,6 +91,24 @@ for _c in $COMPONENTS; do
     fi
 done
 [ "$_offenders" -eq 0 ] && pass "no component name follows \"exakit update\" on a learn-the-kit surface"
+
+printf '\n== the command reference documents several ids, once ==\n'
+# setup/help/exakit.json is what `exakit help update` (both shells) and
+# `exakit catalog --json` print. It used to say `[<component>]`, one optional
+# id, so the #47 fix could not be found where a reader or an agent looks.
+_ucs_ref="$(python3 - "$ROOT/setup/help/exakit.json" <<'UCS_REF'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+entry = next(c for c in doc["commands"] if c["command"] == "update")
+examples = entry.get("examples") or []
+named = [e for e in examples if e.startswith("exakit update ") and not e.split()[2].startswith("-")]
+print("|".join([entry["options"], examples[0] if examples else "",
+                ",".join(str(len(e.split()) - 2) for e in named),
+                entry["parameters"][0]["name"]]))
+UCS_REF
+)"
+check "exakit help update: several ids, a bare first example, one example naming two ids" \
+    "[<component>...] [--yes] [--json]|exakit update|2|<component>..." "$_ucs_ref"
 
 printf '\n== a repair remedy names the component it repairs ==\n'
 # The other half of the same rule. A message that tells the reader to repair one
@@ -215,13 +244,27 @@ case "$_ucs_out" in
     *"exakit update personal --plan"*) pass "...and names the target it belongs to" ;;
     *)                                 fail "...but does not name the Personal form" ;;
 esac
+# Several ids through the REAL CLI (#47): the dispatcher's own option gate runs
+# before exakit_update, so a second id it refused there - with the old "Update
+# options" message - never reached the parser the checks below exercise. On the
+# empty home an accepted shape falls through to the install check's exit 4.
+for _ucs_shape in "exapump dbt-exasol" "runtime dash-server" "personal exapump --yes" "dash-server exapump --json"; do
+    # shellcheck disable=SC2086 -- the shape is words on purpose
+    _ucs_out="$(_ucs_run $_ucs_shape)"; _ucs_rc=$?
+    check "the real CLI lets 'exakit update $_ucs_shape' through its option gate (exit 4, no option refusal)" \
+        "4|0" "$_ucs_rc|$(printf '%s\n' "$_ucs_out" | grep -c 'Update options\|Unknown option')"
+done
 
 # Several component ids (#47): `exakit update exapump dbt-exasol` updates both,
 # as `exakit marketplace` installs several; a second id is never read as an
 # option. Only the run is stubbed: the parsing is the real exakit_update.
+# Its own kit home, no update lock and no About look-up: the fixture once left
+# a lock and a failure note in the real ~/.exasol-starter-kit and asked GitHub.
 _ucs_multi() { # _ucs_multi <args...> -> the targets the run was handed, or the refusal; sets _ucs_rc
-    bash -c '. "$1/setup/lib/common.sh" >/dev/null 2>&1
+    EXAKIT_HOME="$_UCS_HOME/multi" bash -c '. "$1/setup/lib/common.sh" >/dev/null 2>&1
         exakit_init_logging() { :; }
+        exakit_update_lock_acquire() { :; }
+        _exakit_marketplace_warm_about() { :; }
         exakit_marketplace_installed_addons() { :; }
         _exakit_addon_registered() { [ "$1" = dbt-exasol ] || [ "$1" = dash-server ]; }
         _exakit_update_run() { printf "target=%s|targets=%s|rest=%s\n" "$1" "$(printf "%s" "$2" | tr "\n" " ")" "$*"; }
@@ -249,6 +292,93 @@ case "$_ucs_out" in
 esac
 _ucs_out="$(_ucs_multi exapump dbt-exasol --plan)"; _ucs_rc=$?
 [ "$_ucs_rc" -eq 2 ] && pass "an option behind several ids is still refused with exit 2" || fail "ids plus --plan exited $_ucs_rc"
+# In any order (#47, the other way round): personal/runtime/database/db first
+# kept every later word as a Personal option, so `exakit update runtime
+# dash-server` said "Everything is already current." with dash-server never
+# looked at, or died "Unknown option 'dash-server'".
+_ucs_out="$(_ucs_multi runtime dash-server)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "0|target=runtime dash-server|targets=runtime dash-server|"*) pass "runtime first, then an add-on: both are updated" ;;
+    *) fail "update runtime dash-server: $_ucs_rc|$_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi personal exapump)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "0|"*"targets=personal exapump|rest="*) pass "personal first, then an id: both are updated, nothing is read as an option" ;;
+    *) fail "update personal exapump: $_ucs_rc|$_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi database exapump db)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "0|"*"targets=runtime exapump|"*) pass "database first: the runtime and exapump, the runtime once" ;;
+    *) fail "update database exapump db: $_ucs_rc|$_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi personal --plan)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "0|target=personal|targets=personal|rest="*"--plan") pass "personal --plan still hands the option to the Personal updater" ;;
+    *) fail "update personal --plan: $_ucs_rc|$_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi personal exapump --plan)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "2|"*"Update options are only supported for Personal runtime updates"*) pass "an option beside personal and another id is refused with exit 2" ;;
+    *) fail "update personal exapump --plan: $_ucs_rc|$_ucs_out" ;;
+esac
+# An empty id is bad input, never "everything" (an unset variable in a cron
+# line once updated the whole kit, runtime included).
+_ucs_out="$(_ucs_multi dash-server "")"; _ucs_rc=$?
+check "an empty second id is refused with exit 2, naming it" \
+    "2|1|0" "$_ucs_rc|$(printf '%s\n' "$_ucs_out" | grep -c "Component id 2 of 'exakit update' is empty. Name each component to update, or run 'exakit update' alone to update everything.")|$(printf '%s\n' "$_ucs_out" | grep -c 'targets=')"
+_ucs_out="$(_ucs_multi "" dash-server)"; _ucs_rc=$?
+check "an empty first id is refused with exit 2, naming it" \
+    "2|1" "$_ucs_rc|$(printf '%s\n' "$_ucs_out" | grep -c "Component id 1 of 'exakit update' is empty")"
+_ucs_out="$(_ucs_multi --yes "")"; _ucs_rc=$?
+check "an empty id alone is refused, not read as everything" \
+    "2|1" "$_ucs_rc|$(printf '%s\n' "$_ucs_out" | grep -c "Component id 1 of 'exakit update' is empty")"
+_ucs_out="$(_ucs_multi uv)"; _ucs_rc=$?
+case "$_ucs_rc|$_ucs_out" in
+    "0|target=uv|targets=uv|"*) pass "uv is an update target (the status remedy for uv)" ;;
+    *) fail "update uv: $_ucs_rc|$_ucs_out" ;;
+esac
+
+# A named add-on that was never installed: its module refused with "not
+# kit-owned; its owner manages updates" and the failed row's remedy was the
+# same command, so an agent obeying remedy looped. The run is the real
+# _exakit_update_run; the module never runs, and the remedy is the install.
+_ucs_missing() { # _ucs_missing <json 0|1> -> the screen, the module calls, the report
+    _ucs_mtmp="$(mktemp -d)"
+    EXAKIT_HOME="$_ucs_mtmp/kit" EXAKIT_UPDATE_JSON="$1" EXAKIT_UPDATE_RESULTS="$_ucs_mtmp/results" bash -c '
+        . "$1/setup/lib/common.sh" >/dev/null 2>&1
+        EXAKIT_VERSION_POLICY=pinned
+        exakit_print_versions_source_line() { :; }
+        exakit_component_min_kit() { :; }
+        exakit_core_update_check() { :; }
+        exakit_core_preprocessor_verify() { :; }
+        exakit_component_supported() { return 0; }
+        exakit_component_is_ahead() { return 1; }
+        exakit_update_actual_target() { printf "%s\n" "$1"; }
+        _exakit_addon_registered() { [ "$1" = dbt-exasol ]; }
+        _exakit_addon_system_present() { return 1; }
+        manifest_get() { return 1; }
+        exakit_component_is_managed() { return 0; }
+        exakit_component_current() { case "$1" in exapump) echo 1.0 ;; *) return 1 ;; esac; }
+        exakit_component_available() { echo 2.0; }
+        exakit_update_component() { printf "MODULE:%s\n" "$1"; return 0; }
+        _exakit_update_run "exapump dbt-exasol" "exapump
+dbt-exasol"; _rc=$?
+        printf "RC=%s\n" "$_rc"
+        if [ "$2" = 1 ]; then _exakit_update_json_report "$EXAKIT_UPDATE_RESULTS" "$_rc"; fi' _ "$ROOT" "$1" 2>&1
+    rm -rf "$_ucs_mtmp"
+}
+_ucs_out="$(_ucs_missing 0)"
+check "a named add-on that is not installed: its module never runs, the others do" "1|0" \
+    "$(printf '%s\n' "$_ucs_out" | grep -c 'MODULE:exapump')|$(printf '%s\n' "$_ucs_out" | grep -c 'MODULE:dbt-exasol')"
+check "...the screen says it is not installed and names the install" "1|1|1" \
+    "$(printf '%s\n' "$_ucs_out" | grep -c 'dbt-exasol is not installed, so there is nothing to update. Install it with: exakit marketplace dbt-exasol')|$(printf '%s\n' "$_ucs_out" | grep -c 'Update finished with problems (updated: exapump). Install what is missing with: exakit marketplace dbt-exasol')|$(printf '%s\n' "$_ucs_out" | grep -c 'RC=1')"
+check "...and never says it is not kit-owned or to retry the update" "0" \
+    "$(printf '%s\n' "$_ucs_out" | grep -cE 'not kit-owned|Retry with: exakit update')"
+_ucs_out="$(_ucs_missing 1)"
+_ucs_json="$(printf '%s\n' "$_ucs_out" | sed -n '/^{/,/^}/p')"
+check "--json: the failed row and the top-level remedy are the install" \
+    "False|failed|exakit marketplace dbt-exasol|dbt-exasol|exakit marketplace dbt-exasol|dbt-exasol is not installed, so there is nothing to update.|exapump" \
+    "$(printf '%s' "$_ucs_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); f=d["failed"][0]; print("|".join(str(x) for x in [d["ok"], d["status"], d["remedy"], f["component"], f["remedy"], f["error"], ",".join(u["component"] for u in d["updated"])]))' 2>&1)"
 
 # The kit moves first, then the NEW kit finishes the run (#45): the same shell
 # kept the old code and manifest and built a download URL the new release does
@@ -276,7 +406,7 @@ fi
 exit 0
 UCS_FAKE
     chmod +x "$_ucs_bin/exakit"
-    EXAKIT_BIN_DIR="$_ucs_bin" EXAKIT_UPDATE_JSON="$1" EXAKIT_UPDATE_RESULTS="$_ucs_bin/results" bash -c '
+    EXAKIT_HOME="$_ucs_bin/kit" EXAKIT_BIN_DIR="$_ucs_bin" EXAKIT_UPDATE_JSON="$1" EXAKIT_UPDATE_RESULTS="$_ucs_bin/results" bash -c '
         . "$1/setup/lib/common.sh" >/dev/null 2>&1
         . "$1/setup/lib/core-setup.sh" >/dev/null 2>&1
         EXAKIT_BIN_DIR="$2"; EXAKIT_VERSION_POLICY=pinned

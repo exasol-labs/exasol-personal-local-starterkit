@@ -130,37 +130,37 @@
     },
     "exasol-semantic-analyst": {
       "repo": "exasol-labs/exasol-semantic-views",
-      "ref": "v0.6.1",
-      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "ref": "v0.7.1",
+      "commit": "9d549eb9f66e2276bf24d027a6511628a36f4eeb",
       "path": "skills/exasol-semantic-analyst",
       "addon": "semantic-views",
       "files": {
         "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
-        "SKILL.md": "32d6bf68611e5f89e66b847eb6cc6c7052167c3c59ce7dd776c60eedcfd0011b",
+        "SKILL.md": "c428e2f3a45e4ed7e1b05e6e29f62b444dc0cfcd6079e205a9bd75bf91cf8fb4",
         "references/query-workflows.md": "44468263cf24cb01b211f76fb87662046a27efcd692d786fccc3492e38b11f36"
       }
     },
     "exasol-semantic-modeler": {
       "repo": "exasol-labs/exasol-semantic-views",
-      "ref": "v0.6.1",
-      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "ref": "v0.7.1",
+      "commit": "9d549eb9f66e2276bf24d027a6511628a36f4eeb",
       "path": "skills/exasol-semantic-modeler",
       "addon": "semantic-views",
       "files": {
         "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
-        "SKILL.md": "1540dd9c9fc7d9d7317a3b995f08e85fa12ba5824244e2fd4affd7a59e5ecea3",
-        "references/authoring-workflows.md": "1d3ca99d20c59e0081a8fbf4fd92cfaf19b61e718a33950af8ddb1e0939436ab"
+        "SKILL.md": "6b7d8955e3a80ce08a6b56289a1db8a2caceb45ee334448f11eaa0950bf6225d",
+        "references/authoring-workflows.md": "9100763afffb74bd62cf4b91a6911c4176c3481519af96aee77f9ec41b12d460"
       }
     },
     "exasol-semantic-reviewer": {
       "repo": "exasol-labs/exasol-semantic-views",
-      "ref": "v0.6.1",
-      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "ref": "v0.7.1",
+      "commit": "9d549eb9f66e2276bf24d027a6511628a36f4eeb",
       "path": "skills/exasol-semantic-reviewer",
       "addon": "semantic-views",
       "files": {
         "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
-        "SKILL.md": "def7389fe4d54c7dee6acd841e8397514c16046f5e2bfb19b1fd5516bec79a2d",
+        "SKILL.md": "80b6a1d6f36cb79e013f60a7941df3f7f2f3a55b26e55529336127b2867bf265",
         "references/review-bundle-template.md": "f980eb2b89a8ac85d7ddb03d0e3bd641146512c5f086cd9c8f57ba200505a472"
       }
     }

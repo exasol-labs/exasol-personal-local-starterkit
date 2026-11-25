@@ -26,7 +26,7 @@ TEST="$ROOT/tests/uninstall-ps.ps1"
 fails=0
 
 # PowerShell built-ins the test does not have to supply.
-BUILTINS=" Get-Command Get-ChildItem Get-Content Remove-Item Test-Path Join-Path New-Item Set-Variable Write-Host Out-Null Where-Object ForEach-Object Select-Object Start-Process Split-Path Move-Item Get-Date "
+BUILTINS=" Get-Command Get-ChildItem Get-Content Remove-Item Get-Item Test-Path Join-Path New-Item Set-Variable Write-Host Out-Null Where-Object ForEach-Object Select-Object Start-Process Split-Path Move-Item Get-Date Get-Variable "
 
 VERBS='(Get|Set|New|Remove|Invoke|Test|Write|Unregister|Register|Stop|Start|Confirm|Show|Read)-[A-Za-z]+'
 

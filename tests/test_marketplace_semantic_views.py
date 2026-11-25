@@ -630,7 +630,8 @@ class SemanticViewsTest(unittest.TestCase):
                              [(r["scope_type"], r["scope_value"], r["phase"], r["script"], r["function"])
                               for r in db["rules"]])
             self.assertTrue({"PREPROC_RT.SEMANTIC_VIEWS_V1", "PREPROC_RT.SEMANTIC_VIEWS_REFUSE_V1"} <= set(db["scripts"]))
-            self.assertEqual([("semantic_views", 1, "deployed", "v0.6.1")],
+            pinned = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))["components"][sv.ID]["version"]
+            self.assertEqual([("semantic_views", 1, "deployed", pinned)],      # provenance: the release the kit pins
                              [(m["name"], m["version"], m["status"], m["ref"]) for m in db["modules"]])
             self.assertTrue(sv.semantic_sql_active(self.ctx))
             status, _ = preprocessor_modules.retire(self.ctx, sv.ID)

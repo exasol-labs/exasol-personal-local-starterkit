@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.1
+
+**Exasol Personal 2.5.0, the kit's own database `starter-kit-local`, and fixes from the first days of 0.3.0. It follows 0.3.0.**
+
+- The kit installs Exasol Personal 2.5.0. Launcher 2.5.0 keeps its deployments in `~/.exasol/launcher/deployments` (`%LOCALAPPDATA%\exasol\launcher\deployments` on Windows) and moves an older one there by itself. The kit finds the deployment where the launcher keeps it, follows the move, and keeps managing its database.
+- **The kit's database is the deployment `starter-kit-local`.** It has its own name and its own port, 8563 or the next free port when another Exasol uses it, so it runs next to any database of yours. `exakit status` and `exakit info` show it. Typed by hand, `exasol status` shows the launcher's `default` deployment, which is no longer the kit's.
+- **One question, only when it matters.** With Exasol Personal 2.5 and databases of yours on the computer, the installer asks which database the kit should use: a new `starter-kit-local` (the default, and the answer without a terminal), or one of yours, listed with its state. The one you pick is renamed to `starter-kit-local` and keeps its data, and your other databases are not touched. `EXAKIT_REUSE_DB=<name>` answers it from a script, and `EXAKIT_REUSE_DB=new` asks for a new database.
+- **The kit runs its own launcher.** It is in the kit's own folder, `~/.exasol-starter-kit/personal/bin`, never on `PATH`, and `exakit exasol` runs it. An `exasol` you type stays your own, and the kit leaves a launcher of yours as it is, on every platform. Next to Exasol Personal 2.4, or one newer than 2.5, on macOS and Linux, the kit's 2.5.0 has a home folder of its own, and your launcher and databases are not touched. Next to Exasol Personal 2.4 on Windows, the kit's 2.5.0 runs beside yours. It keeps your stopped 2.4 databases in the 2.5 folder from then on, and `exakit exasol` shows them.
+- Every launcher command the kit runs names the kit's own deployment folder, so it never acts on a deployment of yours by accident.
+- The installer exits 7 when it ends with no usable database, and its summary says which steps were skipped.
+
+### Upgrading from 0.3.0
+
+- Run `exakit update`. It restarts the database once, with no question, renames it to `starter-kit-local`, and moves the kit to 0.3.1 and the launcher to Exasol Personal 2.5.0. On Windows, run it again when it says so.
+- Your data, your tables, the port, your connected sources and the MCP server on port 4896 stay as they are, so your AI clients need no change. The database folder is renamed from `default` to `starter-kit-local`, and it moves from `~/.exasol/personal` to the 2.5 launcher's own folder, which `exakit info --json` names. That move cannot be undone.
+- A database of yours that the 0.3.0 kit was allowed to use is renamed and updated the same way. It stays yours, and `exakit uninstall` keeps it. The kit's own 2.5.0 launcher runs it from then on, and a launcher of yours stays as it is. Stopped 2.4 databases in your home folder move to the 2.5 folder, and `exakit exasol` shows them there.
+- A database created by Exasol Personal 2.4 had a limit of 20 sessions. The update removes it during the same restart.
+- A kit before 0.3.1 does not install Exasol Personal 2.5.0: `exakit version` says to update exakit first.
+
+### Install and uninstall
+
+- **Uninstall keeps what is yours.** The kit's own database is deleted with its data. A database of yours stays `starter-kit-local`, and only the logins the kit created inside it are dropped: the read-only MCP user and the Scheduler user, and the `SEMANTIC_USER` and preprocessor roles unless a user of yours holds them. A schema one of them owns stays, owned by `SYS`. `exakit repair-runtime` rebuilds a database of yours only after its warning and your yes, and it stays yours. Its connections are kept, and the uninstall lists each one with its `DROP CONNECTION` statement. The kit's own launcher stays while another deployment uses it and no launcher of yours on 2.5 or newer can open it. The uninstall names that deployment, and the launcher is then `~/.local/bin/exasol` (`%USERPROFILE%\.local\bin\exasol.exe` on Windows) when nothing is there, else it stays in the kit folder.
+
+- **"Database removed" only once it is gone.** The uninstall checks the deployment folder, the deployment the launcher moved, and the database container by the id recorded at install. Anything left is named with the command that removes it, and the uninstall exits 1.
+- **The failure box speaks the kit's commands.** When a deploy or a start fails, the launcher's hint to run `start` reads `exakit start`, and its `destroy` hint is left out.
+- **The spinner stops before a question**, so a prompt asked during a step is never painted over.
+- **The MCP step names the real reason** when the MCP server cannot be set up beside the database.
+
+### Federation
+
+- **Clearer reasons when a source refuses.** A PostgreSQL database the server does not have, SQL Server's "Cannot open database", an S3 key without read access and a BigQuery dataset that shows no tables each get their own reason and fix.
+- **A Unity Catalog workspace on AWS asks for its region**, and its token is asked for as a Databricks token on Databricks.
+- **Two connects at once stay apart.** A connect decides first connect, reconnect or re-point under a lock, and a failed first connect never removes another run's source. A connect or remove never takes another source's driver.
+- **A CA bundle update reaches connected Databricks sources.**
+- **`exakit sql` on a disconnected source names its reconnect**, and SQL state 42500 is called a refused write only for a statement that writes.
+
+### Data and commands
+
+- **A CSV with Windows line endings anywhere loads.** A CR LF pair on any line, or a CR at the end of the file, sends the file over as an LF copy, on every platform.
+- **`exakit stop` names each add-on service it stopped**, as `exakit start` names each one it started.
+- **`exakit logs`** drops colour codes off a colour terminal, and its Target column fits its longest name.
+
+### Components
+
+- Exasol Personal 2.5.0, exapump 0.14.1, uv 0.13.9, snowflake-jdbc 4.4.1, ojdbc8 23.26.4.0.0, the Databricks CA bundle cacert-2026-11-05, and the Semantic Views add-on v0.7.1.
+
 ## 0.3.0
 
 **The first GA release with Federation, the SQL preprocessor framework and Semantic Views. It follows 0.2.5.**

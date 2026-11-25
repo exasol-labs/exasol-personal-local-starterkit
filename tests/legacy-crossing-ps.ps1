@@ -41,7 +41,21 @@ $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 $env:USERPROFILE = Join-Path $work "profile"
 New-Item -ItemType Directory -Force -Path $env:USERPROFILE, $env:EXAKIT_HOME, $env:EXAKIT_BIN_DIR | Out-Null
 Remove-Item Env:EXAKIT_LEGACY_DATA -ErrorAction SilentlyContinue
-$env:EXAKIT_ENGINE_PROBE_TIMEOUT = "2"
+# The bound on each engine call, as the module reads it. The fake engine is a
+# pwsh script, so one call is a pwsh start: well under a second on a quiet
+# machine, several on a loaded one. A 2 s bound made section 12 flaky there:
+# both inspects ran out, the state read "unknown" and the stop was skipped.
+# No scenario here has the engine hang, so the module's own default costs a
+# passing run nothing, and a wrong answer still fails the check that reads it.
+$env:EXAKIT_ENGINE_PROBE_TIMEOUT = "20"
+# Every stub call starts a pwsh, and off Windows each one reads and rewrites
+# its startup profile under XDG_CACHE_HOME (StartupProfileData-NonInteractive).
+# With the developer's real ~/.cache shared by several suites running at once,
+# a pwsh that read the file mid-write died at once with exit 134 ("The given
+# assembly name was invalid"), the engine call answered nothing, and the
+# checks read a stopped container as unknown. This run's own cache, in the
+# sandbox, so only this run's (one at a time) stubs use it.
+$env:XDG_CACHE_HOME = Join-Path $work "cache"
 $onWindows = ($env:OS -like "*Windows*")
 
 # --- the two stubs, once, reached through PATH and EXAKIT_EXAPUMP_BIN ----------
@@ -306,6 +320,10 @@ if (Test-LcSection 2) {
     Seed; Fault "engine.state" "down";  Check "a stopped engine is unknown, never absent" "unknown" (Get-LegacyContainerState)
     Seed -NoContainer;                  Check "no container name reads as absent" "absent" (Get-LegacyContainerState)
     Check "...and the removal command has nothing to name" "" (Get-LegacyRemoveCommand)
+    # An engine that takes 3 s per call, as on a loaded machine: still an
+    # answer, never "unknown". The bound above must leave room for it.
+    Seed; Fault "engine.delay_seconds" "3"; Check "a slow engine still reads as running" "running" (Get-LegacyContainerState)
+    Remove-Item (Join-Path $env:EXAKIT_FAULT_DIR "engine.delay_seconds") -ErrorAction SilentlyContinue
 }
 
 if (Test-LcSection 3) {

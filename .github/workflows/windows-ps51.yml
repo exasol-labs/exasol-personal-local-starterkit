@@ -97,6 +97,10 @@ jobs:
         if: matrix.shard == 1
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-leftovers-ps.ps1
+      - name: a database the user let the kit use stays, only the kit's logins in it go, under 5.1
+        if: matrix.shard == 1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-owner-user-ps.ps1
       - name: ownership receipts, including installs from before receipts, under 5.1
         if: matrix.shard == 1
         shell: powershell
@@ -158,6 +162,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
+      - name: the deployment folder launcher 2.5.0 moves, under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-deploy-dir-ps.ps1
       # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
       # launcher and a real process holding the launcher's image name.
       - name: personas under 5.1
@@ -208,6 +216,22 @@ jobs:
         if: matrix.shard == 3
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-destroy-lock-ps.ps1
+      - name: the kit next to the user's own Exasol Personal under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-scenario-x-ps.ps1
+      - name: no usable database ends the install with exit 7 under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-no-database-ps.ps1
+      - name: the launcher's words in the failure box under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/launcher-words-ps.ps1
+      - name: no question under a live spinner under 5.1
+        if: matrix.shard == 3
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/prompt-spinner-safety-ps.ps1
       # The local data loader on the files people actually have - BOM, CRLF,
       # ';', GTFS .txt, header-only, .geojson - against a .cmd stub exapump
       # that keeps the bytes it was handed: the kit passes them on untouched.
@@ -255,6 +279,12 @@ jobs:
         if: matrix.shard == 4
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-help-ps.ps1
+      # The update from a 0.3.0 kit: the database renamed to starter-kit-local
+      # in one restart, the undo, the user's own launcher, a launcher file in use.
+      - name: the update from 0.3.0 under 5.1
+        if: matrix.shard == 4
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-update-rename-ps.ps1
       # The add-ons table on the engine the Windows installer runs under: its
       # activity line, the offer's spinner handed to it, and the table drawn
       # with no console (no Select All, Continue last).
@@ -366,9 +396,14 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_marketplace_adapters.py' -k failed_public_uninstall -k without_uv -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # AGT-04: the source engine's sources lock against the real msvcrt, held past five seconds.
+          python tests/test_vs_sources_lock.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # QAT-11: the suites with no shell, signal or file-mode dependency, never run on Windows before.
+          # dash_server: the update's stop, install and start order (#48), and the .cmd launcher bytes, on the
+          # platform where a running server's files are locked.
           foreach ($suite in @('addons', 'apply', 'pinned_digests', 'process', 'redirect_auth',
-                               'wsl_ports', 'ui', 'rules', 'blackbox')) {
+                               'wsl_ports', 'ui', 'rules', 'blackbox', 'dash_server')) {
             python -m unittest discover -s tests -p "test_marketplace_$suite.py" -v
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

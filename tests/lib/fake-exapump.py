@@ -2,7 +2,7 @@
 
 Simulates exactly the slice of Exasol the preprocessor setup touches: the
 SQL_PREPROCESSOR_SCRIPT slot (system and session), the PREPROC/PREPROC_RT
-schemas, their scripts, the PREPROC_ADMIN role, the rules in PREPROC.CONFIG,
+schemas, their scripts, the PREPROC_ADMIN role, who owns the schemas, the rules in PREPROC.CONFIG,
 and whether a statement is dispatched to the kit's probe module. One
 invocation is one session, as with the real tool.
 
@@ -13,6 +13,7 @@ an "Error: ..." line on stderr, and each SELECT prints one JSON array.
     FAKE_EXAPUMP_STATE=/path/state.json python3 fake-exapump.py sql -p P -f json
 
 state.json keys (all optional): system_slot, schemas, scripts, role, rules,
+owners (schema -> owner, default SYS), grants (the GRANT statements that ran),
 modules (PREPROC.MODULES provenance rows), refreshes (a count), users (the
 database's users, default ["SYS"]), resolution (PREPROC.RESOLUTION as
 [user, script] pairs, written by every REFRESH; until the first one it is what a
@@ -190,6 +191,10 @@ def run(doc, sql, out):
     if "FROM EXA_SCHEMAS" in up:
         m = re.search(r"SCHEMA_NAME\s+IN\s*\(([^)]*)\)", sql, re.I)
         wanted = set(literals(m.group(1))) if m else None
+        if "SCHEMA_OWNER" in up:
+            out.append([{"N": name, "O": doc.get("owners", {}).get(name, "SYS")} for name in doc["schemas"]
+                        if wanted is None or name in wanted])
+            return
         out.append([{"N": name} for name in doc["schemas"] if wanted is None or name in wanted])
         return
     if "FROM EXA_ALL_SCRIPTS" in up:
@@ -230,6 +235,18 @@ def run(doc, sql, out):
         if doc["role"]:
             raise Fail("role PREPROC_ADMIN already exists")
         doc["role"] = True
+        return
+    m = re.match(r"(?i)^ALTER SCHEMA (\w+) CHANGE OWNER (\w+)$", sql)
+    if m:
+        if m.group(2).upper() != "SYS" and not doc["role"]:
+            raise Fail("user or role %s does not exist" % m.group(2).upper())
+        doc.setdefault("owners", {})[m.group(1).upper()] = m.group(2).upper()
+        return
+    if up.startswith("GRANT "):
+        if up.endswith(" TO PREPROC_ADMIN") and not doc["role"]:
+            raise Fail("user or role PREPROC_ADMIN does not exist")
+        if up not in doc.setdefault("grants", []):
+            doc["grants"].append(up)
         return
     m = re.match(r"(?i)^CREATE SCHEMA (IF NOT EXISTS )?(\w+)", sql)
     if m:

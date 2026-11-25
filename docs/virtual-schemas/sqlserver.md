@@ -106,7 +106,7 @@ Get your public IP: `curl https://checkip.amazonaws.com` (`exakit connect` print
 
 ### 5. The CA certificates
 
-On Exasol Personal 2.4, TLS `verify` always needs a CA PEM file, even for a
+On Exasol Personal 2.4 and later, TLS `verify` always needs a CA PEM file, even for a
 public CA, because the database's loader has an empty trust store. SQL Server
 needs the **root plus the intermediates** in one file. `require` encrypts with
 no CA file but does not check the certificate.

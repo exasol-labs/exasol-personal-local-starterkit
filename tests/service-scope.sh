@@ -71,7 +71,7 @@ has "cmd_start validates first" '_service_scope start "$@"' "$_cmd_start"
 # reject() exits; inside $(...) that ends only the subshell and the caller runs
 # the bare form on the refused input. So the validator is never substituted.
 lacks "...never through a command substitution" '$(_service_scope' "$SH"
-has "a scoped stop reaches the per-service helper"  'exakit_service_stop "$EXAKIT_SERVICE_SCOPE"'  "$_cmd_stop"
+has "a scoped stop reaches the per-service helper"  '_stop_addon_reported "$EXAKIT_SERVICE_SCOPE"'  "$_cmd_stop"
 has "a scoped start reaches the per-service helper" '_start_addon_reported "$EXAKIT_SERVICE_SCOPE"' "$_cmd_start"
 has "the bare stop still stops the database" 'personal) personal_stop ;;' "$_cmd_stop"
 has "the Windows bare stop still stops the database" '"personal" { Stop-Personal }' \
@@ -121,6 +121,7 @@ HARNESS="$WORK/harness.sh"
     printf '. "%s/setup/lib/common.sh"\n' "$ROOT"
     sed -n '/^_service_scope()/,/^}/p' "$CLI"
     sed -n '/^_start_addon_reported()/,/^}/p' "$CLI"
+    sed -n '/^_stop_addon_reported()/,/^}/p' "$CLI"
     sed -n '/^cmd_start()/,/^}/p' "$CLI"
     sed -n '/^cmd_stop()/,/^}/p' "$CLI"
     sed -n '/^_stop_database_scoped()/,/^}/p' "$CLI"
@@ -149,9 +150,16 @@ has   "bare stop stops the add-on"            "STOP zzfake"    "$_bare"
 has   "...and then the database"              "STOP database"  "$_bare"
 check "...add-ons first"                      "yes" "$(printf '%s\n' "$_bare" | awk '/STOP zzfake/{a=NR} /STOP database/{d=NR} END{print (a && d && a<d) ? "yes" : "no"}')"
 
+# W3-05: stop names the services it stopped, the way start names the ones it
+# started.
+has   "...and says so"                        "zzfake stopped" "$_bare"
+_bss="$(ZZ_STATUS=stopped bash "$HARNESS" cmd_stop 2>&1)"
+has   "a stopped add-on is named as already stopped" "zzfake is already stopped" "$_bss"
+
 _one="$(_run cmd_stop zzfake)"
 has   "stop <addon> stops that add-on"        "STOP zzfake"    "$_one"
 lacks "...and leaves the database alone"      "STOP database"  "$_one"
+has   "...and says so"                        "zzfake stopped" "$_one"
 
 # `exakit stop database` under a running add-on asks first. The harness has no
 # terminal (_exakit_prompt_tty stubbed), so EXAKIT_STOP_ADDONS carries the

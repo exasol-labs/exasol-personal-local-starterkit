@@ -153,6 +153,9 @@ run_logged(){
     for _fv in \$(printf '%s' "\${STUB_FAIL_VERB:-never}" | tr , ' '); do case " \$* " in *" \$_fv "*) return 1;; esac; done; return 0; }
 detect_wsl_version(){ [ "\${STUB_WSL:-0}" = 1 ]; }
 EXAKIT_PERSONAL_DEPLOY_DIR="\${STUB_DEPLOY_DIR:-$TMP/no-deployment}"
+# The deployment these cases recover is the kit's own (OWN-06: only that one
+# is ever deployed again).
+exakit_component_is_managed(){ return 0; }
 source "$ROOT/setup/lib/runtime-personal.sh"
 personal_cli(){ printf 'exasol-stub'; }
 personal_auto_approve_flag(){ printf -- '--auto-approve'; }
@@ -245,7 +248,9 @@ check "ours, launcher says database_ready, accept-and-close -> not running" 1 "$
 check "ours, database answers, exapump broken -> still running"            0 "$(rc_of "$(probe STUB_EXISTS=1 STUB_STATE=database_ready STUB_PROFILE=starter-kit STUB_SQL_OK=0 STUB_PORT="$TLS_PORT" -- 'personal_deployment_running')")"
 check "no deployment of ours, TLS answers, no profile -> NOT adopted"     1 "$(rc_of "$(probe STUB_EXISTS=0 STUB_PORT="$TLS_PORT" -- 'personal_deployment_running')")"
 check "no deployment of ours, profile's SELECT fails -> NOT adopted"      1 "$(rc_of "$(probe STUB_EXISTS=0 STUB_PROFILE=starter-kit STUB_SQL_OK=0 STUB_PORT="$TLS_PORT" -- 'personal_deployment_running')")"
-check "no deployment of ours, profile's SELECT works -> running"          0 "$(rc_of "$(probe STUB_EXISTS=0 STUB_PROFILE=starter-kit STUB_SQL_OK=1 STUB_PORT="$TLS_PORT" -- 'personal_deployment_running')")"
+# Never adopted by its port (D3): the kit's database is starter-kit-local, on
+# its own port. Even a database the kit's profile can log into is not it.
+check "no deployment of ours, profile's SELECT works -> still NOT adopted" 1 "$(rc_of "$(probe STUB_EXISTS=0 STUB_PROFILE=starter-kit STUB_SQL_OK=1 STUB_PORT="$TLS_PORT" -- 'personal_deployment_running')")"
 
 echo "personal_foreign_db_hint: names the other side only when something answers like Exasol"
 check "nothing answers -> empty"                    "" "$(probe STUB_PORT="$CLOSED_PORT" -- 'personal_foreign_db_hint' | sed '$d')"
@@ -398,7 +403,10 @@ check "EXAKIT_REPLACE_DB=0 declines it" 1 "$(rc_of "$_out")"
 case "$(cat "$TMP/calls")" in *destroy*) check "  ...deleting nothing" none destroy ;; *) check "  ...deleting nothing" none none ;; esac
 contains "  ...with a reason" "NOTE A deployment that never started could not be brought up, and replacing it was declined" "$_out"
 _out="$(_dl STUB_PENDING=0 STUB_FAIL_VERB=deploy,start)"
-contains "a deployment that ever answered keeps the old ladder" "ASK Start the existing database and keep its data? [y]" "$_out"
+# The kit's own database is started without a question (the one-question
+# design): the old "keep its data?" question is gone.
+contains "a deployment that ever answered keeps the old ladder" "INFO An Exasol deployment was found, not running." "$_out"
+case "$_out" in *"keep its data"*) check "  ...without the keep-its-data question" no yes ;; *) check "  ...without the keep-its-data question" no no ;; esac
 contains "  ...whose DELETE still defaults to no" "ASK DELETE the stopped deployment and its data, and deploy a fresh one? This cannot be undone. [n]" "$_out"
 case "$(cat "$TMP/calls")" in *destroy*) check "  ...and deletes nothing unasked" none destroy ;; *) check "  ...and deletes nothing unasked" none none ;; esac
 _out="$(_dl STUB_PENDING=1 EXAKIT_REUSE_DB=1)"

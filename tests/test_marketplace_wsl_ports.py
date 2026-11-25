@@ -47,6 +47,17 @@ class WslPortsTest(unittest.TestCase):
             self.assertFalse(process.windows_listening(8889))
         self.assertEqual(run.call_count, 1)
 
+    def test_a_localized_windows_is_read_the_same(self) -> None:
+        """netstat prints the state in the Windows display language: German says ABHÖREN, and matching the English
+        word saw no listener at all there (WIN-02). The row with no peer is the listener, in any language."""
+        german = NETSTAT.replace("LISTENING", "ABHÖREN").replace("ESTABLISHED", "HERGESTELLT")
+        with patch.dict("os.environ", {"WSL_DISTRO_NAME": "Ubuntu"}), \
+                patch("shutil.which", return_value="/mnt/c/Windows/System32/netstat.exe"), \
+                patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=german, stderr="")):
+            self.assertTrue(process.windows_listening(8888))
+            self.assertTrue(process.windows_listening(5100))
+            self.assertFalse(process.windows_listening(52000))
+
     def test_outside_wsl_windows_is_never_asked(self) -> None:
         with patch.dict("os.environ", {}, clear=True), patch("subprocess.run") as run:
             self.assertFalse(process.windows_listening(8888))

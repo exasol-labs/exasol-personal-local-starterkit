@@ -46,6 +46,9 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The autostart functions run below are stubs, but the login-entry folders are
+# never the real ones either way (tests/autostart-sandbox-guard.sh).
+export EXAKIT_LAUNCHAGENT_DIR="$WORK/LaunchAgents" EXAKIT_SYSTEMD_USER_DIR="$WORK/systemd-user"
 
 printf '\n== rollback_clear empties the stack without disabling it ==\n'
 
@@ -219,6 +222,10 @@ done
 eval "$(sed -n '/^exakit_autostart_default_on()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 _recorded=""
 manifest_get() { printf '%s\n' "$_recorded"; }
+# The login session's own tools, stubbed: nothing here may load or enable an
+# entry for real (autostart-sandbox-guard.sh).
+launchctl() { :; }
+systemctl() { :; }
 exakit_autostart_enable() { printf 'ENABLE-CALLED\n'; }
 for _want in true false; do
     _recorded="$_want"

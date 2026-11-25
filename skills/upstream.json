@@ -46,7 +46,7 @@
     },
     {
       "repo": "exasol-labs/exasol-semantic-views",
-      "ref": "v0.6.1",
+      "ref": "v0.7.1",
       "follows": "components.semantic-views.version",
       "why": "The semantic layer's own agent skills, at the release the kit installs into the database.",
       "skills": [

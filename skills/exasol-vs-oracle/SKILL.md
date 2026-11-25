@@ -15,7 +15,7 @@ skill adds only what is Oracle's own.
 An Oracle database - self-hosted, Amazon RDS for Oracle - to query from local
 Exasol without copying it. One source is one schema (owner). The Java-only thin
 driver: no Oracle Client install; `IMPORT FROM ORA` stays off. Adapter 5.0.2
-with ojdbc 23.26.3.
+with ojdbc 23.26.4.
 
 ## 2. The fields and where to find them
 
@@ -104,7 +104,7 @@ the source: show it, run it only after a yes.
 
 ## 6. TLS and the CA file
 
-- **`verify` always needs `ca` on Exasol Personal 2.4**, even for a public CA:
+- **`verify` always needs `ca` on Exasol Personal 2.4 and later**, even for a public CA:
   the database's JDBC loader has an empty Java trust store, and the connect fails
   with "the trustAnchors parameter must be non-empty". The plan warns when
   `verify` has no CA; do not connect past that warning.

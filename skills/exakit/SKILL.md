@@ -238,10 +238,13 @@ then a dashboard on Dash Server (§3) when the user wants to see it.
 
 ## 6. This machine's connection facts
 
-- The database: `127.0.0.1:8563`, with a **self-signed certificate that the kit
+- The database: the Exasol Personal deployment `starter-kit-local`, on
+  `127.0.0.1:8563`, or on the next free port when another Exasol uses it
+  (`exakit info --json` → `runtime.dsn`). `exakit status` reports on it, and
+  `exasol status` typed by hand does not. It has a **self-signed certificate that the kit
   pins**: its SHA-256 fingerprint is `runtime.tls_fingerprint` in
   `exakit info --json`. pyexasol connects with the pinned dsn
-  `127.0.0.1/<fingerprint>:8563` and `websocket_sslopt={"cert_reqs": 0}`; the
+  `127.0.0.1/<fingerprint>:<port>` and `websocket_sslopt={"cert_reqs": 0}`; the
   kit's exapump profile and MCP entries carry the same pin. A fingerprint
   mismatch (`exakit status --json` → `tls.matches: false`) is a redeploy outside
   the kit or another process on the port: show it with `exakit tls-pin`. If that

@@ -67,7 +67,8 @@
         "preflight",
         "help",
         "catalog",
-        "whats-new"
+        "whats-new",
+        "exasol"
       ]
     }
   ],
@@ -339,6 +340,29 @@
       ]
     },
     {
+      "command": "exasol",
+      "options": "<launcher arguments...>",
+      "summary": "Run the starter kit's own Exasol Personal launcher.",
+      "description": "The kit's launcher is not on PATH, so an exasol you type stays your own. exakit exasol runs the kit's one with the arguments exactly as given, and its input, output and exit code are the launcher's own: the kit folder's launcher, with the kit's own home when it runs next to your own Exasol Personal on macOS or Linux. With no launcher of the kit's yet, it says so and exits 1. An advanced user may add the alias themselves: alias exasol='exakit exasol'. The kit never writes it.",
+      "examples": [
+        "exakit exasol version",
+        "exakit exasol deployments list",
+        "exakit exasol status -d starter-kit-local"
+      ],
+      "parameters": [
+        {
+          "name": "<launcher arguments...>",
+          "description": "Passed to the launcher unchanged.",
+          "default": "none",
+          "required": false
+        }
+      ],
+      "exit_codes": {
+        "1": "the starter kit has no launcher of its own yet",
+        "2": "Windows: exakit.ps1 was run directly with bound parameters. Run it as the exakit command. Any other code is the launcher's own"
+      }
+    },
+    {
       "command": "mcp-setup",
       "options": "",
       "summary": "Connect your AI clients.",
@@ -472,23 +496,24 @@
     },
     {
       "command": "update",
-      "options": "[<component>] [--yes] [--json]",
+      "options": "[<component>...] [--yes] [--json]",
       "summary": "Apply the updates that are waiting.",
-      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. When the kit lists setup that only the installer can do and this machine has not finished it (a core task in setup/core/tasks.json, such as the SQL preprocessor framework), the downloaded installer is rerun once - none of the first install's questions again, every component kept at its installed version; with the database stopped that is deferred to exakit start && exakit update. An update that downloads a newer kit hands the rest of the run to it. When it cannot - the new exakit is missing or not executable, or on Windows, where the kit swap is usually staged for the moment the command exits - the run stops there instead: the rest is deferred (status deferred, remedy exakit update), so run exakit update again and the new kit applies it. Coming from 0.2.2, run exakit update twice. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and work only with personal, as in exakit update personal --plan; written first, or with any other component, they are refused with the form that works. --json answers one object instead, with nothing else on stdout: {\"ok\", \"status\": updated|current|deferred|blocked|failed, \"updated\", \"deferred\", \"blocked\", \"current\", \"skipped\", \"ahead\", \"failed\", \"remedy\", \"remedy_hint\", \"manifest_source\", \"check_failed\"}; every screen line goes to the log, nothing prompts, a database change is deferred unless --yes pre-answers it, and remedy names the command that applies what is left. manifest_source says which versions manifest the run compared against (fetched, cache, baked or fallback; null when EXAKIT_VERSION_POLICY is not manifest). Exit 1 when an updater failed, and also when the check could not reach the published manifest: the run then says Could not check for updates (network) with the reason and the versions it showed instead, never that everything is current, and --json answers status failed with check_failed true and a failed row whose remedy is exakit update. An unknown option or target is refused (exit 2) and records nothing.",
+      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. Name one or several components, in any order, to update only those, each once (exakit update exapump dbt-exasol). all stands alone, because exakit update with no id already updates everything. An add-on service that is running when its new version is installed (dash-server) is stopped and started again on that version, and one that is stopped stays stopped. When the kit lists setup that only the installer can do and this machine has not finished it (a core task in setup/core/tasks.json, such as the SQL preprocessor framework), the downloaded installer is rerun once - none of the first install's questions again, every component kept at its installed version; with the database stopped that is deferred to exakit start && exakit update. An update that downloads a newer kit hands the rest of the run to it. When it cannot - the new exakit is missing or not executable, or on Windows, where the kit swap is usually staged for the moment the command exits - the run stops there instead: the rest is deferred (status deferred, remedy exakit update), so run exakit update again and the new kit applies it. Coming from 0.2.2, run exakit update twice. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, updates it and starts it again in the same run, with no question, on a terminal or not. EXAKIT_CONFIRM_RUNTIME_UPDATE=0 keeps it back, and so does --json without --yes. Your data is kept. From kit 0.3.0 that change also renames the database to starter-kit-local, with the same data, port and sources. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and work only with personal, as in exakit update personal --plan; written first, or with any other component, they are refused with the form that works. --plan says what the update would do and changes nothing, and so does --backup when there is nothing to back up. --json answers one object instead, with nothing else on stdout: {\"ok\", \"status\": updated|current|deferred|blocked|failed, \"updated\", \"deferred\", \"blocked\", \"current\", \"skipped\", \"ahead\", \"failed\", \"remedy\", \"remedy_hint\", \"manifest_source\", \"check_failed\"}; every screen line goes to the log, nothing prompts, a database change is held back (deferred) unless --yes or EXAKIT_CONFIRM_RUNTIME_UPDATE=1 is given, and remedy names the command that applies what is left. manifest_source says which versions manifest the run compared against (fetched, cache, baked or fallback; null when EXAKIT_VERSION_POLICY is not manifest). Exit 1 when an updater failed, and also when the check could not reach the published manifest: the run then says Could not check for updates (network) with the reason and the versions it showed instead, never that everything is current, and --json answers status failed with check_failed true and a failed row whose remedy is exakit update. An unknown option or target, or an empty id, is refused (exit 2) and records nothing.",
       "environment": [
-        "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers yes to the database change",
+        "EXAKIT_CONFIRM_RUNTIME_UPDATE=0 keeps the database change back, and 1 (or --yes) applies it with --json",
         "EXAKIT_<COMPONENT>_VERSION pins one component by hand",
         "EXAKIT_PERSONAL_S3=0 skips Exasol's S3 for the launcher and uses the GitHub release directly (for a network that blocks the bucket)"
       ],
       "examples": [
         "exakit update",
         "exakit update --yes",
-        "exakit update --json"
+        "exakit update --json",
+        "exakit update exapump dbt-exasol"
       ],
       "parameters": [
         {
-          "name": "<component>",
-          "description": "Update a kit-owned component or add-on. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept.",
+          "name": "<component>...",
+          "description": "Update only these kit-owned components or add-ons, each once and in any order. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. An add-on that is not installed is not updated: install it with exakit marketplace <id>.",
           "default": "all",
           "required": false
         },
@@ -516,7 +541,7 @@
       "command": "repair-runtime",
       "options": "[--yes] [--json | -j]",
       "summary": "Rebuild a database that cannot start.",
-      "description": "For a deployment the launcher reports interrupted where every start fails the same way. Without --yes it asks, and without a terminal the answer is no: declining changes nothing and exits 5, so a scripted caller can tell \"not confirmed\" from \"repaired\". --json answers with one object ({\"ok\", \"status\", \"changed\", \"remedy\"}) instead of the panel.",
+      "description": "For a deployment the launcher reports interrupted where every start fails the same way. Without --yes it asks, and without a terminal the answer is no: declining changes nothing and exits 5, so a scripted caller can tell \"not confirmed\" from \"repaired\". --json answers with one object ({\"ok\", \"status\", \"changed\", \"remedy\"}) instead of the panel. A database of yours that the kit uses is rebuilt the same way, and stays yours.",
       "warning": "DESTRUCTIVE: your database is rebuilt from empty and its data is not recoverable. Bundled datasets are reloaded afterwards.",
       "environment": [
         "EXAKIT_CONFIRM_RUNTIME_REPAIR=1 pre-answers the confirmation"
@@ -529,9 +554,10 @@
       "exit_codes": {
         "0": "your database was rebuilt",
         "2": "bad input",
-        "3": "the rebuild did not finish",
+        "3": "the rebuild did not finish, or the database is running and nothing was changed (with --json, status refused)",
         "4": "not installed",
-        "5": "declined - not confirmed, nothing was changed"
+        "5": "declined - not confirmed, nothing was changed",
+        "7": "the rebuild ended with no usable database, or the database is running and nothing was changed (without --json)"
       }
     },
     {
@@ -584,7 +610,7 @@
       "options": "[<addon-id>] [--dry-run] [--yes]",
       "summary": "Remove what the kit installed.",
       "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
-      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries. Your Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove. Kit 0.2.5 and later also remove the launcher download cache, empty ~/.exasol folders and the kit's autostart entries (orphaned ones too). They remove the exasol/nano image when no container uses it (on Linux/WSL/Windows with Docker or Podman; macOS runs the database in the launcher's VM), and the kit's own MCP server processes on macOS/Linux. Exit 0 can come with a line naming something the kit could not check or remove (an engine that did not answer, or an exasol/nano image it kept): the database is gone, and the line names the command to finish by hand.",
+      "warning": "A full uninstall removes the kit's own database AND its data, the MCP configs, the skills and the binaries. A database of yours that the kit used is kept as starter-kit-local, and only the kit's logins inside it are dropped. Your own Exasol Personal launcher is kept, and the kit's own launcher stays while another deployment uses it and no launcher of yours on 2.5 or newer can open it. Your Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove. Kit 0.2.5 and later also remove the launcher download cache, empty ~/.exasol folders and the kit's autostart entries (orphaned ones too). They remove the exasol/nano image when no container uses it (on Linux/WSL/Windows with Docker or Podman; macOS runs the database in the launcher's VM), and the kit's own MCP server processes on macOS/Linux. Exit 0 can come with a line naming something the kit could not check or remove (an engine that did not answer, or an exasol/nano image it kept): the database is gone, and the line names the command to finish by hand.",
       "examples": [
         "exakit uninstall --dry-run",
         "exakit uninstall --yes",
@@ -1101,11 +1127,11 @@
     },
     {
       "name": "EXAKIT_REUSE_DB",
-      "effect": "1 adopts an existing database (default), 0 destroys it and deploys fresh - 0 removes the local deployment and all its data."
+      "effect": "Answers the one question a new install asks when Exasol Personal 2.5 is on this computer with databases of yours. A deployment name (EXAKIT_REUSE_DB=dev) picks that database: it is renamed to starter-kit-local and stays yours. new or 0 deploys the kit's own starter-kit-local and leaves yours alone. 1 picks your default database, or the only one. Unset, a terminal asks, and without one the answer is a new database."
     },
     {
       "name": "EXAKIT_DB_PORT",
-      "effect": "Alternate database port. The launcher selects and remembers the deployment's own port; exakit info shows the one in use."
+      "effect": "Does not choose the port of the kit's Exasol Personal database. The kit picks that one itself: 8563, or the next free port when another Exasol uses it. exakit info shows the one in use."
     },
     {
       "name": "EXAKIT_VERSION_POLICY",
@@ -1113,7 +1139,7 @@
     },
     {
       "name": "EXAKIT_CONFIRM_RUNTIME_UPDATE",
-      "effect": "1 pre-answers yes to stopping the database for a runtime update."
+      "effect": "0 keeps a runtime update back, so exakit update does not stop the database. 1 applies it with exakit update --json, which holds it back without it or --yes."
     },
     {
       "name": "EXAKIT_NO_UPDATE_NOTICE",
@@ -1143,11 +1169,11 @@
     },
     {
       "symptom": "Database container stays Created",
-      "remedy": "Read its error: podman inspect --format \"{{.State.Error}}\" <exasol-db-...>. The kit shows it on a failed deploy or start; a pids error is fixed by a rootful machine (see above). A deployment that never started holds no data, and the installer offers to replace it (EXAKIT_REPLACE_DB=0 keeps it)."
+      "remedy": "Read its error: podman inspect --format \"{{.State.Error}}\" <exasol-db-...>. The kit shows it on a failed deploy or start; a pids error is fixed by a rootful machine (see above). A deployment of the kit's own that never started holds no data, and the installer offers to replace it (EXAKIT_REPLACE_DB=0 keeps it)."
     },
     {
       "symptom": "Port 8563 is already in use",
-      "remedy": "Stop the other app, or re-run with EXAKIT_DB_PORT=8564."
+      "remedy": "A new install gives the kit's database the next free port by itself. For the database you have, stop the other app holding its port, then exakit start."
     },
     {
       "symptom": "Setup failed mid-way",

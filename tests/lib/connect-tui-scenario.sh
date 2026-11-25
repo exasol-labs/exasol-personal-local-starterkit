@@ -50,6 +50,9 @@ if [ -n "${TUI_FAKE_JAVA_INSTALL:-}" ]; then
     chmod +x "$_tui_fake/exasol" "$_tui_fake/exakit"
     EXAKIT_BIN_DIR="$_tui_fake"
     personal_cli() { printf '%s\n' "$_tui_fake/exasol"; }
+    # The kit's deployment folder, which every launcher call names
+    # (runtime-personal.sh, not loaded here, sets it in the kit).
+    EXAKIT_PERSONAL_DEPLOY_DIR="$_tui_fake/deployment"
     personal_auto_approve_flag() { :; }
     personal_slc_dns_prepare() { :; }
 fi

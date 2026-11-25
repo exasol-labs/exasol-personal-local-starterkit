@@ -90,12 +90,24 @@ function Remove-Personal { $script:markers.database = $true }
 # cases live in uninstall-leftovers-ps.ps1).
 function Get-PersonalLauncherLeftovers { [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() } }
 function Get-PersonalOtherDeployments { @() }
+# No launcher folder of the kit's own here: the kit's launcher is the one in its bin folder.
+function Get-PersonalSeparateBinPath { "" }
+# The launcher the kit runs (runtime-personal.ps1): none here unless a case names one.
+$script:kitCli = ""
+function Get-PersonalCli { return $script:kitCli }
 # No recorded engine: the image record is empty and step 1c asks no engine.
 function Get-PersonalEngineRecorded { return "" }
+# The deployment id (exakit-common.ps1, not extracted here): none in this sandbox.
+function Read-PersonalDeploymentId { param([string]$Dir) return "" }
 # The container-image step asks docker/podman through the bounded runner: a stub
 # that runs nothing, so no real engine is ever asked or touched (its own cases
 # live in tests/uninstall-leftovers-ps.ps1).
 function Invoke-ExakitBounded { param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8) return "" }
+# A launcher of the user's is asked its version only next to the kit's own in
+# its folder, which this sandbox has none of.
+function Get-PersonalTargetVersion { "2.5.0" }
+function Get-PersonalVersionLine { param([string]$Version = "") return "" }
+function Test-PersonalVersionOutranks { param([string]$A, [string]$B) return $false }
 function Invoke-McpOperation { param($Operation, $InputArgs) $script:markers.mcp = $Operation; return $true }
 # The real helper defers deletion to a detached process (so cmd.exe does not
 # choke on exakit.cmd being removed mid-run); here we delete synchronously so
@@ -108,6 +120,15 @@ function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in 
 function Get-ExakitPreservedComponentPaths { @() }
 function Test-ExakitComponentManaged { param([string]$Component) $true }
 function Write-ExakitPreservedComponent { param([string]$Component) }
+# The kit's own deployment is where it recorded it: no moved-folder note (that
+# case lives in tests/uninstall-leftovers-ps.ps1).
+function Get-ExakitPersonalKitMissing { return "" }
+# A database the user let the kit use (its logins dropped, SEC-01) is never
+# reached here, where everything is the kit's: its own cases live in
+# tests/uninstall-owner-user-ps.ps1.
+function Get-ExakitPersonalDbState { return "" }
+function Get-ExakitMarketplaceRoot { return $repo }
+function Invoke-ExakitPythonFile { param([string]$Path, [string[]]$Arguments = @(), [switch]$Live) [pscustomobject]@{ Code = 0; Lines = @() } }
 function Get-ExakitServiceIds { @("database") }
 function Test-ExakitAutostartRegistered { param([string]$Id) $true }
 function Unregister-ExakitAutostart { param([string]$Id) $script:markers.autostart = $Id }
@@ -257,6 +278,83 @@ Check "registry gone: exakit.cmd still removed" "no" (Ex (Join-Path $script:BinD
 Check "registry gone: exasol.exe still removed" "no" (Ex (Join-Path $script:BinDir "exasol.exe"))
 Check "registry gone: add-on launcher still swept" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd"))
 function Get-ExakitMarketplaceAddons { @([pscustomobject]@{ Id = "dash-server" }) }
+
+# --- the kit's launcher in the kit's own folder (0.3.1, never on PATH) -------
+# The cases above keep the 0.3.0 place, the bin folder. These run the kit-folder
+# one: the launcher goes with the kit, an exasol.exe of the user's in the bin
+# folder stays, and one another deployment still uses (D4) moves to the bin
+# folder when nothing is there, else stays in the kit folder.
+$kitLauncher = Join-Path (Join-Path (Join-Path $script:ExakitHome "personal") "bin") "exasol.exe"
+$binLauncher = Join-Path $script:BinDir "exasol.exe"
+$otherDeployment = Join-Path $sandbox "deployments/demo"
+$savedManifest = ${function:Get-ExakitManifestValue}
+$savedOther = ${function:Get-PersonalOtherDeployments}
+$savedInfoStep = ${function:InfoStep}
+$script:infoSteps = @()
+function Get-PersonalSeparateBinPath { $kitLauncher }
+function Get-ExakitManifestValue {
+    param([string]$Path)
+    if ($Path -eq 'components.personal.ownership_path') { return $kitLauncher }
+    if ($Path -in @('runtime.ownership','components.personal.ownership','components.exapump.ownership')) { return 'kit' }
+    return ""
+}
+function InfoStep($m) { $script:infoSteps += "$m" }
+function Seed-KitLauncher([bool]$BinTaken) {
+    Seed
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $kitLauncher) | Out-Null
+    Set-Content -LiteralPath $kitLauncher -Value "the kit's 2.5"
+    if ($BinTaken) { Set-Content -LiteralPath $binLauncher -Value "the user's own" } else { Remove-Item -LiteralPath $binLauncher -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $otherDeployment | Out-Null
+    Set-Content -LiteralPath (Join-Path $otherDeployment "deployment.json") -Value '{}'
+    $script:infoSteps = @()
+}
+# Nothing else uses it.
+Seed-KitLauncher $true
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
+Invoke-ExakitUninstallRun -DryRun
+function Info($m) {}
+Check "kit folder: the dry run lists it" "True" (($script:dryInfo -join "`n").Contains("will remove: CLI binary $kitLauncher"))
+Check "kit folder: the dry run leaves it" "yes" (Ex $kitLauncher)
+Invoke-ExakitUninstallRun
+Check "kit folder: the launcher goes with the kit" "no|no" "$(Ex $kitLauncher)|$(Ex $script:ExakitHome)"
+Check "kit folder: the user's exasol.exe in the bin folder stays" "yes|the user's own" "$(Ex $binLauncher)|$((Get-Content -Raw -LiteralPath $binLauncher).Trim())"
+# Another deployment still uses it (D4), nothing in the bin folder: moved there.
+function Get-PersonalOtherDeployments { @($otherDeployment) }
+Seed-KitLauncher $false
+Invoke-ExakitUninstallRun
+Check "kit folder, D4: said, the deployment named" "True" (($script:infoSteps -join "`n").Contains("Keeping the Exasol Personal launcher: your deployment 'demo' still uses it."))
+Check "kit folder, D4: moved to the bin folder" "yes|the kit's 2.5" "$(Ex $binLauncher)|$((Get-Content -Raw -LiteralPath $binLauncher -ErrorAction SilentlyContinue | Out-String).Trim())"
+Check "kit folder, D4: gone from the kit folder" "no" (Ex $kitLauncher)
+# A file in the bin folder: it stays, and the kit's launcher stays in the kit folder.
+Seed-KitLauncher $true
+Invoke-ExakitUninstallRun
+Check "kit folder, D4, the bin folder taken: the kit's launcher stays" "yes|the kit's 2.5" "$(Ex $kitLauncher)|$((Get-Content -Raw -LiteralPath $kitLauncher -ErrorAction SilentlyContinue | Out-String).Trim())"
+Check "kit folder, D4, the bin folder taken: the file there as it was" "yes|the user's own" "$(Ex $binLauncher)|$((Get-Content -Raw -LiteralPath $binLauncher).Trim())"
+# A launcher in the kit folder with no receipt of the kit's (a 0.3.0 receipt names
+# theirs): the kit's by its place, it goes with the kit, and theirs stays (#41).
+function Get-PersonalOtherDeployments { @() }
+function Get-ExakitManifestValue {
+    param([string]$Path)
+    if ($Path -eq 'components.personal.ownership') { return 'user' }
+    if ($Path -eq 'components.personal.ownership_path') { return $binLauncher }
+    if ($Path -in @('runtime.ownership','components.exapump.ownership')) { return 'kit' }
+    return ""
+}
+$script:kitCli = $kitLauncher
+Seed-KitLauncher $true
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
+Invoke-ExakitUninstallRun -DryRun
+function Info($m) {}
+Check "kit folder, by its place: the dry run lists it, never theirs" "True|False" ("{0}|{1}" -f (($script:dryInfo -join "`n").Contains("will remove: CLI binary $kitLauncher")), (($script:dryInfo -join "`n").Contains("will remove: CLI binary $binLauncher")))
+Invoke-ExakitUninstallRun
+Check "kit folder, by its place: it goes, the user's exasol.exe stays" "no|yes|the user's own" "$(Ex $kitLauncher)|$(Ex $binLauncher)|$((Get-Content -Raw -LiteralPath $binLauncher).Trim())"
+$script:kitCli = ""
+Set-Item -Path function:Get-ExakitManifestValue -Value $savedManifest
+Set-Item -Path function:Get-PersonalOtherDeployments -Value $savedOther
+Set-Item -Path function:InfoStep -Value $savedInfoStep
+function Get-PersonalSeparateBinPath { "" }
 
 # --- the user's work stays: notebooks, MLflow runs, dashboards (audit DAY-01) ---
 Seed

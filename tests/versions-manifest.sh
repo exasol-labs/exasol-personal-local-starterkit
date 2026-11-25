@@ -761,13 +761,14 @@ lacks "no row is stuck on inspect" "inspect" "$uc_table"
 # something is wrong without saying what would fix it.
 check "a waiting update names the advertised version" \
     "personal 2.2.0 2.3.0 available" "$(row "$uc_table" personal)"
-# The whole ahead row, squeezed: the status is exactly "none". Not "yours is
+# The whole ahead row, squeezed: the status is "ahead", the twin of "current",
+# not a bare "none" that read as a missing value (#46). Not "yours is
 # newer than tested", which apologised for the install and made the tested set
 # sound abandoned; not the tagged number either, which invites the reader to go
 # looking for a way back to it. And no severity — a severity rates the advertised
 # version, and there is nothing to recommend to someone already past it.
-check "an install ahead of the tagged set says only none" \
-    "exapump 0.13.0 none" "$(row "$uc_table" exapump)"
+check "an install ahead of the tagged set says ahead" \
+    "exapump 0.13.0 ahead (manifest 2026-07-29)" "$(row "$uc_table" exapump)"
 lacks "no version cell is annotated (older)" "(older)" "$uc_table"
 lacks "and nothing apologises for the install" "newer than tested" "$uc_table"
 lacks "no downgrade is offered" "exakit update exapump" "$uc_table"
@@ -850,8 +851,8 @@ update_out="$( EXAKIT_HOME="$UC"
 lacks "update prints no comparison table either" "Component update check" "$update_out"
 has "update states its work plan" "mcp 1.10.1 -> $V_IMAGE" "$update_out"
 has "update applies the light components" "APPLIED mcp" "$update_out"
-lacks "an unattended update never applies the runtime by itself" "APPLIED runtime" "$update_out"
-has "update explains the deferred runtime" "needs the database stopped" "$update_out"
+has "an unattended update applies the runtime too, with no question" "APPLIED runtime" "$update_out"
+has "update says the database stops first" "needs the database stopped" "$update_out"
 
 echo "the runtime update is offered inline, not handed back as homework:"
 # The old flow refused the heavy part outright — "not part of a routine update",
@@ -881,7 +882,8 @@ offer_run() ( # offer_run <answer> [statements]
 )
 
 offer_yes="$(offer_run y)"
-has "a terminal is asked before anything is stopped" "Stop the database and update the runtime now?" "$offer_yes"
+lacks "a terminal is not asked either" "Stop the database and update the runtime now?" "$offer_yes"
+lacks "and shows no [y/N]" "[y/N]" "$offer_yes"
 has "the question names the outage" "needs the database stopped" "$offer_yes"
 has "the question promises the restart" "started again if it ends up down" "$offer_yes"
 has "the question says the data survives" "Your data is kept" "$offer_yes"
@@ -941,24 +943,15 @@ lacks "and no override can buy a downgrade" "APPLIED" "$choke_override"
 lacks "and demands no second command" "exakit update runtime" "$offer_yes"
 has "while the light components still run" "APPLIED mcp" "$offer_yes"
 
+# Nothing is asked, so whatever a terminal would type is never read.
 offer_no="$(offer_run n)"
-lacks "no stops nothing" "APPLIED runtime" "$offer_no"
-has "no says so plainly" "Nothing was stopped." "$offer_no"
-has "no keeps the exact command for later" "Apply it when convenient:  exakit update" "$offer_no"
-has "and points at the full picture" "including the deferred runtime change" "$offer_no"
-has "the light components are applied either way" "APPLIED mcp" "$offer_no"
+has "an n on the terminal is never read: the runtime is applied" "APPLIED runtime" "$offer_no"
+lacks "and nothing is deferred" "Nothing was stopped." "$offer_no"
 
-# Enter (empty answer) is not consent: the default is no.
-offer_default="$(offer_run '')"
-lacks "an empty answer stops nothing" "APPLIED runtime" "$offer_default"
-has "the prompt shows no as the default" "[y/N]" "$offer_default"
-
-# The safety case. A prompt nobody can answer must never become a stopped
-# database, so the unattended run above (update_out, with real stdin redirected
-# from /dev/null) must not even print the question.
+# The unattended run above (update_out, stdin from /dev/null) is not asked
+# and not deferred: the runtime update is the point of the update.
 lacks "an unattended run is never asked" "Stop the database and update the runtime now?" "$update_out"
-has "an unattended run defers as it always did" "not part of a routine update" "$update_out"
-has "and names the opt-in for scripts" "exakit update --yes" "$update_out"
+lacks "an unattended run is not deferred" "not part of a routine update" "$update_out"
 
 offer_flag="$( EXAKIT_HOME="$UC"
     EXAKIT_MANIFEST="$UC/manifest.json"
@@ -1659,7 +1652,7 @@ pinned_row="$( EXAKIT_HOME="$UC"
     _EXAKIT_VERSIONS_DOC=""; _EXAKIT_VERSIONS_SOURCE=""
     exakit_print_version_table 2>&1 )"
 # Asserted on pyexasol, not exapump: the fixture's exapump is installed AHEAD of
-# every advertised set, and an ahead row says only "none" — so the number it is
+# every advertised set, and an ahead row says only "ahead" — so the number it is
 # ahead of is not on the screen to match, whatever policy produced it. pyexasol is
 # not installed at all, so its row names the version the policy resolved.
 has "pinned policy offers the built-in fallback" "$EXAKIT_PYEXASOL_VERSION_FALLBACK available" "$pinned_row"
@@ -2736,7 +2729,7 @@ if command -v pwsh >/dev/null 2>&1; then
     has "powershell: a waiting update names the version" \
         "personal 2.2.0 2.3.0 available" "$(row "$ps_table" personal)"
     check "powershell: older advertised version" \
-        "exapump 0.13.0 none" "$(row "$ps_table" exapump)"
+        "exapump 0.13.0 ahead (manifest 2026-07-29)" "$(row "$ps_table" exapump)"
     has "powershell: critical severity" "critical" "$ps_table"
     has "powershell: maintainer note" "0.13.0 mis-detects CSV headers" "$ps_table"
     has "powershell: repair status for a missing component" \
@@ -2759,7 +2752,7 @@ if command -v pwsh >/dev/null 2>&1; then
         VM_ROOT="$ROOT" pwsh -NoProfile -Command '
         . (Join-Path $env:VM_ROOT "setup/lib/exakit-common.ps1")
         # The offer helpers live in the CLI; load it with a harmless command.
-        . (Join-Path $env:VM_ROOT "setup/exakit.ps1") -Command "help" *> $null
+        . (Join-Path $env:VM_ROOT "setup/exakit.ps1") "help" *> $null
         $out = @()
         $out += (Get-ExakitRuntimeUpdatePreanswer -AssumeYes $true)
         $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "1"
@@ -2778,7 +2771,7 @@ if command -v pwsh >/dev/null 2>&1; then
     check "powershell(runtime_offer_decisions)" "yes yes no unanswered 2026 True" "$ps_offer"
     ps_explain="$(VM_ROOT="$ROOT" pwsh -NoProfile -Command '
         . (Join-Path $env:VM_ROOT "setup/lib/exakit-common.ps1")
-        . (Join-Path $env:VM_ROOT "setup/exakit.ps1") -Command "help" *> $null
+        . (Join-Path $env:VM_ROOT "setup/exakit.ps1") "help" *> $null
         Write-ExakitRuntimeUpdateExplanation -Actual "personal" -Installed "2.2.0" -Advertised "2.3.0"
     ' 2>&1 | tr -d '\r')"
     has "powershell: the offer names the outage" "needs the database stopped" "$ps_explain"
@@ -2859,7 +2852,7 @@ $env:EXAKIT_NOTICE_STATE = "$env:NT/cache/notice-state.json"
 $env:EXAKIT_NOTICE_WAIT = "60"
 . "$env:VM_ROOT/setup/lib/exakit-common.ps1"
 # The component readers live in the CLI; load it with a harmless command.
-. "$env:VM_ROOT/setup/exakit.ps1" -Command "help" *> $null
+. "$env:VM_ROOT/setup/exakit.ps1" "help" *> $null
 Show-ExakitUpdateNotice
 PSEOF
         case "$NOTICE_PTY" in

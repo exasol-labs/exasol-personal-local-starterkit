@@ -28,7 +28,7 @@ from pathlib import Path, PurePosixPath
 import kit_telemetry
 import preprocessor_modules
 from runtime import cmd_file_bytes, AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url, probe
-from runtime import glibc_floor_reason
+from runtime import glibc_floor_reason, uninstall_keeps_database
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -578,7 +578,10 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
         raise AddonFailure("JSON Tables is not kit-owned; it will not be removed")
     venv, home, launcher = paths(ctx)
     targets = [path for path in (venv, home, launcher) if path.exists()]
+    keep = uninstall_keeps_database()   # a full uninstall over a database the user let the kit use: its module stays
     if dry_run:
+        if keep:
+            return targets
         # The module retirement below changes the database: the preview names it.
         module = ["JSON queries stop working in every session (the SQL preprocessor's JSON Tables module is switched "
                   "off); your wrapper schemas and their data stay"] if json_sql_active(ctx) else []
@@ -587,7 +590,7 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
     # the user's data and stay. A registered module whose retire failed leaves its rule live, so nothing is removed and
     # it is said.
     registered = json_sql_active(ctx)
-    status, message = preprocessor_modules.retire(ctx, ID)
+    status, message = ("ok", "") if keep else preprocessor_modules.retire(ctx, ID)
     if status == "failed" and registered:
         raise AddonFailure(f"{message}; nothing was removed. Retry with: exakit uninstall {ID}")
     for path in targets:

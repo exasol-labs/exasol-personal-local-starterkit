@@ -39,6 +39,28 @@ def _command(pid: int) -> str:
 
 _WINDOWS_LISTENING: set[int] | None = None
 
+# The foreign address netstat prints for a listening socket: no peer yet. A connection always has a real one there.
+_NO_PEER = ("0.0.0.0:0", "[::]:0", "*:*")
+
+
+def netstat_listeners(text: str) -> dict[int, set[int]]:
+    """The listening TCP sockets in Windows ``netstat -ano -p TCP`` output, as {port: {pid}}. The state column is
+    printed in the Windows display language (LISTENING, ABHÖREN, ÉCOUTE, ...), so it is never read: a listener is
+    the TCP row whose foreign address has no peer (WIN-02). Matching the English word saw no listener at all on a
+    German Windows, so a login-started dash-server was never stopped by an update or by exakit stop."""
+    found: dict[int, set[int]] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or parts[0].upper() != "TCP" or parts[2] not in _NO_PEER:
+            continue
+        tail = parts[1].rsplit(":", 1)[-1]
+        if not tail.isdigit():
+            continue
+        pids = found.setdefault(int(tail), set())
+        if len(parts) >= 5 and parts[-1].isdigit():
+            pids.add(int(parts[-1]))
+    return found
+
 
 def windows_listening(port: int) -> bool:
     """Inside WSL, is a WINDOWS program listening on this port? Windows' localhost is where the printed URL is
@@ -52,16 +74,12 @@ def windows_listening(port: int) -> bool:
         netstat = shutil.which("netstat.exe")
         if netstat:
             try:
+                # errors="replace": the state word comes in the console code page (ABHÖREN), not UTF-8.
                 out = subprocess.run([netstat, "-ano", "-p", "TCP"], capture_output=True, text=True,
-                                     timeout=15, check=False).stdout
+                                     errors="replace", timeout=15, check=False).stdout
             except (OSError, subprocess.TimeoutExpired):
                 out = ""
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) >= 4 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
-                    tail = parts[1].rsplit(":", 1)[-1]
-                    if tail.isdigit():
-                        _WINDOWS_LISTENING.add(int(tail))
+            _WINDOWS_LISTENING = set(netstat_listeners(out or ""))
     return port in _WINDOWS_LISTENING
 
 
@@ -69,9 +87,13 @@ def listener_pids(port: int) -> set[int]:
     if not 1 <= port <= 65535:
         raise AddonFailure(f"invalid port: {port}")
     if sys.platform == "win32":
-        args = ["netstat", "-ano", "-p", "TCP"]
-        pattern = re.compile(r"^\s*TCP\s+\S+:" + str(port) + r"\s+\S+\s+LISTENING\s+(\d+)\s*$", re.I)
-    elif sys.platform == "darwin" and subprocess.run(["which", "lsof"], capture_output=True).returncode == 0:
+        try:
+            result = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                    errors="replace", timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return set()
+        return netstat_listeners(result.stdout or "").get(port, set())
+    if sys.platform == "darwin" and subprocess.run(["which", "lsof"], capture_output=True).returncode == 0:
         args = ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
         pattern = re.compile(r"^\s*(\d+)\s*$")
     else:

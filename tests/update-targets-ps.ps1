@@ -24,12 +24,21 @@ $updateLock = Join-Path $script:ExakitHome ".update.lock"
 $script:ExakitUpdateLockHeld = $false
 function Write-ExakitLog { param([string]$Level, [string]$Message) }
 
-$known = @("exakit", "exapump", "uv", "mcp", "pyexasol", "dbt-exasol", "dash-server")
 function Assert-ExakitInstalled { }
 function Initialize-ExakitLogging { }
 function Confirm-ExakitTlsPinned { }   # the TLS pin (SEC-14) has its own suite: tls-pin-ps.ps1
-function Test-ExakitUpdateTarget([string]$Target) { return ($Target -eq "all" -or $known -contains $Target) }
-function Get-ExakitUpdateTargets([string]$Target) { if ($Target -eq "all") { return $known } return @($Target) }
+# Which words are update targets is the REAL answer (setup/lib/exakit-common.ps1): a stand-in list here once
+# carried uv while the real predicate did not, which hid that `exakit update uv` - the status remedy for uv - was
+# refused on Windows. Only the add-on registry under it is stood in.
+$commonAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$tokens, [ref]$errors)
+foreach ($name in @("Test-ExakitUpdateTarget", "Get-ExakitUpdateTargets")) {
+    $definition = $commonAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    Invoke-Expression $definition.Extent.Text
+}
+function Get-ExakitMarketplaceAddon([string]$Id) { if (@("dbt-exasol", "dash-server") -contains $Id) { return [pscustomobject]@{ Id = $Id } } return $null }
+function Get-ExakitMarketplaceInstalledAddons { return @("dbt-exasol", "dash-server") }
+function Get-ExakitSkillsDir { return "skills" }
+function Fail([string]$Message) { throw "FAIL: $Message" }
 function Deny-ExakitInput([string]$Message) { throw "DENIED: $Message" }
 function Invoke-ExakitUpdateRun { param([string]$Target, $Components, [bool]$AssumeYes)
     $script:ran = "target=$Target|components=$(@($Components) -join ',')" }
@@ -108,6 +117,53 @@ Check "an unknown second id is named" "True" ((Run "exapump" @("nonsense")) -mat
 Check "'all' beside other ids is refused" "True" ((Run "exapump" @("all")) -match "cannot be named beside other components")
 Check "ids after 'all' are refused" "True" ((Run "all" @("exapump")) -match "updates everything")
 
+Write-Host "== the dispatcher's update arm hands every id on (#47) =="
+# The real "update" arm of the command switch in setup/exakit.ps1, run as written with Invoke-CmdUpdate stood in.
+# The #47 bug was in that arm: it passed the first id and dropped the rest, and a test that called Invoke-CmdUpdate
+# directly stayed green with it restored (QAT-02).
+$updateSwitch = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.SwitchStatementAst] -and
+    @($node.Clauses | Where-Object { "$($_.Item1.Value)" -eq "update" }).Count -eq 1 -and
+    @($node.Clauses | Where-Object { "$($_.Item1.Value)" -eq "info" }).Count -eq 1 }, $true)
+$updateArmText = (@($updateSwitch.Clauses | Where-Object { "$($_.Item1.Value)" -eq "update" })[0].Item2.Extent.Text).Trim()
+$updateArmBlock = [scriptblock]::Create($updateArmText.Substring(1, $updateArmText.Length - 2))   # the arm's body, not its braces
+$knownOptionsAst = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq "Assert-ExakitKnownOptions" }, $true)
+Invoke-Expression $knownOptionsAst.Extent.Text
+function Invoke-UpdateArm([string[]]$Words) {
+    $RestArgs = @($Words)
+    function Invoke-CmdUpdate { param([string]$Target = "all", [string[]]$More = @(), [bool]$AssumeYes = $false, [bool]$Json = $false)
+        $script:armCall = "target=$Target|bound=$($PSBoundParameters.ContainsKey('Target'))|more=$(@($More).Count):$(@($More) -join ',')|yes=$AssumeYes|json=$Json" }
+    $script:armCall = ""
+    try { & $updateArmBlock } catch { return "$($_.Exception.Message)" }
+    return $script:armCall
+}
+Check "two ids: both reach Invoke-CmdUpdate" "target=exapump|bound=True|more=1:dbt-exasol|yes=False|json=False" (Invoke-UpdateArm @("exapump", "dbt-exasol"))
+Check "three ids with options anywhere" "target=runtime|bound=True|more=2:dash-server,uv|yes=True|json=True" (Invoke-UpdateArm @("--yes", "runtime", "dash-server", "--json", "uv"))
+Check "no id: the default target, not an empty one" "target=all|bound=False|more=0:|yes=False|json=False" (Invoke-UpdateArm @())
+Check "an empty second id is handed on, so it is refused" "target=dash-server|bound=True|more=1:|yes=False|json=False" (Invoke-UpdateArm @("dash-server", ""))
+Check "an empty first id is handed on as an explicit target" "target=|bound=True|more=0:|yes=False|json=False" (Invoke-UpdateArm @(""))
+Check "the staged-upgrade flags are refused on Windows" "True" ((Invoke-UpdateArm @("personal", "--plan")) -like "DENIED: --plan is part of the staged major-upgrade route*")
+# A "tell me" flag never changes anything: refused before the update runs at
+# all, on every arm of the personal row (the sh twin says what it would do
+# instead, review H1). Nothing reaches Invoke-CmdUpdate.
+foreach ($tellMe in @("--plan", "--backup")) {
+    $refused = Invoke-UpdateArm @("personal", $tellMe, "--yes")
+    Check "personal $tellMe --yes: refused before anything runs, the update never called" "True|" "$($refused -like "DENIED: $tellMe is part of the staged major-upgrade route*")|$($script:armCall)"
+}
+
+Write-Host "== every target the shell takes, in any order (#47) =="
+Check "uv is an update target (the status remedy for uv)" "target=uv|components=" (Run "uv" @())
+Check "uv beside another id" "target=exapump uv|components=exapump,uv" (Run "exapump" @("uv"))
+Check "runtime first, then an add-on: both are updated" "target=runtime dash-server|components=runtime,dash-server" (Run "runtime" @("dash-server"))
+Check "personal first, then an id: both are updated" "target=personal exapump|components=personal,exapump" (Run "personal" @("exapump"))
+Check "database first: the runtime and exapump, the runtime once" "target=database exapump db|components=runtime,exapump" (Run "database" @("exapump", "db"))
+Check "no id at all is everything" "target=all|components=" $(try { $script:ran = ""; Invoke-CmdUpdate; $script:ran } catch { "$($_.Exception.Message)" })
+
+Write-Host "== an empty id is refused, never read as everything =="
+$emptyText = "is empty. Name each component to update, or run 'exakit update' alone to update everything."
+Check "an empty second id is refused, naming it" "DENIED: Component id 2 of 'exakit update' $emptyText" (Run "dash-server" @(""))
+Check "an empty first id is refused, naming it" "DENIED: Component id 1 of 'exakit update' $emptyText" (Run "" @("dash-server"))
+Check "an empty id alone is refused" "DENIED: Component id 1 of 'exakit update' $emptyText" (Run "" @())
+
 Write-Host "== the kit moves first, then the new kit finishes the run (#45) =="
 # The real Invoke-ExakitUpdateRun with the updaters stood in: after the kit's own update this process holds the
 # old code and manifest, so it updates nothing else and hands the run to the new kit (core-setup.ps1's
@@ -143,8 +199,11 @@ function Info([string]$Message) { [void]$script:log.Add("info:$Message") }
 function Ok([string]$Message) { [void]$script:log.Add("ok:$Message") }
 function Warn2([string]$Message) { [void]$script:log.Add("warn:$Message") }
 $script:notes = New-Object System.Collections.ArrayList
-function Add-ExakitUpdateNote { param([string]$Component, [string]$Outcome, [string]$From, [string]$To, [string]$Remedy)
-    [void]$script:notes.Add("$Component|$Outcome|$Remedy") }
+$script:noteErrors = New-Object System.Collections.ArrayList
+function Add-ExakitUpdateNote { param([string]$Component, [string]$Outcome, [string]$From, [string]$To, [string]$Remedy,
+        [string]$ErrorText = "", [string]$Hint = "")
+    [void]$script:notes.Add("$Component|$Outcome|$Remedy")
+    if ($ErrorText -or $Hint) { [void]$script:noteErrors.Add("$Component|$ErrorText|$Hint") } }
 function Update-ExakitSelf { [void]$script:log.Add("this-process:exakit"); $script:kit = "0.2.3"; $script:ExakitKitSwapped = $true }
 function Get-ExakitMarketplaceAddon([string]$Id) { return [pscustomobject]@{ UpdateFn = "Update-StandIn-$Id" } }
 function Update-StandIn-dbt-exasol { [void]$script:log.Add("this-process:dbt-exasol") }
@@ -200,6 +259,74 @@ Reset-Run
 Invoke-ExakitUpdateRun -Target "exasol-scheduler dbt-exasol" -Components @("exasol-scheduler", "dbt-exasol")
 Check "a run that updated something says it finished, and what" "ok:Update finished - updated: exasol-scheduler, dbt-exasol" `
     (@($script:log | Where-Object { $_ -like "ok:Update finished*" }) -join "|")
+
+Write-Host "== a named add-on that is not installed: the remedy is the install =="
+# Its module refused with "not kit-owned; its owner manages updates" and the failed row's remedy was the same
+# command, so an agent obeying remedy looped. No kit receipt and nothing of the user's: the module never runs,
+# and the screen, the row and the closing line name the install. Twin of the same checks in
+# update-command-surface.sh.
+$ownKeyAst = $cmpAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq "Get-ExakitOwnershipKey" }, $true)
+Invoke-Expression $ownKeyAst.Extent.Text
+function Test-ExakitAddonSystemPresent([string]$Id) { return $false }
+function Get-ExakitComponentCurrent([string]$Name) { if ($Name -eq "exakit") { return $script:kit } if ($Name -eq "dbt-exasol") { return "" } return "1.0" }
+Reset-Run
+$script:noteErrors.Clear()
+$script:ExakitUpdateJson = $true
+Invoke-ExakitUpdateRun -Target "exasol-scheduler dbt-exasol" -Components @("exasol-scheduler", "dbt-exasol")
+$script:ExakitUpdateJson = $false
+Check "its module never runs, the others do" "this-process:exasol-scheduler" (@($script:log | Where-Object { $_ -like "this-process:*" }) -join "|")
+Check "it says it is not installed and names the install" "warn:dbt-exasol is not installed, so there is nothing to update. Install it with: exakit marketplace dbt-exasol" `
+    (@($script:log | Where-Object { $_ -like "warn:dbt-exasol*" }) -join "|")
+Check "the row is failed, its remedy the install, its reason not installed" `
+    "dbt-exasol|failed|exakit marketplace dbt-exasol;dbt-exasol|dbt-exasol is not installed, so there is nothing to update.|Install it with: exakit marketplace dbt-exasol" `
+    ((@($script:notes | Where-Object { $_ -like "dbt-exasol|*" }) + @($script:noteErrors)) -join ";")
+# On the screen the run ends with exit 1, so the closing line is read from a child process of the same engine.
+$missingChild = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-missing-" + [guid]::NewGuid().ToString("N") + ".ps1")
+Set-Content -LiteralPath $missingChild -Encoding ASCII -Value @'
+param([string]$Repo)
+$ErrorActionPreference = "Stop"
+$t = $null; $e = $null
+$cliAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Repo "setup/exakit.ps1"), [ref]$t, [ref]$e)
+$libAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Repo "setup/lib/exakit-common.ps1"), [ref]$t, [ref]$e)
+foreach ($pair in @(@($cliAst, "Invoke-ExakitUpdateRun"), @($libAst, "Get-ExakitOwnershipKey"), @($libAst, "Get-ExakitVersionPlain"), @($libAst, "Test-ExakitVersionSame"))) {
+    $wanted = $pair[1]
+    $node = $pair[0].Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $wanted }, $true)
+    Invoke-Expression $node.Extent.Text
+}
+$script:VersionPolicy = "pinned"
+function Write-ExakitVersionsSourceLine { }
+function Add-ExakitUpdateNote { }
+function Info([string]$Message) { Write-Host "info: $Message" }
+function Ok([string]$Message) { Write-Host "ok: $Message" }
+function Warn2([string]$Message) { Write-Host "warn: $Message" }
+function Get-ExakitActualTarget([string]$Name) { return $Name }
+function Get-ExakitComponentCurrent([string]$Name) { if ($Name -eq "dbt-exasol") { return "" } return "1.0" }
+function Get-ExakitComponentAvailable([string]$Name) { return "2.0" }
+function Get-ExakitManifestValue([string]$Key) { return $null }
+function Test-ExakitComponentManaged { return $true }
+function Test-ExakitComponentSupported { return $true }
+function Test-ExakitComponentAhead { return $false }
+function Test-ExakitComponentHeavy { return $false }
+function Test-ExakitAddonNeedsUpdate { return $false }
+function Test-ExakitAddonSystemPresent { return $false }
+function Get-ExakitComponentMinKit { return "" }
+function Get-ExakitMarketplaceAddon([string]$Id) { return [pscustomobject]@{ UpdateFn = "Update-StandIn" } }
+function Update-StandIn { Write-Host "module ran" }
+$script:ExakitUpdateJson = $false
+Invoke-ExakitUpdateRun -Target "exasol-scheduler dbt-exasol" -Components @("exasol-scheduler", "dbt-exasol")
+exit 0
+'@
+$missingEngine = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$previousPref = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$missingOut = @(& $missingEngine -NoProfile -ExecutionPolicy Bypass -File $missingChild -Repo $repo 2>&1 | ForEach-Object { "$_" })
+$missingRc = $LASTEXITCODE
+$ErrorActionPreference = $previousPref
+Remove-Item -Force -LiteralPath $missingChild -ErrorAction SilentlyContinue
+Check "on the screen the closing line names the install, not a retry, and the run exits 1" `
+    "1|warn: Update finished with problems (updated: exasol-scheduler). Install what is missing with: exakit marketplace dbt-exasol|1" `
+    ("$missingRc|" + (@($missingOut | Where-Object { $_ -like "*Update finished*" }) -join ";") + "|" + @($missingOut | Where-Object { $_ -eq "module ran" }).Count)
+function Get-ExakitComponentCurrent([string]$Name) { if ($Name -eq "exakit") { return $script:kit } return "1.0" }
 
 Write-Host "== a component the kit did not install is updated through its owner, or kept =="
 # Product owner, 0.3.0: a uv or pyexasol the kit did not install is updated THROUGH THE TOOL THAT OWNS IT (winget,

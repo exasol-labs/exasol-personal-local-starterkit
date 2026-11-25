@@ -12,6 +12,10 @@
     "  dispatcher        the script that holds Exasol's one preprocessor slot",
     "  schemas, role     the objects release.sql creates, and the only ones the",
     "                    kit may ever drop (recovering its own interrupted install)",
+    "  role_grants       release.sql's GRANT statements, in its order. With the",
+    "                    ownership of the schemas they are all the role is, so",
+    "                    they put it back when only the role is gone (check them",
+    "                    against release.sql when the pin changes)",
     "  required_scripts  checked after install and on every installer rerun",
     "  seed_scripts      the scripts release.sql's own CONFIG rows point at; a",
     "                    rule naming anything else is someone's configuration",
@@ -29,6 +33,12 @@
     "PREPROC_RT"
   ],
   "role": "PREPROC_ADMIN",
+  "role_grants": [
+    "GRANT EXECUTE ON SCHEMA PREPROC_RT TO PUBLIC",
+    "GRANT SELECT ON SCHEMA PREPROC_RT TO PUBLIC",
+    "GRANT SELECT ANY DICTIONARY TO PREPROC_ADMIN",
+    "GRANT CREATE SCRIPT TO PREPROC_ADMIN"
+  ],
   "required_scripts": [
     "PREPROC_RT.MASTER",
     "PREPROC_RT.CONTROL_SUGAR_V1",

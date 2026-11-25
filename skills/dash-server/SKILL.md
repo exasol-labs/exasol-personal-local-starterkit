@@ -42,8 +42,11 @@ and `status --json` carries the whole URL ready to hand to the user.
 Move it deliberately with:
 
 ```bash
-EXAKIT_DASH_SERVER_PORT=<port> exakit update
+EXAKIT_DASH_SERVER_PORT=<port> exakit update dash-server
 ```
+
+A running server is stopped on its old port and started on the new one, even
+at the same version, and the AI clients are pointed at the new address.
 
 ## The control plane is a registered MCP server
 
@@ -96,7 +99,7 @@ the launcher at run time from the kit's credential files; they are never baked
 into generated files, and you must never print them. Without the read-only user
 (a failed MCP step) Dash Server starts with no database connection and says so;
 it is never given the administrator's password. Fix: `exakit mcp-setup`, then
-`exakit stop dash-server && exakit start dash-server`.
+`exakit stop dash-server` and `exakit start dash-server`, as two commands.
 
 The user's dashboards live in `~/.exasol-starter-kit/dash-server/instance`.
 `exakit uninstall dash-server` removes the server and keeps them, and so does a
@@ -128,9 +131,12 @@ Work these in order:
    the port", and those need different fixes.
 2. **Port held by a foreign process.** The kit will not fight for it and will
    not touch a process it does not own. Either stop that process, or move
-   dash-server: `EXAKIT_DASH_SERVER_PORT=<port> exakit update`.
+   dash-server: `EXAKIT_DASH_SERVER_PORT=<port> exakit update dash-server`.
 3. **`exakit logs dash-server`** — the server's own log.
-4. **`exakit update`** — doubles as the repair command.
+4. **`exakit stop dash-server`, then `exakit start dash-server`** — restarts
+   this server on the version that is installed. `exakit update dash-server`
+   updates it, and restarts a running server, only when a newer version is
+   advertised. At the same version it changes nothing.
 
 ### The specific failure worth knowing
 
@@ -142,10 +148,13 @@ templates it never re-read.
 Symptom: agents can drive it fine over MCP, the user sees an error page. Fix:
 
 ```bash
-exakit stop dash-server && exakit start dash-server   # restart just this one; bare exakit stop/start would cycle the database too
-# or
-exakit update          # the repair path
+exakit stop dash-server    # restart just this one: bare exakit stop/start would cycle the database too
+exakit start dash-server   # two commands, because Windows PowerShell 5.1 does not accept &&
 ```
+
+`exakit update dash-server` installs a newer advertised version and restarts a
+running server on it. At the same version it changes nothing, so it is not the
+fix for a stale process.
 
 If the control plane answers but the page does not, say so plainly rather than
 reporting the add-on as healthy — the user's half is the broken half.

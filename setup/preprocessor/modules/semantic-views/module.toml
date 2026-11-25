@@ -20,7 +20,7 @@ value = "PUBLIC"
 
 [source]
 repo = "exasol-labs/exasol-semantic-views"
-ref = "v0.6.1"
+ref = "v0.7.1"
 
 [[objects]]
 type = "LUA SCALAR SCRIPT"

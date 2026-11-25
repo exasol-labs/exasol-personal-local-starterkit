@@ -306,8 +306,8 @@ exakit_print_version_table
 " | grep -c '^  |.* available *|')"
 check "version_table(rows_waiting)" "5" "$update_action"
 
-# The runtime is the only heavy target, and a routine `exakit update` must
-# announce it instead of stopping the database on its own.
+# The runtime is the only heavy target. A routine `exakit update` names the
+# restart first, then applies it with no question (0.3.1).
 update_plan="$(bash -c "
 EXAKIT_VERSION_POLICY=pinned
 . '$ROOT/setup/lib/common.sh'
@@ -333,10 +333,10 @@ exakit_update_component() { printf 'APPLIED %s\n' \"\$1\"; }
 exakit_update all
 " 2>&1)"
 if printf '%s' "$update_plan" | grep -q 'needs the database stopped' && \
-   ! printf '%s' "$update_plan" | grep -q 'APPLIED runtime'; then
-    check "update_all(defers_heavy)" "yes" "yes"
+   printf '%s' "$update_plan" | grep -q 'APPLIED runtime'; then
+    check "update_all(announces_then_applies_heavy)" "yes" "yes"
 else
-    check "update_all(defers_heavy)" "yes" "no"
+    check "update_all(announces_then_applies_heavy)" "yes" "no"
 fi
 
 personal_major_plan="$(bash -c "
@@ -1286,18 +1286,19 @@ check "step_state(launcher missing)" "missing" \
 check "begin_step(launcher missing)" "rerun" \
     "$(_sv_step "$_sv_home" launcher "$_sv_launcher_setup")"
 # ...and with the binary back, the completed step must still be skipped.
-printf '#!/bin/sh\nexit 0\n' > "$_sv_home/bin/exasol"
-chmod +x "$_sv_home/bin/exasol"
+mkdir -p "$_sv_home/personal/bin"
+printf '#!/bin/sh\nexit 0\n' > "$_sv_home/personal/bin/exasol"
+chmod +x "$_sv_home/personal/bin/exasol"
 check "step_state(launcher present)" "present" \
     "$(_sv_state "$_sv_home" launcher "$_sv_launcher_setup")"
 check "begin_step(launcher present)" "skip" \
     "$(_sv_step "$_sv_home" launcher "$_sv_launcher_setup")"
 rm -rf "$_sv_home"
 
-# The PATH fallback — an `exasol` reachable on PATH with no kit-managed binary —
-# is the ONLY branch that can turn a needed re-run into a skip, and the cases
-# above never reach it: they all run with a PATH scrubbed of every launcher, so
-# deleting the branch outright left the suite green. These cases pin it.
+# A launcher on PATH is the user's own: the kit runs only its own launcher, from
+# the kit folder (0.3.1), so an `exasol` reachable on PATH never turns a needed
+# re-run into a skip. The cases above all run with a PATH scrubbed of every
+# launcher, so they could not tell. These cases pin it.
 #
 # Their PATH is built from scratch rather than scrubbed, for two reasons. A stub
 # launcher in a directory of our own makes the verdict depend on the test and not
@@ -1322,11 +1323,10 @@ printf '{"steps_completed": ["launcher"], "components": {}}\n' > "$_sv_home/mani
 printf '#!/bin/sh\nexit 0\n' > "$_sv_home/onpath/exasol"
 chmod +x "$_sv_home/onpath/exasol"
 _sv_onpath_setup="PATH='$_sv_home/onpath:$_SV_PY_DIR:/usr/bin:/bin'; EXAKIT_UV_BIN='$_SV_UV_BIN'; . '$ROOT/setup/lib/detect.sh'; . '$ROOT/setup/lib/runtime-personal.sh'"
-# No kit-managed binary, one on PATH: personal_cli() resolves the PATH one, so
-# the step is genuinely satisfied and must be skipped.
-check "step_state(launcher on PATH only)" "present" \
+# No kit launcher, one on PATH: it is not the kit's, so the step runs again.
+check "step_state(launcher on PATH only)" "missing" \
     "$(_sv_state "$_sv_home" launcher "$_sv_onpath_setup")"
-check "begin_step(launcher on PATH only)" "skip" \
+check "begin_step(launcher on PATH only)" "rerun" \
     "$(_sv_step "$_sv_home" launcher "$_sv_onpath_setup")"
 # Same home, same manifest, PATH without the stub: the verdict flips. This is
 # what proves the case above is the fallback branch answering and not something
@@ -1348,10 +1348,11 @@ chmod +x "$_sv_home/onpath/exasol"
 # step 2 got an unrunnable launcher — the same dead end as the missing binary,
 # from a neighbouring cause (an interrupted install, or a full disk). It must be
 # executable AND non-empty. Note the PATH here HAS a working launcher: it cannot
-# excuse the truncated managed binary, because personal_cli() prefers that one.
-: > "$_sv_home/bin/exasol"
-chmod 755 "$_sv_home/bin/exasol"
-if [ -x "$_sv_home/bin/exasol" ] && [ ! -s "$_sv_home/bin/exasol" ]; then
+# excuse the truncated managed binary: only the kit folder's launcher counts.
+mkdir -p "$_sv_home/personal/bin"
+: > "$_sv_home/personal/bin/exasol"
+chmod 755 "$_sv_home/personal/bin/exasol"
+if [ -x "$_sv_home/personal/bin/exasol" ] && [ ! -s "$_sv_home/personal/bin/exasol" ]; then
     check "step_state(0-byte is executable)" "yes" "yes"
 else
     check "step_state(0-byte is executable)" "yes" "no"
@@ -1656,8 +1657,9 @@ check "step_state(launcher missing)" "missing" \
 check "begin_step(launcher missing)" "rerun" \
     "$(_sv_step "$_sv_home" launcher "$_sv_launcher_setup")"
 # ...and with the binary back, the completed step must still be skipped.
-printf '#!/bin/sh\nexit 0\n' > "$_sv_home/bin/exasol"
-chmod +x "$_sv_home/bin/exasol"
+mkdir -p "$_sv_home/personal/bin"
+printf '#!/bin/sh\nexit 0\n' > "$_sv_home/personal/bin/exasol"
+chmod +x "$_sv_home/personal/bin/exasol"
 check "step_state(launcher present)" "present" \
     "$(_sv_state "$_sv_home" launcher "$_sv_launcher_setup")"
 check "begin_step(launcher present)" "skip" \

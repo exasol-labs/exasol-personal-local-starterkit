@@ -19,6 +19,13 @@
 # code and its remedy.
 
 # exakit_vs_defs — the folder that holds catalog.json, profiles/, connectors/.
+# The one rule of exakit_personal_db_state (common.sh). A caller that loaded
+# this file without common.sh (a test of one function) gets a guard that lets
+# everything through, as before the rule; common.sh, sourced first or later,
+# defines the real one.
+command -v exakit_kit_database_guard >/dev/null 2>&1 || exakit_kit_database_guard() { return 0; }
+command -v exakit_personal_db_state >/dev/null 2>&1 || exakit_personal_db_state() { return 0; }
+
 exakit_vs_defs() {
     _evd_root="$(exakit_repo_root 2>/dev/null || true)"
     if [ -n "$_evd_root" ] && [ -f "$_evd_root/setup/virtual-schemas/catalog.json" ]; then
@@ -139,7 +146,7 @@ exakit_vs_engine() {
     # (plan.py recorded_engine), and --json names the fix the bridge says.
     EXAKIT_PERSONAL_ENGINE="${EXAKIT_PERSONAL_ENGINE:-}" \
     _exakit_vs_python "$_eve_py" "$_eve_defs/engine/cli.py" --defs "$_eve_defs" --kit-home "$EXAKIT_HOME" \
-        --deployment-dir "$(manifest_get runtime.deployment_dir 2>/dev/null || true)" \
+        --deployment-dir "$(exakit_personal_deploy_dir_now "$(manifest_get runtime.deployment_dir 2>/dev/null || true)")" \
         --dsn "$(manifest_get runtime.dsn 2>/dev/null || true)" \
         --user "$(manifest_get runtime.user 2>/dev/null || printf sys)" \
         --password-file "$(manifest_get runtime.password_file 2>/dev/null || true)" "$@"
@@ -404,23 +411,23 @@ _exakit_vs_pair() {
     printf '%s' "$2" | _exakit_vs_b64
 }
 
-# _exakit_vs_engine_sets <command> <connector> — the engine's command with the
-# --set pairs gathered so far (EXAKIT_VS_SETS) after the connector.
+# _exakit_vs_engine_sets <command> <connector> [<arg>...] — the engine's
+# command with the --set pairs gathered so far (EXAKIT_VS_SETS) after the
+# connector and any further arguments.
 _exakit_vs_engine_sets() {
-    _ees_cmd="$1"; _ees_conn="$2"
-    set -- "$_ees_cmd" "$_ees_conn"
     while IFS= read -r _ees_w; do [ -n "$_ees_w" ] && set -- "$@" "$_ees_w"; done <<EOF
 ${EXAKIT_VS_SETS:-}
 EOF
     exakit_vs_engine "$@" < /dev/null
 }
 
-# _exakit_vs_secret_labels <connector> — "<credential label>|<storage label>"
-# for the combination the --set pairs gathered so far choose (engine inputs);
-# the second empty when it has one secret, both when it has none.
+# _exakit_vs_secret_labels <connector> [<name>] — "<credential label>|<storage
+# label>" for the combination the --set pairs gathered so far choose (engine
+# inputs), the settings source <name> was connected with standing where no
+# --set gives them; the second empty when it has one secret, both when it has none.
 # ⇄ twin: Get-ExakitVsSecretLabels.
 _exakit_vs_secret_labels() {
-    _exakit_vs_engine_sets inputs "$1" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" | sed -n 's/^RESULT //p' \
+    _exakit_vs_engine_sets inputs "$1" ${2:+"--name=$2"} 2>>"${EXAKIT_LOG_FILE:-/dev/null}" | sed -n 's/^RESULT //p' \
         | run_python_any -c 'import json, sys
 try:
     doc = json.load(sys.stdin)
@@ -704,13 +711,36 @@ _exakit_vs_db_restart() {
         || { error "The database did not come back. Run: exakit start"; return 1; }
 }
 
+# _exakit_vs_kit_database <json:0|1> — a source is made, checked or changed
+# only in the kit's own database. With the kit's own gone and the user's
+# deployment in its place (exakit_personal_db_state), refused before anything
+# runs: exit 22 and kind unreachable_db, as for a local database that does not
+# answer, the remedy naming the installer (it asks which database to
+# use). Twin of Assert-ExakitVsKitDatabase.
+_exakit_vs_kit_database() {
+    _evkd="$(exakit_personal_db_state 2>/dev/null || true)"
+    [ -n "$_evkd" ] || return 0
+    if [ "${1:-0}" = 1 ]; then
+        _evkd="${_evkd#*|}"
+        _exakit_log_file "REJECT the kit's own database was not found at ${_evkd%%|*}"
+        exakit_json_out '{"ok": false, "error": "%s", "kind": "unreachable_db", "remedy": "%s", "command": null, "rejected": true, "public_ip": null}\n' \
+            "$(_exakit_json_string "the kit's own database was not found at ${_evkd%%|*}, and the deployment at ${_evkd#*|} is not the kit's")" \
+            "$(_exakit_json_string "re-run the installer, which asks which database to use: $(exakit_install_command)")"
+        exit 22
+    fi
+    exakit_kit_database_guard
+    exit 22
+}
+
 # _exakit_vs_java_add — the Java language container installed, not yet seen
 # by the database (it restarts next). Docker: the download the start would
 # make, made now, and the image linked to the deployment's DNS before the
 # start mounts it read-only - so that start is the only one
 # (personal_slc_dns_prepare).
 _exakit_vs_java_add() {
-    run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) \
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    exakit_kit_database_guard || return 1
+    run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" \
         || { error "The Java language container did not install. Details: exakit logs"; return 1; }
     personal_slc_dns_prepare --pull
 }
@@ -738,7 +768,10 @@ _exakit_vs_install_java() {
         _exakit_log_file "INFO  The Java language container is not installed; installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
         info "This source needs connector support set up in the database first (one time; the database restarts once)."
         if ! _exakit_vs_confirm "Set up connector support now?"; then
-            _exakit_vs_info_cmds "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
+            # The kit's own command, never a bare launcher one: `exasol slc
+            # install` acts on the launcher's default deployment, which can be
+            # the user's (WSL-04). Twin of the same line in Install-ExakitVsJava.
+            _exakit_vs_info_cmds "Install it later with: exakit connect ${_EXAKIT_VS_CONNECTOR:-<connector>} --yes. It installs the Java language container and restarts the database once."
             return 1
         fi
     fi
@@ -754,13 +787,15 @@ _exakit_vs_install_java() {
 # downloaded, size- and SHA-256-checked, and registered as the RUST alias;
 # the database sees it from its next start.
 _exakit_vs_rust_add() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    exakit_kit_database_guard || return 1
     _evr_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-rust.XXXXXX")" || return 1
     fetch "$_evr_url" "$_evr_dir/$_evr_asset"
     _evr_got="$(wc -c < "$_evr_dir/$_evr_asset" | tr -d ' ')"
     [ "$_evr_got" = "$_evr_size" ] || { rm -rf "$_evr_dir"; error "The Rust language container download is $_evr_got bytes, not the pinned $_evr_size; nothing was installed."; return 1; }
     verify_sha256 "$_evr_dir/$_evr_asset" "$_evr_sha"
     if ! run_logged "$(personal_cli)" slc custom install --source "$_evr_dir/$_evr_asset" --alias RUST --language rust \
-            --no-restart $(personal_auto_approve_flag slc); then
+            --no-restart $(personal_auto_approve_flag slc) --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR"; then
         rm -rf "$_evr_dir"
         error "The Rust language container did not install. Details: exakit logs"
         return 1
@@ -847,6 +882,14 @@ _exakit_vs_repair() {
 _exakit_vs_run() {
     unset _evx_secret
     _evx_secret="$1"; shift
+    # The connector a `connect` names, for the Java line's own command.
+    _EXAKIT_VS_CONNECTOR=""
+    _evx_prev=""
+    for _evx_a in "$@"; do
+        case "$_evx_prev" in connect) case "$_evx_a" in -*) ;; *) _EXAKIT_VS_CONNECTOR="$_evx_a" ;; esac ;; esac
+        [ -n "$_EXAKIT_VS_CONNECTOR" ] && break
+        _evx_prev="$_evx_a"
+    done
     if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
         # Once: a caller that built its arguments with --json already has it.
         _evx_has=0
@@ -3270,6 +3313,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
     if [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; then _EVP_GIVEN=1; fi
     _EXAKIT_VS_STORAGE_FILE="$_cc_sfile"
     _require_install "$_cc_json"
+    _exakit_vs_kit_database "$_cc_json"
     exakit_init_logging
     _exakit_vs_log_mark
     # A person at a terminal: Ctrl-C gives it back whole, and says so.
@@ -3426,7 +3470,7 @@ EOF
     # The labels of the combination's secrets (engine inputs): a lakehouse
     # source can have two, the second on --storage-secret-file or asked hidden.
     if grep -q '"settings"' "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null; then
-        _cc_labels="$(_exakit_vs_secret_labels "$_cc_resolved")"
+        _cc_labels="$(_exakit_vs_secret_labels "$_cc_resolved" "$_cc_name")"
     else
         _cc_labels="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), "") + "|")' \
             "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
@@ -3833,6 +3877,9 @@ cmd_source() {
             "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>"
     fi
     _require_install "$_cs_json"
+    case "$_cs_action" in
+        describe|check|reauth|refresh|disconnect|remove) _exakit_vs_kit_database "$_cs_json" ;;
+    esac
     exakit_init_logging
     _exakit_vs_log_mark
     if [ "$_cs_action" = open ]; then

@@ -80,11 +80,13 @@ releases:
   `EXAKIT_DATA_FILE=/abs/path.csv` loads the user's own file after them. `external` in `EXAKIT_DATASETS` never starts the connect wizard
   unattended: it prints the `exakit connect` hint, so connect a source afterwards with
   `exakit connect <connector> ...` (`exasol-virtual-schemas`)
-- on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)
+- if Exasol Personal 2.5 is on the machine with databases of the user's → which database
+  the kit uses: `EXAKIT_REUSE_DB=new` (the default, also without a terminal: the kit's own
+  new `starter-kit-local`, theirs untouched) or the name of one of theirs
+  (`EXAKIT_REUSE_DB=dev`), which is then renamed to `starter-kit-local` and stays theirs
 
 Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASETS=retail_sales sh` —
 or on Windows: `$env:EXAKIT_MCP_CLIENTS = "claude"; $env:EXAKIT_DATASETS = "retail_sales"; irm <install.ps1 URL> | iex`.
-(`EXAKIT_REUSE_DB` applies to the macOS native runtime only.)
 
 Tell the user what to expect: a detection summary, an install plan, numbered steps, then
 the sample data (on a terminal a *Data to load* table, both samples ticked), the `exakit`
@@ -108,10 +110,10 @@ exakit info                                      # the connection panel
 exapump sql -p starter-kit 'SELECT CURRENT_DATE'
 ```
 
-A returned date means the local database works end to end. If `status` is not
-`running`, `exakit start` brings it back on every platform — prefer it over re-running
-the installer (a re-run with the kit in place is safe and skips the deploy, but `start`
-is the direct tool for the job).
+A returned date means the local database works end to end. If `status` is `stopped`,
+`exakit start` brings it back on every platform. If it is `no database`, the install
+ended without one and exited 7. Then run the command in `remedy` from
+`exakit status --json`, not `exakit start`.
 
 > Two names that look alike but are not the same thing — do not conflate or "correct" them:
 > `starter-kit` is the **exapump connection profile** (`-p starter-kit`); each bundled dataset
@@ -132,7 +134,8 @@ selected; **every selectable (pending) client is pre-selected**. The user restar
 client afterward.
 
 After setup, every client has an MCP server named `exasol`: the Exasol Personal launcher's own
-MCP server beside the database (`http://127.0.0.1:4896/mcp`), the only one there is. Verify with
+MCP server beside the database (`http://127.0.0.1:4896/mcp`, or the port that
+`components.mcp_server.url` in `exakit info --json` names), the only one the kit sets up. Verify with
 `exakit mcp-doctor`, which heals it when it does not serve and completes an MCP handshake with
 it — so a `connected` client is one that can really reach it.
 

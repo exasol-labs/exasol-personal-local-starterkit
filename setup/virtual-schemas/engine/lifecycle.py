@@ -80,7 +80,7 @@ REMEDY_FOR = {
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
     "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS) - then: exakit source check {name}",
-    "nojava": "exakit connect installs the Java language container with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "nojava": "exakit connect installs the Java language container with one database restart - asked on a terminal, --yes for a script",
     "norust": "exakit connect installs the Rust language container with one database restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
@@ -128,6 +128,15 @@ def command_for(kind, name, first=False):
     text = COMMAND_FOR.get(kind)
     return text.format(name=name) if text else None
 
+
+
+def cut_for(error, connector):
+    """A database error whose message was cut before its reason (sql.CUT), said
+    for this connector: Oracle has no tls=require to read the reason with
+    (sql.cut_words). Any other error is returned as it is."""
+    if isinstance(error, sql.DbError) and str(error) == sql.CUT:
+        return sql.DbError(sql.cut_words(connector), error.kind)
+    return error
 
 
 def tls_fix(connector):
@@ -458,6 +467,18 @@ def in_use_words(users):
                                                    "s" if len(users) == 1 else "")
 
 
+# The fix for a database or schema name the source does not have, or does not
+# show the account: the scope check's (MySQL) and a database's own answer
+# (PostgreSQL 3D000) alike. A catalog's missing namespace has its own words.
+SCOPE_FIX = "check the name and that the account has access to it"
+
+
+def catalog_scope(connector):
+    """True for a source whose scope is a catalog's namespace (the lakehouse
+    engine), not a database's own schema or database."""
+    return connector.get("auth") == "lakehouse"
+
+
 class Failure(Exception):
     """A failure the engine names. str() is what happened; kind is its class;
     remedy the fix in words and command the one exakit command that is the
@@ -509,6 +530,8 @@ class Engine(object):
         self.profile = self.defs.profile("java-jdbc")
         # Every profile stages into the same bucket folder (profile.json).
         self.runtime = artifacts.Runtime(args.deployment_dir or "", self.profile["bucket"])
+        # The registry's paths follow the deployment folder the launcher moved.
+        self.store.exa = self.runtime.exa if args.deployment_dir else None
         self._db = None
         # The second secret of a lakehouse combination with two (a catalog
         # login and storage keys): set by cli.py from --secret-pair-base64,
@@ -1304,7 +1327,7 @@ class Engine(object):
             raise ScopeFailure("the account may not use %s %s" % (label, value), "privilege",
                                "grant it USAGE on the %s (and SELECT on its tables)" % label)
         raise ScopeFailure("the source has no %s %s that this account can see" % (label, value), "schema_missing",
-                           "check the name and that the account has access to it")
+                           SCOPE_FIX)
 
     def tables(self, schema):
         return [r.get("TABLE_NAME") for r in self.db().query(
@@ -1347,6 +1370,20 @@ class Engine(object):
 
     # --- operations -----------------------------------------------------------------
     def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False, secret_given=False):
+        """A first connect, a reconnect or a re-point of the source called name.
+        Which one it is depends on the record, so it is decided under the
+        sources lock (C-01, measured live: two connects of one new name at
+        once both decided "first connect" before the lock; the second then
+        found the first's objects, failed "not a source the kit set up", and
+        its rollback deleted the first's record). A second run now waits for
+        the first and finds its source as it is then. A plan or dry run
+        changes nothing, so it does not wait."""
+        if plan_only or dry_run:
+            return self._connect(connector_id, name, given, secret, dry_run, plan_only, secret_given)
+        with self.store.lock():
+            return self._connect(connector_id, name, given, secret, dry_run, plan_only, secret_given)
+
+    def _connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False, secret_given=False):
         # The gate first, as the shells' own resolve says it: a gated
         # connector is exit 5 whatever else is wrong with the command.
         entry = self.defs.entry(connector_id)
@@ -1424,10 +1461,12 @@ class Engine(object):
             # says exactly what that attempt made; that is undone first.
             if not reconnect:
                 self.recover_interrupted(name, names)
-            if reconnect or self.shares_scripts(connector):
+            if reconnect or self.shares_scripts(connector) or self.shares_loader(connector):
                 # After a kit update: a reconnect keeps the adapter script it
                 # had, and a shared script re-created below would move every
                 # other source of the connector unrecorded - so they move first.
+                # So does the loader's settings.cfg that stage() rewrites: it
+                # names one driver for every source of the connector.
                 self.move_forward(connector_id, only=[name])
             self.store.save_journal(name, journal)
 
@@ -1500,6 +1539,13 @@ class Engine(object):
                     made("schema")
                 self.warn_key_readers(connector, name)
                 tables, read, how, empty = self.verify(connector, names["schema"])
+                if not tables and not reconnect and connector.get("empty_refused"):
+                    # C-05, measured live: BigQuery lists a dataset the account
+                    # may not read as one with no tables, as it does a dataset
+                    # that does not exist - the connect said ok, status empty,
+                    # and kept it. Refused as Oracle and Snowflake answer it:
+                    # missing or not granted, nothing kept.
+                    raise Failure(connector["empty_refused"].format(**values), EXIT["failed"], "missing_or_denied")
                 for note in notes:
                     self.emit("INFO", note.replace("<name>", name))
                 if read:
@@ -1510,6 +1556,7 @@ class Engine(object):
                 else:
                     self.emit("WARN", empty_scope(names["schema"], connector, values))
             except (Failure, sql.DbError, artifacts.ArtifactError, OSError) as error:
+                error = cut_for(error, connector)
                 self.undo(names, created, name)
                 self.store.clear_journal(name)
                 if reconnect:
@@ -1518,9 +1565,11 @@ class Engine(object):
                     if connector.get("secret_as_file") and os.path.isfile(self.key_file(name)):
                         os.remove(self.key_file(name))
                     self.store.update_status(name, status="disconnected")
-                else:
+                elif not self.store.exists(name):
                     # A first attempt leaves no record at all - not even the
-                    # empty folder its journal lived in.
+                    # empty folder its journal lived in. It never wrote a
+                    # record (that comes after this try), so one that exists
+                    # is another run's and stays.
                     self.store.delete_source(name)
                     self.drop_kit_schema_if_unused()
                 kind = self.signed_kind(getattr(error, "kind", "error"), connector)
@@ -1563,7 +1612,9 @@ class Engine(object):
                               "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
                               "catalog": "the catalog does not know warehouse %s; nothing was kept - give the catalog's name (e.g. exakit_uc for Databricks, the catalog name for Polaris), not a URL, then connect again" % catalog_warehouse(error),
                               "sandbox": "the database's Java sandbox stopped the driver before it reached the source - not the network or the credentials; nothing was kept - update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then connect again",
-                              "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
+                              "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"
+                                                if catalog_scope(connector) else
+                                                "%s; nothing was kept - connect again with the corrected name" % SCOPE_FIX}[kind]
                 refused = refused_secret(connector, error) if kind == "auth" and not reconnect else None
                 if refused:
                     remedy = ("%s; nothing was kept - correct the file given with %s%s and run the same exakit "
@@ -2027,6 +2078,7 @@ class Engine(object):
         """The Failure a re-point ends with: what happened, its class and the
         fix, saying that nothing changed - or, when something could not be put
         back, what."""
+        error = cut_for(error, connector)
         kind = self.signed_kind(getattr(error, "kind", "error"), connector)
         code = getattr(error, "code", EXIT["failed"])
         if isinstance(error, sql.DbError):
@@ -2061,7 +2113,7 @@ class Engine(object):
                                      "this account; %s. Check that name as the source spells it, or grant the account "
                                      "%s, %s" % (kept, access, again),
                 "schema_missing": "the new address has no such namespace that this credential can see; %s. Check it, "
-                                  "%s" % (kept, again),
+                                  "%s" % (kept, again) if catalog_scope(connector) else "%s; %s" % (SCOPE_FIX, kept),
             }.get(kind)
             if kind == "tls":
                 specific = tls_remedy(error, connector, self.clock())
@@ -2212,8 +2264,9 @@ class Engine(object):
                         except sql.DbError as error:
                             self.emit("WARN", "could not undo the script %s: %s" % (script, error))
         if not self.store.exists(name):
+            files = [self.store.rebased(path) for path in created["files"]]
             for path in self.store.release(name):
-                if path in created["files"] and os.path.isfile(path):
+                if path in files and os.path.isfile(path):
                     os.remove(path)
                     self.prune(os.path.dirname(path))
 
@@ -2253,6 +2306,7 @@ class Engine(object):
             self.warn_key_readers(connector, name)
             tables, read, how, empty = self.verify(connector, names["schema"])
         except (Failure, sql.DbError) as error:
+            error = cut_for(error, connector)
             kind = self.language_kind(self.signed_kind(getattr(error, "kind", "error"), connector), connector, error)
             status = self.record_check(name, "failed", str(error), kind)
             remedy = remedy_for(kind, name, connector, error)
@@ -2506,10 +2560,16 @@ class Engine(object):
     # --- moving sources to the adapter the connector pins now -----------------------
     @staticmethod
     def pins(connector):
-        """What a source records as running: its connector's adapter and driver pins."""
+        """What a source records as running: its connector's adapter and driver
+        pins, and the CA bundle a Lua adapter carries in its script text."""
         driver = connector.get("driver") or {}
-        return {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
+        pins = {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
                 "adapter_version": connector["adapter"]["version"], "driver_version": driver.get("version")}
+        if connector.get("trust"):
+            # A bundle update changes no file the database reads, only the
+            # script: without it in the pins, no move would ever carry it.
+            pins.update(trust=connector["trust"]["sha256"], trust_version=connector["trust"]["version"])
+        return pins
 
     @staticmethod
     def shares_scripts(connector):
@@ -2517,6 +2577,13 @@ class Engine(object):
         adapter bound to its name) or shares companion scripts: re-creating
         one of them moves all of those sources at once."""
         return bool(connector.get("shared_adapter") or connector.get("companions") or connector.get("import_script"))
+
+    @staticmethod
+    def shares_loader(connector):
+        """Every source of a JDBC connector reads through one loader driver
+        (exa/jdbc/<DRIVERNAME>/settings.cfg names a single jar): staging
+        another driver for one of them changes it for all of them."""
+        return bool(connector.get("etl"))
 
     def move_forward(self, connector_id, only=None):
         """Move the sources of a connector to the adapter and driver it pins now.
@@ -2528,8 +2595,10 @@ class Engine(object):
         files given up - deleted once no source uses them, and only when the
         kit made them. A script shared by the connector's sources moves them
         all together. `only` limits the move to those names, unless the
-        connector shares its scripts. A source already on the current pins is
-        left alone, so a second run does nothing. Returns the names moved."""
+        connector shares its scripts, or a source on another driver than the
+        one pinned now reads through the connector's loader. A source already
+        on the current pins is left alone, so a second run does nothing.
+        Returns the names moved."""
         connector = self.defs.connector(connector_id)
         current = self.pins(connector)
         shared = self.shares_scripts(connector)
@@ -2539,7 +2608,8 @@ class Engine(object):
                 pins = self.store.status(name).get("pins")
                 if self.store.config(name).get("connector") != connector_id or not pins or pins == current:
                     continue
-                if only is not None and not shared and name not in only:
+                if only is not None and not shared and name not in only and \
+                        not (self.shares_loader(connector) and pins.get("driver") != current["driver"]):
                     continue
                 stale.append(name)
             if not stale:
@@ -2713,15 +2783,18 @@ class Engine(object):
             if config.get("key_file") and os.path.isfile(self.key_file(name)):
                 os.remove(self.key_file(name))
             self.store.update_status(name, status="disconnected", disconnected_at=sources.now())
-        return plan
+        # The source's state after it, as every other answer on a source says it.
+        return dict(plan, status="disconnected")
 
     def remove(self, name, dry_run=False):
         config = self.store.config(name)
         names = config["objects"]
         registry = self.store.registry().get("artifacts", {})
         mine = [path for path, entry in registry.items() if name in entry.get("consumers", [])]
-        reclaim = [path for path in mine if registry[path].get("owned") and registry[path].get("consumers") == [name]]
         connector = self.defs.connector(config["connector"], config.get("inputs") or {})
+        held = self.loader_held(connector, registry, name)
+        reclaim = [path for path in mine if registry[path].get("owned") and registry[path].get("consumers") == [name]
+                   and path not in held]
         shared = [spec["name"] for spec in self.companions(connector, self.defs.profile(connector["profile"]))]
         last = bool(shared) and not self.import_script_users(config["connector"], name)
         own_adapter = not connector.get("shared_adapter") or last
@@ -2797,6 +2870,10 @@ class Engine(object):
                 if self.exists("script", names["script_schema"], script):
                     self.drop_shared("DROP SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(script)),
                                      "script %s.%s" % (names["script_schema"], script), kept)
+            for path, others in held.items():
+                # The loader still runs this jar for the sources left on it.
+                for other in others:
+                    self.store.add_consumer(path, registry[path].get("sha256"), other, True)
             released = self.store.release(name)
             for path in released:
                 if kept and not self.per_source_file(path, name):
@@ -2811,6 +2888,30 @@ class Engine(object):
             if kept:
                 plan["keep"] = list(kept)
         return plan
+
+    def loader_held(self, connector, registry, name):
+        """The loader jars a removed source leaves in place: those its
+        connector's settings.cfg names while other sources still read through
+        it, with those sources. (A move that failed leaves a source on its
+        old pins while the loader runs the newer driver; that jar going with
+        the source that staged it would leave the loader with no driver.)"""
+        etl = connector.get("etl")
+        if not etl:
+            return {}
+        loader = self.runtime.loader_dir(etl["drivername"])
+        cfg = os.path.join(loader, "settings.cfg")
+        others = [c for c in registry.get(cfg, {}).get("consumers", []) if c != name]
+        if not others or not os.path.isfile(cfg):
+            return {}
+        with open(cfg, encoding="utf-8") as handle:
+            named = [line[len("JAR="):].strip() for line in handle.read().splitlines() if line.startswith("JAR=")]
+        held = {}
+        for jar in named:
+            path = os.path.join(loader, jar)
+            consumers = registry.get(path, {}).get("consumers", [])
+            if name in consumers:
+                held[path] = [c for c in others if c not in consumers]
+        return held
 
     def per_source_file(self, path, name):
         """A file only this source ever reads: its own mappings folder."""

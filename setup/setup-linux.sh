@@ -89,6 +89,15 @@ elif command -v exakit_persona_apply_env >/dev/null 2>&1; then
     exakit_persona_apply_env
 fi
 
+# --- before anything: which launcher, and which home ------------------------
+# Decided once, before Step 1/4 (personal_launcher_mode_decide): the kit's own
+# 2.5 in the kit folder, never on PATH, with no launcher of the user's or next
+# to their 2.5, and, next to a 2.4 or a newer line of theirs, the kit's own 2.5
+# with a home of its own too, so theirs is never changed. An existing install
+# keeps what it has (and still gets the newer-launcher warning). ⇄ twin:
+# Get-PersonalLauncherPlan, at Step 1/4 of setup-windows.ps1.
+personal_launcher_mode_decide
+
 # --- step 0: an installation this kit cannot manage -------------------------
 # An older kit could put the database in a container. This asks what to do with
 # it, copies the data out while it is still readable, and stops it so the new
@@ -125,10 +134,30 @@ else
     # A deployment recorded by an earlier run can still carry the old
     # container's keys; this is the run that clears them.
     personal_clear_stale_record
+    # A 0.3.0 kit's database still named `default` under a launcher at 2.5.0
+    # or later (the launcher step updated nothing): renamed to
+    # starter-kit-local in one restart, its limit lifted with it, as `exakit
+    # update` does (personal_update_current).
+    personal_update_current || true
+    # The 20-session limit a launcher before 2.5.0 set on the kit's own
+    # database goes (personal_lift_session_limit: the kit's own, or one the
+    # user let it use, never in kit_database_missing). A stopped database
+    # stays stopped for the start below, which applies it.
+    personal_lift_session_limit || true
     # The resume arms: redeploy what is gone (disarming the destroy the deploy
     # registers, since there is no mark_step here to do it), start what is
     # merely stopped - every later step talks SQL to the database.
-    if ! personal_deployment_exists; then
+    # THE KIT'S OWN DATABASE GONE, another deployment in its place
+    # (exakit_personal_db_state): never started or used as the kit's. The
+    # deploy step runs again, as on a first install: its one question lists
+    # that deployment, and picking it records it as the user's.
+    if [ -n "$(exakit_personal_db_state 2>/dev/null || true)" ]; then
+        if ! personal_deploy_local; then
+            exakit_record_soft_failure runtime "$(exakit_install_command)" "$(exakit_take_failure_note)" "the local database"
+            warn "The database was not installed - carrying on so the rest of the install completes"
+        fi
+        rollback_clear
+    elif ! personal_deployment_exists; then
         info "Deployment marked done but not reachable — redeploying"
         # Same one non-zero as the first-run arm above: Podman is not here, so
         # there is no database. Recorded, not fallen through - a redeploy that
@@ -255,3 +284,8 @@ exakit_closing_hint
 # Two blank lines before the shell prompt returns. The installer's last line was
 # landing directly against it, so the prompt read as part of the output.
 printf '\n\n'
+# No usable database at the end (the database step did not finish): exit 7,
+# not 0, so a script or an agent does not read this run as a working install.
+# A step that did not complete beside a working database still exits 0.
+# ⇄ twin: the same exit at the end of setup-windows.ps1.
+exit "$(exakit_install_exit_code)"

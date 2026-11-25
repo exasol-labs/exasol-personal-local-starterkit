@@ -104,10 +104,20 @@ _KINDS = (
                                                                    # SESSION privilege; 23ai: missing READ privilege on
                   r"SQL access control error|Insufficient privileges to operate on|"   # Snowflake
                   r"not authorized on \S+ to execute"),            # MongoDB code 13 (Unauthorized)
+    # PostgreSQL's FATAL for a database name the server does not have (SQL
+    # state 3D000, measured live: 'FATAL: database "nosuchdb" does not exist'):
+    # the name to check, as MySQL's scope check says it. Not Snowflake's
+    # "does not exist or not authorized", which is missing_or_denied below.
+    ("schema_missing", r'\bdatabase "[^"\n]*" does not exist(?! or not authorized)|\b3D000\b'),
     # Words that mean "no such object" and "no grant on it" alike: Oracle and
     # Snowflake answer for an object the account may not see as if it did not
     # exist, so the fix names both - never "denied" alone.
-    ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
+    # SQL Server's error 4060 is one of them: 'Cannot open database "x"
+    # requested by the login. The login failed.' - the database does not
+    # exist, or the login has no user in it - and it ends with "Login failed
+    # for user", which would read as a wrong password (measured live).
+    ("missing_or_denied", r"ORA-00942|does not exist or not authorized|"
+                          r'Cannot open database "[^"\n]*" requested by the login'),
     # The database's Java sandbox refused the driver something (a file read,
     # a socket) before it reached the source: pgjdbc says it so for any
     # AccessControlException, whichever permission it was.
@@ -119,7 +129,7 @@ _KINDS = (
     ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
             r"trustAnchors parameter must be non-empty|"
             r"Could not load trustJKS keystore"),            # MySQL Connector/J: verify with no CA on Exasol Personal
-    ("auth", r"password authentication failed|Access denied for user|Login failed for user|ORA-01017|"
+    ("auth", r"password authentication failed|\b28P01\b|Access denied for user|Login failed for user|ORA-01017|"
              r"Incorrect username or password|invalid username/password|authentication failed|"
              r"JWT token is invalid|Programmatic access token is invalid|token has expired|"
              r"signature we calculated does not match|InvalidAccessKeyId|Access Key Id you provided does not exist|"
@@ -150,15 +160,41 @@ _KINDS = (
 # its own words read as a certificate fault.
 _STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*(?:'|$)", re.I | re.S)
 _OPEN_STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*$", re.I | re.S)
+# The JDBC URL a driver's message quotes ("Connecting to 'jdbc:postgresql://...' as user='reader' failed: ..."):
+# the source's address and settings, which the kit names itself, and with a CA its whole PEM
+# (sslfactoryarg=-----BEGIN%20CERTIFICATE-----..., some 1.5 KB measured on RDS), which filled MAX_ERROR before
+# the reason. Said as "the source" in what a person reads; the log keeps the database's own message.
+# Quoted '...' or "...", or bare up to the next space (a full stop or bracket after it stays the sentence's).
+_JDBC_STRING = re.compile(r"'jdbc:[^']*'|\"jdbc:[^\"]*\"|(?<![\w'\"])jdbc:[^\s'\"]*[^\s'\".,;:)\]]", re.I | re.S)
+# The same PEM where no URL is around it: said as a CA, a word no failure class matches ("certificate" is tls).
+_INLINE_CA = re.compile(r"(sslfactoryarg=)-----BEGIN(?:%20|\+| )CERTIFICATE-----\S*?-----END(?:%20|\+| )CERTIFICATE-----(?:%0A)?",
+                        re.I)
 
 # Said when the database's message ends inside the connection string it quotes. A database message holds some
 # 2,000 characters, and a string with a CA certificate in it is longer (a 4096-bit root alone is 2.1 KB once
 # encoded), so the reason that follows the string is cut away before it reaches the kit (measured live: PostgreSQL
 # with verify and ISRG Root X1; the kit then read the string's own "CERTIFICATE" and called it a certificate fault).
-CUT = ("the database could not connect to the source, and its message was cut before the reason: the connection "
-       "string, with the CA certificate in it, is longer than a database message. To read the reason, connect once "
-       "with --set tls=require (it encrypts without checking the certificate) - the string is short then - fix what "
-       "it names, and connect again with the CA")
+CUT_HEAD = ("the database could not connect to the source, and its message was cut before the reason: the connection "
+            "string, with the CA certificate in it, is longer than a database message.")
+CUT = (CUT_HEAD + " To read the reason, connect once with --set tls=require (it encrypts without checking the "
+       "certificate) - the string is short then - fix what it names, and connect again with the CA")
+# The same for a connector with no tls=require to read the reason with (Oracle: verify or disable, measured live:
+# a wrong service name with a CA came back cut, and tls=require is refused as input). What a cut message most
+# often hides is named instead: the connector's own "cut_check", else its address.
+CUT_NO_REQUIRE = (CUT_HEAD + " %s has no tls=require to read the reason with, so check what it most often is - %s - "
+                  "and that the CA file holds the root that signs the server's certificate, then connect again with "
+                  "the CA")
+
+
+def cut_words(connector):
+    """What a cut message (CUT) is said as for this connector: CUT where its tls input offers require, else
+    CUT_NO_REQUIRE with what to check."""
+    choices = next((spec.get("choices", []) for spec in (connector or {}).get("inputs", []) if spec["name"] == "tls"),
+                   [])
+    if not connector or "require" in choices:
+        return CUT
+    return CUT_NO_REQUIRE % (connector.get("name", "this connector"),
+                             connector.get("cut_check", "the host, the port and the database name"))
 
 
 def cut_in_string(message):
@@ -290,6 +326,22 @@ def opendal_answer(line):
                                           " (HTTP %s)" % status.group(1) if status else "")
 
 
+def object_store_answer(line, text):
+    """The lakehouse engine's failed object_store request with the store's own
+    answer. Measured (0.3.0, catalog none, files s3, a prefix the key may not
+    list): "... failed to list 'private': Generic S3 error: Error performing
+    list request: Error performing GET https://... - Server returned non-2xx
+    status code: 403 Forbidden: <?xml version="1.0" encoding="UTF-8"?>", and
+    S3's XML body (<Error><Code>AccessDenied</Code>...) on the lines under it,
+    which the one-line summary leaves out. The XML declaration is replaced by
+    that code and message; any other line is returned as it is."""
+    head = re.match(r'(.*\bnon-2xx status code: \d{3}\b[^\n]*?): <\?xml[^>\n]*\?>\s*$', line)
+    found = re.search(r"<Error>\s*<Code>(\w+)</Code>\s*<Message>([^<\n]*)</Message>", str(text))
+    if not head or not found:
+        return line
+    return "%s - caused by S3 %s: %s" % (head.group(1), found.group(1), found.group(2).strip())
+
+
 def summarize(text):
     """One readable line out of Exasol's multi-line UDF error wrapper.
 
@@ -334,7 +386,7 @@ def summarize(text):
         line = "%s %s" % (line, more)
     if cut_in_string(line):
         return CUT
-    return re.sub(r"\s+", " ", opendal_answer(line)).strip()
+    return re.sub(r"\s+", " ", object_store_answer(opendal_answer(line), text)).strip()
 
 
 def redact(text, secrets):
@@ -345,6 +397,8 @@ def redact(text, secrets):
     redacted is not shown at all."""
     try:
         text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
+        text = _JDBC_STRING.sub("the source", text)
+        text = _INLINE_CA.sub(r"\1<CA>", text)
         text = vslog.redact(text, secrets)
         text = wallet(text)
     except Exception:  # noqa: BLE001 - never the clear text

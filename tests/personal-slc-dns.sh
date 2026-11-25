@@ -675,7 +675,7 @@ check "every start repairs (bash): the call after the start, its exit kept" "1" 
 check "...and once more after a Docker restart" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || true$')"
 check "every start repairs (PowerShell; again after a Docker restart)" "2" "$(sed -n '/^function Start-Personal/,/^function Get-PersonalSlcInstalledFlavors/p' "$ROOT/setup/lib/runtime-personal.ps1" | grep -c 'try { \[void\](Repair-PersonalSlcDns) }')"
 check "macOS feeds the VM shell inside the bounded command (stdin survives a background job)" "1" \
-    "$(grep -c "exakit_run_bounded 90 sh -c 'exec \"\$0\" shell container < \"\$1\"'" "$ROOT/setup/lib/runtime-personal.sh")"
+    "$(grep -c "exakit_run_bounded 90 sh -c 'exec \"\$0\" shell container --deployment-dir \"\$2\" < \"\$1\"'" "$ROOT/setup/lib/runtime-personal.sh")"
 check "the repair no longer gates on podman alone" "0" \
     "$(sed -n '/^personal_slc_dns_repair()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c 'command -v podman')"
 

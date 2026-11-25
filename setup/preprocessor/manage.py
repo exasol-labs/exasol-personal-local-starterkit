@@ -31,6 +31,9 @@ ensure decides from what the database holds:
   installed by the kit                  check objects; test in one session;
                                         activate; verify in fresh connections
   already active                        verify; deactivate again on failure
+  ...and only its role is gone          put the role back, then the line above
+                                        (an uninstall that kept the database
+                                        dropped it: marketplace/kit_logins.py)
 
 A fresh install never replays over an existing framework schema: release.sql
 is clean-install only, and it would re-seed rules and fail on its role.
@@ -279,6 +282,13 @@ class Preprocessor(object):
         except state.StateError:
             return {}
 
+    def deployment_id(self):
+        """The id of the database the kit uses (runtime.deployment_id): what this install creates is made in it."""
+        runtime = state.read_manifest(self.args.manifest).get("runtime")
+        value = runtime.get("deployment_id") if isinstance(runtime, dict) else ""
+        # An id that is not text is none, as manifest_get answers (a number an id like 3e082473 became).
+        return value.strip() if isinstance(value, str) else ""
+
     def save(self, fields, remove=()):
         state.update_component(self.args.manifest, COMPONENT, fields, remove)
 
@@ -375,7 +385,7 @@ class Preprocessor(object):
         # finds are the kit's own and safe to drop.
         self.save({"state": "installing", "version": self.args.pin_version, "source_ref": self.args.pin_ref,
                    "sha256": actual, "package": "core-only", "core_sha256": core_sha,
-                   "left_out": removed, "validated": False},
+                   "left_out": removed, "validated": False, "made_in": self.deployment_id()},
                   remove=("installed_at", "verified_at", "activated_at", "previous_setting", "origin"))
         try:
             self.db.run(BYPASS + "\n" + body, timeout=INSTALL_TIMEOUT)
@@ -418,6 +428,45 @@ class Preprocessor(object):
         except SqlError as error:
             raise Outcome(EXIT_FAILED, "the interrupted framework install could not be cleaned up: %s" % error)
         emit("INFO", "Cleaned up an interrupted framework install before reinstalling")
+
+    def restore_role(self, found):
+        """Put back the framework's role, as release.sql makes it. True when it is back.
+
+        `exakit uninstall` of a kit on a database of the user's hands the
+        framework's schemas to SYS, drops the role and leaves the rest, so the
+        next install finds a whole, active framework without its role. The role
+        is nothing but its name, the ownership of those schemas (with all that
+        is in them) and the grants in manifest.json, so that is all that runs
+        here: no table, script or rule is touched, and nothing of release.sql
+        is replayed. Schemas anyone else owns are their owner's choice: nothing
+        runs, False."""
+        role, schemas = self.package["role"], self.package["schemas"]
+        try:
+            rows = self.db.run("%s\nSELECT SCHEMA_NAME AS N, SCHEMA_OWNER AS O FROM EXA_SCHEMAS"
+                               " WHERE SCHEMA_NAME IN (%s);"
+                               % (BYPASS, ", ".join(sql_literal(name) for name in schemas)))
+            owners = dict((row.get("N"), row.get("O")) for row in rows[-1])
+        except (SqlError, IndexError) as error:
+            raise Outcome(EXIT_FAILED, "the framework's role %s is missing, and who owns its schemas could not be"
+                          " read: %s" % (role, str(error) or "no answer"))
+        if any(owners.get(name) not in ("SYS", role) for name in schemas):
+            return False
+        # Recorded BEFORE any SQL runs, like the install: a run that dies after
+        # CREATE ROLE finishes the rest next time, and the next uninstall knows
+        # that the kit created the role in this database.
+        self.save({"role_created": True, "role_restoring": True, "made_in": self.deployment_id()})
+        statements = [BYPASS]
+        if not found["role"]:
+            statements.append("CREATE ROLE %s;" % role)
+        statements += ["ALTER SCHEMA %s CHANGE OWNER %s;" % (name, role) for name in schemas if owners[name] != role]
+        statements += ["%s;" % grant for grant in self.package["role_grants"]]
+        try:
+            self.db.run("\n".join(statements))
+        except SqlError as error:
+            raise Outcome(EXIT_FAILED, "the framework's role %s could not be put back: %s" % (role, error))
+        self.save({}, remove=("role_restoring",))
+        self.db._log("put back the role %s" % role)
+        return True
 
     def activate(self, previous):
         """Trial in one session, then the database default, then fresh-connection checks."""
@@ -521,6 +570,12 @@ class Preprocessor(object):
             self.fresh_install(recover=True)
             self.activate(previous="")
         else:
+            role = self.package["role"]
+            # The second case: a run that died while it put the role back.
+            unfinished = not found["missing"] and rec.get("role_restoring") \
+                and rec.get("made_in") == self.deployment_id()
+            if slot == self.dispatcher and (found["missing"] == [role] or unfinished) and self.restore_role(found):
+                found["missing"] = []
             if found["missing"]:
                 raise Outcome(EXIT_FAILED, "framework objects are missing (%s); the kit does not replay its"
                               " fresh install over an existing framework" % ", ".join(found["missing"]))

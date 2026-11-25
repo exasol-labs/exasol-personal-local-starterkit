@@ -1073,6 +1073,36 @@ facts, then metrics, each taking the next ordinal, so a combined statement
 numbers the object from 1 in that order while separate statements interleave.
 OSI export carries those ordinals into the imported model.
 
+## Adopt an aggregate view
+
+Use this path when a semantic view is an aggregate over one table: plain select
+items become dimensions, aggregates (`SUM`, `COUNT`, `COUNT(DISTINCT)`, `AVG`,
+`MIN`, `MAX`, combined freely in one column) become metrics, and the table
+becomes the entity. Names, types and descriptions come from the view's columns
+and comments, so document the view rather than the call:
+
+```sql
+CREATE OR REPLACE VIEW MART_SEMANTIC.SHIPPING (
+    SHIP_MODE COMMENT IS 'How the order shipped',
+    FREIGHT   COMMENT IS 'Total freight, in EUR'
+) AS
+SELECT o.ship_mode, SUM(o.freight_amount) AS freight
+FROM MART.ORDERS o
+GROUP BY o.ship_mode
+COMMENT IS 'Freight by ship mode';
+
+EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW('logistics', 'MART_SEMANTIC', 'SHIPPING');
+```
+
+The model is created when absent, and the result is validated and published.
+Call it again after the view changes. A refusal raises and leaves the catalog as
+it was: `SEMANTIC_ADMIN_229` names the unsupported construct (a join, `WHERE`,
+`HAVING`, a subquery, a `GROUP BY` entry that is not a selected column, and so
+on). Metric names must be unique in the model (`SEMANTIC_DDL_095`); two views
+may share a dimension only with the same expression (`SEMANTIC_DDL_096`). The
+`DDL` column holds every statement it ran. See
+[creating-metrics.md](../../../docs/creating-metrics.md#quickest-start-adopt-a-view).
+
 ## Import a Databricks UCMV
 
 Use this path when the source model is a Databricks Unity Catalog Metric View

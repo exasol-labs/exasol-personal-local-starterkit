@@ -69,6 +69,30 @@ class AddonHelpTest(unittest.TestCase):
                     with self.subTest(addon=doc['id'], action=action):
                         self.assertEqual(shape(command), shape(canonical[action]))
 
+    def test_dash_server_restart_is_stop_then_start_and_update_names_several_ids(self):
+        """#48: a same-version exakit update does not restart or repair dash-server, so its help, skill and the
+        marketplace guide must not sell it as the repair. The restart is exakit stop dash-server, then exakit start
+        dash-server, as two commands (Windows PowerShell 5.1 has no &&)."""
+        doc = json.loads((ROOT / 'setup/help/dash-server.json').read_text())
+        commands = {c['command']: c for c in doc['commands']}
+        self.assertIn('exakit stop', commands)
+        self.assertEqual(['exakit stop dash-server'], commands['exakit stop']['examples'])
+        update = commands['exakit update']
+        self.assertEqual('[<component>...] [--yes] [--json]', update['options'])
+        self.assertNotIn('launcher', update['summary'])
+        self.assertIn('exakit stop dash-server, then exakit start dash-server', update['description'])
+        skill = (ROOT / 'skills/dash-server/SKILL.md').read_text()
+        guide = (ROOT / 'MARKETPLACE.md').read_text()
+        for name, text in (('dash-server.json', json.dumps(doc)), ('SKILL.md', skill), ('MARKETPLACE.md', guide)):
+            with self.subTest(file=name):
+                self.assertNotIn('exakit stop dash-server && exakit start dash-server', text)
+                self.assertNotIn('repair path', text)
+                self.assertNotIn('doubles as the repair', text)
+                self.assertNotIn('still repairs the launcher', text)
+                self.assertNotIn('regenerate its launcher', text)
+        self.assertNotIn('EXAKIT_DASH_SERVER_PORT=<port> exakit update\n', skill)
+        self.assertNotIn('EXAKIT_DASH_SERVER_PORT=<port> exakit update`', skill)
+
     def test_addon_topic_shows_real_flags_and_positional_parameters(self):
         text = self.help('--help', 'json-tables')
         self.assertIn('Parameters and options', text)
@@ -106,12 +130,16 @@ class AddonHelpTest(unittest.TestCase):
         self.assertTrue(any('--input' in p['name'] for p in ingest['parameters']))
 
     def test_multiword_help_forms_resolve_the_same_action(self):
-        for words in [('exapump', 'profile', 'init'), ('exasol', 'mcp', 'status')]:
+        # The launcher's commands are listed as exakit exasol ... (its launcher
+        # is not on PATH), and the launcher's own words reach them too.
+        for words, invocation in [(('exapump', 'profile', 'init'), 'exapump profile init'),
+                                  (('exasol', 'mcp', 'status'), 'exakit exasol mcp status'),
+                                  (('exakit', 'exasol', 'mcp', 'status'), 'exakit exasol mcp status')]:
             with self.subTest(words=words):
                 spaced = json.loads(self.help('help', *words, '--json'))
                 quoted = json.loads(self.help('help', ' '.join(words), '--json'))
                 self.assertEqual(spaced, quoted)
-                self.assertEqual(spaced['commands'][0]['invocation'], ' '.join(words))
+                self.assertEqual(spaced['commands'][0]['invocation'], invocation)
         direct = json.loads(self.help('uninstall', '--help', '--json'))
         self.assertEqual(direct, json.loads(self.help('help', 'uninstall', '--json')))
         self.assertEqual(direct['commands'], json.loads(self.help('help', 'exakit uninstall', '--json'))['commands'])

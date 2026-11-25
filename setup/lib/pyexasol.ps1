@@ -123,16 +123,26 @@ function Install-Pyexasol {
         return (Write-PyexasolNotInstalled "uv (the Python tool runner) is not available - install it from https://docs.astral.sh/uv/ and re-run")
     }
     $python = Get-PyexasolVenvPython
+    # A VENV WITHOUT ITS pyvenv.cfg IS NOT ONE: an uninstall removed the rest
+    # while a program held its python.exe, and an install into it can never be
+    # imported. Made again (uv's --clear, below), or said as not installed when
+    # the program still holds it.
+    $brokenVenv = ($python -eq (Join-Path $script:PyexasolVenv "Scripts\python.exe") -and (Test-Path -LiteralPath $python) -and
+        -not (Test-Path -LiteralPath (Join-Path $script:PyexasolVenv "pyvenv.cfg")))
 
     $current = Get-PyexasolInstalledVersion
+    if ($brokenVenv) { $current = "" }
     if ($current -and $current -eq $script:PyexasolVersion) {
         Ok "pyexasol $current already installed: $script:PyexasolVenv"
     } else {
         $script:ExakitActiveLabel = "Installing pyexasol $($script:PyexasolVersion)"
         Info "Installing pyexasol $($script:PyexasolVersion) (Exasol Python driver)"
-        if (-not (Test-Path $python)) {
+        if ($brokenVenv -or -not (Test-Path $python)) {
             # --seed puts pip in the venv (uv leaves it out). Twin of pyexasol.sh.
-            $code = Invoke-ExakitLogged $uv "venv" "--seed" "--python" $script:ManagedPythonVersion $script:PyexasolVenv
+            $venvArgs = @("venv", "--seed")
+            if ($brokenVenv) { $venvArgs += "--clear" }
+            $venvArgs += @("--python", $script:ManagedPythonVersion, $script:PyexasolVenv)
+            $code = Invoke-ExakitLogged $uv @venvArgs
             if ($code -ne 0) {
                 return (Write-PyexasolNotInstalled "the virtual environment at $script:PyexasolVenv could not be created (see log)")
             }

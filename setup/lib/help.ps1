@@ -622,7 +622,10 @@ function Get-ExakitHelpCommandRows {
     if (-not $needle) { return @() }
     $rows = @(Get-ExakitHelpRows -IncludeHidden)
     $knownTools = @($rows | ForEach-Object { $_.tool } | Select-Object -Unique)
-    if ($knownTools -notcontains ($needle -split ' ')[0]) { $needle = "exakit $needle" }
+    # A command of exakit's wins over a tool of the same name: `exakit help
+    # exasol` is the page of `exakit exasol`.
+    $own = @($rows | Where-Object { $_.invocation.ToLowerInvariant() -eq "exakit $needle" }).Count -gt 0
+    if ($own -or $knownTools -notcontains ($needle -split ' ')[0]) { $needle = "exakit $needle" }
     return @($rows | Where-Object {
         $full = $_.invocation.ToLowerInvariant()
         $full -eq $needle -or $full.StartsWith("$needle ")

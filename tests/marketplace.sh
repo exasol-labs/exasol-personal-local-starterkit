@@ -723,6 +723,18 @@ echo "component logs (one command reaches every one of them):"
 mkdir -p "$EXAKIT_HOME/logs"
 printf 'installer line one\ninstaller line two\n' > "$EXAKIT_HOME/logs/install-20260810-090000.log"
 check "the setup log is a target" "setup" "$(exakit_log_targets | cut -d'|' -f1 | grep -x setup)"
+# The newest run that wrote something, not the empty log the newest command
+# (this `exakit logs` itself) just opened (L-02); all empty: the newest.
+mkdir -p "$WORK/setuplogs"
+printf 'installer line\n' > "$WORK/setuplogs/install-20260810-090000.log"
+: > "$WORK/setuplogs/install-20260810-100000.log"
+touch -t 202608101000 "$WORK/setuplogs/install-20260810-090000.log"
+touch -t 202608101100 "$WORK/setuplogs/install-20260810-100000.log"
+check "the setup target is the newest log that is not empty" "$WORK/setuplogs/install-20260810-090000.log" \
+    "$(EXAKIT_LOG_DIR="$WORK/setuplogs" exakit_log_targets | grep '^setup|' | cut -d'|' -f4)"
+rm -f "$WORK/setuplogs/install-20260810-090000.log"
+check "...and when every one is empty, the newest" "$WORK/setuplogs/install-20260810-100000.log" \
+    "$(EXAKIT_LOG_DIR="$WORK/setuplogs" exakit_log_targets | grep '^setup|' | cut -d'|' -f4)"
 # An add-on is viewable as soon as its module names a log — the same
 # registry-driven contract the other hooks use.
 printf 'dash line\n' > "$EXAKIT_HOME/logs/dash-server.log"
@@ -740,8 +752,48 @@ check "an installed add-on with a log hook is a target" "dash-server" \
 check "--path prints the file, nothing else" "$EXAKIT_HOME/logs/dash-server.log" \
     "$(exakit_logs_show dash-server 0 200 1)"
 has "viewing one tails its content" "dash line" "$(exakit_logs_show dash-server 0 200 0)"
+# W3-07: an engine's log lines carry colour codes. Off a terminal (a pipe, as
+# here) or with NO_COLOR they are dropped from what is printed; the file keeps
+# them.
+_esc="$(printf '\033')"
+printf '%s[32mINFO%s[0m scheduler tick\n' "$_esc" "$_esc" >> "$EXAKIT_HOME/logs/dash-server.log"
+_log_piped="$(exakit_logs_show dash-server 0 200 0)"
+has "a piped log keeps its text" "INFO scheduler tick" "$_log_piped"
+lacks "...without the colour codes" "$_esc" "$_log_piped"
+has "...and the file keeps them" "$_esc[32mINFO" "$(cat "$EXAKIT_HOME/logs/dash-server.log")"
+check "a colour terminal gets the line as written" "1" \
+    "$(UI_FANCY=1 exakit_logs_show dash-server 0 200 0 | grep -c "$_esc")"
+# WSL-01: mawk (Debian, Ubuntu, WSL) reads a pipe in 4 KB blocks, so a
+# followed log (tail -f | exakit_strip_sgr) showed nothing for minutes. A
+# mawk is asked for its interactive mode; any other awk runs as it is. The
+# stub stands in for each, and logs how it was called.
+_real_awk="$(command -v awk)"
+mkdir -p "$WORK/awk-mawk" "$WORK/awk-other"
+for _flavour in mawk other; do
+    cat > "$WORK/awk-$_flavour/awk" <<AWKSTUB
+#!/bin/sh
+if [ "\$1" = -W ] && [ "\$2" = version ]; then
+    if [ "$_flavour" = mawk ]; then echo "mawk 1.3.4 20240123"; else echo "awk version 20200816"; fi; exit 0
+fi
+if [ "\$1" = -W ] && [ "\$2" = interactive ]; then echo INTERACTIVE >> "$WORK/awk-$_flavour/calls"; shift 2
+else echo PLAIN >> "$WORK/awk-$_flavour/calls"; fi
+exec "$_real_awk" "\$@"
+AWKSTUB
+    chmod +x "$WORK/awk-$_flavour/awk"
+done
+_wsl01="$(printf '%s[32mINFO%s[0m tick\n' "$_esc" "$_esc" | PATH="$WORK/awk-mawk:$PATH" exakit_strip_sgr)"
+check "WSL-01: a mawk strips in its interactive mode (line by line from a pipe)" "INFO tick|INTERACTIVE" \
+    "$_wsl01|$(cat "$WORK/awk-mawk/calls" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+_wsl01="$(printf '%s[32mINFO%s[0m tick\n' "$_esc" "$_esc" | PATH="$WORK/awk-other:$PATH" exakit_strip_sgr)"
+check "...any other awk as it is" "INFO tick|PLAIN" \
+    "$_wsl01|$(cat "$WORK/awk-other/calls" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 has "the overview lists the targets in a table" "Target" "$(exakit_logs_overview)"
 has "and names the add-on" "dash-server" "$(exakit_logs_overview)"
+# M-12: a target name longer than 22 (autostart-exasol-scheduler) kept the
+# column at 22 and pushed its row's What, Size and Updated out of line.
+_m12="$( exakit_log_targets() { printf 'autostart-exasol-scheduler|Scheduler at login|file|/nonexistent\nsetup|Setup|file|/nonexistent\n'; }; exakit_logs_overview )"
+check "M-12: the What column starts at one place on every row, the longest name included" "1" \
+    "$(printf '%s\n' "$_m12" | awk '/^Target /{print index($0, "What")} /^autostart-exasol-scheduler /{print index($0, "Scheduler")} /^setup /{print index($0, "Setup")}' | sort -u | wc -l | tr -d ' ')"
 # An unknown name explains itself and lists what exists, rather than dying bare.
 _log_unknown="$( (exakit_logs_show not-a-log 0 200 0) 2>&1 || true)"
 has "an unknown target lists what is available" "Available:" "$_log_unknown"

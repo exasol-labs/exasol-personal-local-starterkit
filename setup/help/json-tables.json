@@ -153,15 +153,15 @@
     },
     {
       "command": "exakit update",
-      "options": "[<component>] [--yes] [--json]",
+      "options": "[<component>...] [--yes] [--json]",
       "summary": "Update the engine and wheel.",
       "examples": [
         "exakit update json-tables"
       ],
       "parameters": [
         {
-          "name": "<component>",
-          "description": "Update a kit-owned component or add-on. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept.",
+          "name": "<component>...",
+          "description": "Update only these kit-owned components or add-ons, each once and in any order. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. An add-on that is not installed is not updated: install it with exakit marketplace <id>.",
           "default": "all",
           "required": false
         },

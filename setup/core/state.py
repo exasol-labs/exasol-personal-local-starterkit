@@ -30,6 +30,12 @@ EXIT_USAGE = 2
 EXIT_NO_MANIFEST = 3
 EXIT_BAD_MANIFEST = 4
 EXIT_NOT_WRITABLE = 5
+EXIT_LOCKED = 6
+
+# How long a lock that must be exclusive is waited for on Windows before the
+# command fails: far above the longest operation that holds one (a whole
+# exakit connect: driver staging, the DDL, the trial read).
+EXCLUSIVE_WAIT_SECONDS = 30 * 60
 
 
 class StateError(Exception):
@@ -101,21 +107,29 @@ def pending(tasks, doc, scope=None):
 
 
 @contextlib.contextmanager
-def manifest_lock(path):
+def manifest_lock(path, give_up_after=None, wait=EXCLUSIVE_WAIT_SECONDS):
     """Exclusive lock on <path>.lock for the length of a read-modify-write.
 
-    POSIX uses flock, as mark_step and manifest_set do. Windows has no flock;
-    the PowerShell writers open the lock file with FileShare::None, so holding
-    an open handle here keeps them out, and msvcrt.locking keeps a second
-    Python writer out. A lock that cannot be had in about five seconds is not
+    POSIX uses flock, as mark_step and manifest_set do, and waits for it.
+    Windows has no flock; the PowerShell writers open the lock file with
+    FileShare::None, so holding an open handle here keeps them out, and
+    msvcrt.locking keeps a second Python writer out. Windows waits for the
+    lock too, up to ``wait`` seconds, then fails with EXIT_LOCKED: a command
+    that holds it (a whole exakit connect, under the sources lock) runs far
+    longer than a few seconds, and a second one that went ahead unlocked would
+    decide on state the first is still changing.
+
+    ``give_up_after`` is for the install manifest's own writes only
+    (update_manifest): a lock that cannot be had in that many seconds is not
     worth failing an install over - PowerShell proceeds unlocked in the same
-    case - so neither does this.
+    case - so on Windows the write then proceeds without it.
     """
     lock_path = path + ".lock"
     handle = None
     if os.name == "nt":
         import msvcrt
-        deadline = time.time() + 5
+        deadline = time.time() + (give_up_after if give_up_after is not None else wait)
+        pause = 0.025
         while True:
             try:
                 handle = open(lock_path, "a+")
@@ -128,8 +142,14 @@ def manifest_lock(path):
                     handle.close()
                     handle = None
                 if time.time() >= deadline:
-                    break
-                time.sleep(0.025)
+                    if give_up_after is not None:
+                        break
+                    raise StateError("Another exakit command has held %s for %d minutes. Let it finish, "
+                                     "then run this command again." % (lock_path, max(1, int(wait // 60))),
+                                     EXIT_LOCKED)
+                time.sleep(pause)
+                if give_up_after is None:
+                    pause = min(pause * 2, 0.25)
         try:
             yield
         finally:
@@ -179,7 +199,7 @@ def update_manifest(path, mutate):
     """Lock, read, apply mutate(doc), write atomically. Returns mutate's result."""
     if not os.path.exists(path):
         raise StateError("no install manifest at %s" % path, EXIT_NO_MANIFEST)
-    with manifest_lock(path):
+    with manifest_lock(path, give_up_after=5):
         doc = read_manifest(path)
         result = mutate(doc)
         try:

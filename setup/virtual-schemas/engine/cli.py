@@ -118,6 +118,10 @@ def parse(argv):
     cmd = sub.add_parser("inputs")
     cmd.add_argument("connector")
     cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
+    # The source a connect names: its recorded settings (the lakehouse catalog,
+    # files and login) stand where no --set gives them, so a reconnect by name
+    # alone asks for the secrets of the combination it was connected with.
+    cmd.add_argument("--name", default="")
     cmd = sub.add_parser("field")
     cmd.add_argument("connector")
     cmd.add_argument("input")
@@ -200,7 +204,7 @@ REMEDY_FOR_KIND = {
     "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then "
            "exakit start (the start gives Java the deployment's DNS) - then try again",
     "nojava": "exakit connect installs the Java language container with one database "
-              "restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+              "restart - asked on a terminal, --yes for a script",
     "norust": "exakit connect installs the Rust language container with one database "
               "restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
@@ -393,6 +397,23 @@ def adapter_version(defs, connector_id):
         return ""
 
 
+def recorded_settings(args, connector_id, connector):
+    """The settings a source of this connector was connected with, when
+    --name names one: what a connect by name alone keeps (lifecycle
+    reconnect_values and repoint), so its secrets are the ones asked."""
+    name = getattr(args, "name", "") or ""
+    if not name or not sources.NAME.match(name):
+        return {}
+    store = sources.Store(args.kit_home)
+    if not store.exists(name):
+        return {}
+    current = store.config(name)
+    if current.get("connector") != connector_id:
+        return {}
+    values = current.get("inputs") or {}
+    return dict((key, values[key]) for key in connector["settings"] if values.get(key))
+
+
 def form_answer(args):
     """The terminal form's two questions, answered without the database.
 
@@ -413,6 +434,8 @@ def form_answer(args):
         # catalog yet - the catalog alone, asked first. A combination that is
         # not valid is refused here, in the words a connect would get.
         given = pairs(args.set)
+        recorded = recorded_settings(args, connector_id, connector) if args.command == "inputs" else {}
+        given = dict(recorded, **given)
         chosen = planner.choose_settings(connector, given, partial=True)
         connector = planner.specialize(connector, dict(given, **chosen))
     if args.command == "inputs":

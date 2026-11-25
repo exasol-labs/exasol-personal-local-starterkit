@@ -171,6 +171,7 @@ function Get-ExapumpExpectedSha256 {
 function Get-ExapumpPinnedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
     switch ($AssetName) {
+        "exapump-0.14.1-windows-x86_64.exe" { return "39280a992e0a4f97c1176a94cbe0f560dafb186913bce4fb7609119a520496fb" }
         "exapump-0.14.0-windows-x86_64.exe" { return "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4" }
         "exapump-0.13.0-windows-x86_64.exe" { return "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838" }
         "exapump-0.11.2-windows-x86_64.exe" { return "8a2e8199a94f1b21782e4c68179948bfa43217c82c9b9b2a25eaec4532305237" }
@@ -257,7 +258,9 @@ function Install-Exapump {
                 Fail "The user-owned exapump cannot run. Repair it outside the kit; it was not replaced."
             }
             Warn2 "Existing exapump binary does not run (interrupted download?) - reinstalling"
-            Remove-Item -Force $existing -ErrorAction SilentlyContinue
+            # Only the kit's own path is removed (#40), as on macOS/Linux: the
+            # fresh copy below goes there, and one elsewhere is never touched.
+            if ($existing -eq $script:ExapumpBinPath) { Remove-Item -Force $existing -ErrorAction SilentlyContinue }
         }
     }
 
@@ -1088,7 +1091,7 @@ function Invoke-ExapumpUpload {
             if ($py.Code -eq 0 -and (Test-Path -LiteralPath $lfCopy)) {
                 $source = $lfCopy
                 $uploadArgs[1] = $lfCopy
-                $script:ExakitCsvFlags = (@($script:ExakitCsvFlags.Split(',') | Where-Object { $_ -and $_ -ne "crlf" }) -join ",")
+                $script:ExakitCsvFlags = (@($script:ExakitCsvFlags.Split(',') | Where-Object { $_ -and $_ -ne "crlf" -and $_ -ne "mixed-eol" }) -join ",")
                 Write-ExakitLog "INFO" "$(Split-Path $Path -Leaf): Windows line endings made LF in a temporary copy for the load"
             }
         } catch {
@@ -1898,10 +1901,43 @@ function Get-ExakitCsvInspection {
     $result.Delimiter = $pick.Substring(0, 1)
     $flags = @()
     if ($bom) { $flags += "bom" }
+    # MIXED LINE ENDINGS: PowerShell's `"a`nb`nc" | Set-Content` ends the rows
+    # in LF and the last line in CRLF, and the first line alone said "LF" - so
+    # no LF copy was made and the load failed on "value='9.25<CR>'". Any CRLF
+    # in the file counts. "mixed-eol" says the first line was LF. Twin of
+    # exakit_csv_inspect.
     if ($crlf) { $flags += "crlf" }
+    elseif (Test-ExakitFileHasCrlf -Path $Path) { $flags += "crlf"; $flags += "mixed-eol" }
     if ($pick.EndsWith("?")) { $flags += "ambiguous-delimiter" }
     $result.Flags = ($flags -join ",")
     return $result
+}
+
+# Test-ExakitFileHasCrlf <path> - does any CR LF pair occur in the file, or does
+# it end in a CR (the last record ended by a CR alone)? Read in
+# 1 MB pieces, never whole, and stops at the first.
+function Test-ExakitFileHasCrlf {
+    param([Parameter(Mandatory)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $buffer = New-Object byte[] 1048576
+        $lastWasCr = $false
+        while (($got = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            # A CR that ended the previous piece, and an LF that starts this one.
+            if ($lastWasCr -and $buffer[0] -eq 10) { return $true }
+            $at = [Array]::IndexOf($buffer, [byte]13, 0, $got)
+            while ($at -ge 0) {
+                if ($at + 1 -lt $got -and $buffer[$at + 1] -eq 10) { return $true }
+                if ($at + 1 -ge $got) { break }
+                $at = [Array]::IndexOf($buffer, [byte]13, $at + 1, $got - $at - 1)
+            }
+            $lastWasCr = ($buffer[$got - 1] -eq 13)
+        }
+        # A CR as the very last byte ends the last record with no LF after it:
+        # exapump reads it as part of the value, as with CR LF. Flagged the
+        # same way as the bash twin's `grep "<CR>$"`, which matches it.
+        return $lastWasCr
+    } finally { $stream.Dispose() }
 }
 
 # Get-ExakitCsvDelimiter -Lines <string[]> - which of ',' ';' and a tab
@@ -5089,6 +5125,7 @@ function Show-ExakitDataLoadMenu {
     # Twin of the same block in exakit_data_load_menu.
     if ($script:ExakitRuntimeCheckDeferred) {
         $script:ExakitRuntimeCheckDeferred = $false
+        if (-not (Test-ExakitKitDatabaseGuard)) { exit 3 }
         Confirm-ExakitRuntimeRunning -Deploy
     }
     # The table's order: the datasets, your own file, then the external source.

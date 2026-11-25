@@ -82,6 +82,10 @@ def to_lf(source, target, delimiter=b",", quote=b'"'):
                 pos = line.find(quote, pos + 1)
             if not inside and line.endswith(b"\r\n"):
                 line = line[:-2] + b"\n"
+            elif not inside and line.endswith(b"\r"):
+                # The file's last record ended by a CR alone (no LF after it):
+                # the CR is a line ending, not data, so it is made LF too.
+                line = line[:-1] + b"\n"
             out.write(line)
     return not inside
 

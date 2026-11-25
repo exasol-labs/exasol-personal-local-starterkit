@@ -23,6 +23,10 @@
 #                        and the remedy kills it first
 #                      - destroy works and the directory is gone: 0, nothing
 #                        reported
+#                      - the folder is gone and a container is not: found by
+#                        the id recorded at install
+#                      - the deployment moved to another launcher folder: that
+#                        folder named (by its id) and never removed
 #   exakit_uninstall_run - a teardown that leaves the deployment: no "Database
 #                        removed" line, the leftover and the remedy printed,
 #                        non-zero; a clean teardown: unchanged
@@ -65,7 +69,8 @@ lacks() { # lacks <label> <needle> <haystack>
 SBHOME="$TMP/home"
 mkdir -p "$SBHOME"
 case "$SBHOME" in "$HOME"|"$HOME/") echo "refusing: sandbox HOME is the real HOME"; exit 1 ;; esac
-DEPLOY="$SBHOME/.exasol/personal/deployments/default"
+# The kit's own deployment, starter-kit-local, where a launcher before 2.5.0 keeps it.
+DEPLOY="$SBHOME/.exasol/personal/deployments/starter-kit-local"
 
 # --- stub launcher --------------------------------------------------------
 # STUB_INFO_RC: exit code of `exasol info` (1 = the launcher refuses it, as in
@@ -78,7 +83,10 @@ printf '%s\n' "$*" >> "$STUB_CALLS"
 case "$1" in
     info)    exit "${STUB_INFO_RC:-0}" ;;
     destroy)
-        [ "${STUB_DESTROY_REMOVES:-0}" = 1 ] && rm -rf "$STUB_DEPLOY"
+        # The folder it is told (--deployment-dir), else the kit's.
+        _d="$STUB_DEPLOY"; _p=""
+        for _a in "$@"; do [ "$_p" = --deployment-dir ] && _d="$_a"; _p="$_a"; done
+        [ "${STUB_DESTROY_REMOVES:-0}" = 1 ] && rm -rf "$_d"
         exit "${STUB_DESTROY_RC:-0}" ;;
 esac
 exit 0
@@ -86,27 +94,33 @@ STUB
 # docker / podman: `ps -a` lists STUB_DOCKER_PS / STUB_PODMAN_PS. On PATH ahead
 # of any real engine, so no real container is ever listed or touched.
 printf '#!/usr/bin/env bash\n[ -n "${STUB_DOCKER_FAIL:-}" ] && { echo "$STUB_DOCKER_FAIL" >&2; exit 1; }\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_DOCKER_PS:-}"\nexit 0\n' > "$TMP/bin/docker"
-printf '#!/usr/bin/env bash\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_PODMAN_PS:-}"\nexit 0\n' > "$TMP/bin/podman"
+printf '#!/usr/bin/env bash\n[ -n "${STUB_PODMAN_FAIL:-}" ] && { echo "$STUB_PODMAN_FAIL" >&2; exit 1; }\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_PODMAN_PS:-}"\nexit 0\n' > "$TMP/bin/podman"
 chmod +x "$TMP/bin/exasol" "$TMP/bin/docker" "$TMP/bin/podman"
 
 # --- personal_teardown, the real function ---------------------------------
 cat > "$TMP/teardown.sh" <<HARNESS
 set -u
 HOME="$SBHOME"; export HOME
-export STUB_CALLS="$TMP/calls" STUB_DEPLOY="$DEPLOY"
+export STUB_CALLS="$TMP/calls" STUB_DEPLOY="\${STUB_KIT_DIR:-$DEPLOY}"
 export PATH="$TMP/bin:\$PATH"
 info(){ printf 'INFO %s\n' "\$*"; }; ok(){ printf 'OK %s\n' "\$*"; }
 warn(){ printf 'WARN %s\n' "\$*"; }; error(){ printf 'ERROR %s\n' "\$*"; }
 die(){ printf 'DIE %s\n' "\$*"; exit 1; }
-manifest_get(){ :; }; manifest_set(){ printf 'MANIFEST %s=%s\n' "\$1" "\$2"; }
+# runtime.engine is STUB_ENGINE (nothing recorded by default), and
+# runtime.deployment_id STUB_DEP_ID (the id the kit recorded at install).
+manifest_get(){ [ "\$1" = runtime.engine ] && printf '%s' "\${STUB_ENGINE:-}"; [ "\$1" = runtime.deployment_id ] && printf '%s' "\${STUB_DEP_ID:-}"; return 0; }
+manifest_set(){ printf 'MANIFEST %s=%s\n' "\$1" "\$2"; }
 manifest_del(){ :; }
 detect_os(){ printf '%s' "\${STUB_OS:-macos}"; }
 exakit_run_bounded(){ shift; "\$@"; }
 run_logged(){ "\$@" >/dev/null 2>&1; }
 port_in_use(){ return 1; }
 EXAKIT_BIN_DIR="$TMP/bin"
-EXAKIT_PERSONAL_DEPLOY_DIR="$DEPLOY"
+# STUB_KIT_DIR: a folder the user chose for the kit, in place of the default.
+EXAKIT_PERSONAL_DEPLOY_DIR="\${STUB_KIT_DIR:-$DEPLOY}"
 source "$ROOT/setup/lib/runtime-personal.sh"
+# The kit's own launcher (the kit runs only its own, personal_cli) is the stub.
+EXAKIT_PERSONAL_KIT_BIN="$TMP/bin/exasol"; EXAKIT_PERSONAL_BIN="$TMP/bin/exasol"
 # The port is answered by a stub, never by the real lsof: this machine may run
 # a real database on 8563. STUB_LISTENER is the pid "listening" (if any), and
 # STUB_RUNNER=1 makes it the kit's own runner.
@@ -189,6 +203,84 @@ out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
 contains "g2: an engine that answers gives no warning" "WARNINGS=" "$out"
 lacks    "g2: none at all" "Could not ask" "$out"
 
+# (g3) a Docker deployment, and a podman that refuses (W1-02): only the
+# recorded engine is asked, so no warning names podman. With podman recorded,
+# or nothing recorded, its refusal is still said.
+seed_deploy
+out="$(teardown STUB_OS=linux STUB_ENGINE=docker STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_PODMAN_FAIL="cannot connect to Podman")"
+contains "g3: a refusing engine the deployment never ran on is not a failure" "RC=0" "$out"
+lacks    "g3: and gives no warning" "podman" "$(printf '%s\n' "$out" | grep '^WARNINGS=')"
+seed_deploy
+out="$(teardown STUB_OS=linux STUB_ENGINE=podman STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_PODMAN_FAIL="cannot connect to Podman")"
+contains "g3: the recorded engine's refusal is still a warning" "WARNINGS=Could not confirm the database container is gone (podman said: cannot connect to Podman)" "$out"
+seed_deploy
+out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_PODMAN_FAIL="cannot connect to Podman")"
+contains "g3: nothing recorded: both are asked, as before" "podman said: cannot connect to Podman" "$out"
+
+# (k) the folder is already gone, the container is not (scenario X, X3: the
+# uninstall said "Database removed" over a deployment still there). The id
+# the kit recorded at install names the container, so it is checked anyway.
+rm -rf "$DEPLOY"
+out="$(teardown STUB_OS=linux STUB_DEP_ID=exa-test1 STUB_DOCKER_PS="$(printf 'exa-test1-db-1\nsomebody-else')")"
+lacks    "k: folder gone, container left: not success" "RC=0" "$out"
+contains "k: the container is named by the recorded id" "docker container exa-test1-db-1" "$out"
+contains "k: the remedy removes it" "docker rm -f exa-test1-db-1" "$out"
+lacks    "k: the record does not say removed" "MANIFEST runtime.status=removed" "$out"
+out="$(teardown STUB_OS=linux STUB_DOCKER_PS="$(printf 'exa-test1-db-1\nsomebody-else')")"
+contains "k: with no id recorded, as before (nothing to match a container by)" "RC=0" "$out"
+
+# (l) the launcher moved the deployment out of the kit's legacy folder
+# (launcher 2.5: ~/.exasol/launcher/deployments/starter-kit-local). The kit follows the
+# move (personal_deploy_dir_refresh), so the teardown acts on the moved folder
+# and removes it. A folder there with another name and id is the user's: not
+# named, not touched.
+MOVED="$SBHOME/.exasol/launcher/deployments/starter-kit-local"
+USERS="$SBHOME/.exasol/launcher/deployments/mine"
+rm -rf "$DEPLOY" "$SBHOME/.exasol/launcher"
+mkdir -p "$MOVED" "$USERS"
+printf '{"deploymentId": "exa-test1"}\n' > "$MOVED/deployment.json"
+printf '{"deploymentId": "exa-users"}\n' > "$USERS/deployment.json"
+out="$(teardown STUB_DEP_ID=exa-test1 STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
+contains "l: the moved default folder is followed, and removed" "destroy --remove --auto-approve --deployment-dir $MOVED" "$(cat "$TMP/calls" 2>/dev/null)"
+contains "l: ...and that is success" "RC=0" "$out"
+check    "l: ...the moved folder is gone" "gone" "$([ -d "$MOVED" ] && echo left || echo gone)"
+lacks    "l: the user's own deployment is not named" "$USERS" "$out"
+check    "l: ...nor touched" "yes" "$([ -d "$USERS" ] && echo yes)"
+lacks    "l: ...nor destroyed" "--deployment-dir $USERS" "$(cat "$TMP/calls" 2>/dev/null)"
+rm -rf "$SBHOME/.exasol/launcher"
+# (l2) a folder the user chose for the kit (not the launcher's default, so not
+# followed) that the launcher moved: a folder in the launcher's deployment
+# folders whose state names the kit's deployment id is that deployment, named
+# with its remedy and never removed by the kit. Another id is the user's: not
+# named, not touched.
+KITD="$SBHOME/.exasol/personal/deployments/kit"
+MOVED="$SBHOME/.exasol/launcher/deployments/kit"
+rm -rf "$KITD" "$SBHOME/.exasol/launcher"
+mkdir -p "$MOVED" "$USERS"
+printf '{"deploymentId": "exa-test1"}\n' > "$MOVED/deployment.json"
+printf '{"deploymentId": "exa-users"}\n' > "$USERS/deployment.json"
+out="$(teardown STUB_KIT_DIR="$KITD" STUB_DEP_ID=exa-test1)"
+lacks    "l2: the moved deployment is not success" "RC=0" "$out"
+contains "l2: its folder is named" "the deployment directory $MOVED (the database and ALL its data)" "$out"
+contains "l2: with the command that removes it" "rm -rf '$MOVED'" "$out"
+lacks    "l2: the user's own deployment is not named" "$USERS" "$out"
+check    "l2: the kit removed neither folder" "yes yes" "$([ -d "$MOVED" ] && echo yes) $([ -d "$USERS" ] && echo yes)"
+lacks    "l2: and ran no destroy on them" "destroy" "$(cat "$TMP/calls" 2>/dev/null)"
+# The same with the folder still where the kit put it: found by the id read
+# from it, the moved twin is named once beside it.
+mkdir -p "$KITD"; printf '{"deploymentId": "exa-test1"}\n' > "$KITD/deployment.json"
+out="$(teardown STUB_KIT_DIR="$KITD" STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
+contains "l2: a twin beside a removed folder is still named" "the deployment directory $MOVED" "$out"
+rm -f "$MOVED/deployment.json"
+out="$(teardown STUB_KIT_DIR="$KITD" STUB_DEP_ID=exa-test1)"
+contains "l2: a folder that names no id is not counted" "RC=0" "$out"
+rm -rf "$SBHOME/.exasol/launcher" "$KITD"
+
+echo "the deployment id is recorded at install, on both sides:"
+contains "personal_record_manifest records runtime.deployment_id" 'manifest_set runtime.deployment_id "$_prm_id"' "$(cat "$ROOT/setup/lib/runtime-personal.sh")"
+contains "Write-PersonalManifest records it too" 'Set-ExakitManifestValue "runtime.deployment_id" $recordedId' "$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
+contains "a Remove-Personal that throws is still checked" 'try { Find-PersonalTeardownLeftovers -Id ("" + (Get-ExakitManifestValue "runtime.deployment_id")) } catch { }' "$(cat "$ROOT/setup/exakit.ps1")"
+
 # (f) nothing was ever deployed: success, nothing destroyed.
 rm -rf "$DEPLOY"
 out="$(teardown)"
@@ -217,7 +309,10 @@ EXAKIT_HOME="$SBHOME/.exasol-starter-kit"; EXAKIT_BIN_DIR="$SBHOME/.local/bin"
 EXAKIT_EXAPUMP_CONFIG_DIR="$SBHOME/.exapump"
 EXAKIT_PERSONAL_DEPLOY_DIR="\${STUB_DEPLOY_DIR:-$DEPLOY}"
 export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
-info(){ printf 'INFO %s\n' "\$*"; }; warn(){ printf 'WARN %s\n' "\$*"; }
+# STUB_QUIET=1: info() is quiet inside the run's quiet bracket, as on screen;
+# info_step and ok_step still print (W1-03).
+info(){ [ "\${STUB_QUIET:-0}" = 1 ] && [ "\${EXAKIT_QUIET_DETAIL:-0}" = 1 ] && return 0; printf 'INFO %s\n' "\$*"; }
+warn(){ printf 'WARN %s\n' "\$*"; }
 ok(){ printf 'OK %s\n' "\$*"; }; ok_step(){ printf 'OK %s\n' "\$*"; }
 info_step(){ printf 'INFO %s\n' "\$*"; }; error(){ printf 'ERROR %s\n' "\$*"; }
 die(){ printf 'DIE %s\n' "\$*"; exit 1; }
@@ -234,6 +329,9 @@ systemctl(){ printf 'SYSTEMCTL %s\n' "\$*" >> "$TMP/supervisor"; }
 # docker or podman), and the bounded runner just runs them.
 PATH="\${STUB_ENG_DIR:-$TMP/eng}:$TMP/sysbin"; export PATH
 detect_os(){ printf '%s' "\${STUB_OS:-macos}"; }
+# STUB_UNAME: the kernel name the launcher-cache lookup reads (Linux there:
+# the cache under XDG_CACHE_HOME), whatever this machine is.
+if [ -n "\${STUB_UNAME:-}" ]; then uname(){ printf '%s\n' "\$STUB_UNAME"; }; fi
 exakit_run_bounded(){ shift; "\$@"; }
 $(grep '^EXAKIT_KIT_IMAGE_REPOS=' "$ROOT/setup/lib/common.sh")
 manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; runtime.engine) echo "\${STUB_ENGINE:-docker}" ;; *) echo "" ;; esac; }
@@ -250,13 +348,32 @@ personal_teardown(){
     EXAKIT_TEARDOWN_REMEDY="rm -rf '$DEPLOY'"
     return 1
 }
-for _fn in personal_launcher_cache_dir personal_other_deployments personal_prunable_state_dirs; do
+for _fn in personal_deploy_dir_refresh personal_launcher_cache_dir personal_other_deployments personal_prunable_state_dirs; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
 done
+eval "\$(awk '/^detect_personal_private_mode\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/detect.sh")"
+eval "\$(awk '/^detect_personal_deploy_roots\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/detect.sh")"
+eval "\$(awk '/^detect_personal_deploy_resolve\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/detect.sh")"
+eval "\$(awk '/^detect_personal_deployment_id\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/detect.sh")"
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_recorded_db_port _exakit_uninstall_teardown_warnings _exakit_uninstall_component _exakit_uninstall_orphan_autostart _exakit_kit_image_label _exakit_uninstall_kit_image_ids _exakit_uninstall_kit_images exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
+# STUB_ADDON=1: two add-ons to remove. semantic-views fails the way the
+# module does (its reason on stderr, "<id>: <reason>", exit 1) when
+# STUB_ADDON_FAIL=1; json-tables succeeds with a note on stderr (W1-01).
+if [ "\${STUB_ADDON:-0}" = 1 ]; then
+    exakit_marketplace_installed_addons(){ printf 'semantic-views\njson-tables\n'; }
+    exakit_marketplace_removable_addons(){ printf 'semantic-views\njson-tables\n'; }
+    _exakit_skills_decide_kits(){ :; }
+    _exakit_addon_fn(){ printf '%s_%s\n' "\$(printf '%s' "\$1" | tr - _)" "\$2"; }
+    semantic_views_uninstall(){
+        [ "\${STUB_ADDON_FAIL:-0}" = 1 ] || return 0
+        echo "semantic-views: 1 semantic model(s) are defined in the database: they are your work, so nothing was removed" >&2
+        return 1
+    }
+    json_tables_uninstall(){ echo "json-tables: a note on stderr" >&2; return 0; }
+fi
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
 exakit_unmark_step(){ :; }
 # STUB_MCP_REC=1: record the port the MCP-process stop is handed, stop nothing.
@@ -303,6 +420,18 @@ rm -rf "$DEPLOY"
 out="$(STUB_NO_TYPE=1 bash "$TMP/run.sh" 2>&1)"
 contains "no runtime recorded + nothing on disk: still 0" "RC=0" "$out"
 
+# The add-on's own reason goes on the warning: the logs leave with the kit
+# home in the same run (W1-01).
+out="$(STUB_ADDON=1 STUB_ADDON_FAIL=1 STUB_TD_RC=0 bash "$TMP/run.sh" 2>&1)"
+contains "an add-on that fails: the warning carries its reason" "WARN Removing the semantic-views add-on reported issues (continuing uninstall): 1 semantic model(s) are defined in the database" "$out"
+lacks    "...without the id said twice" "(continuing uninstall): semantic-views:" "$out"
+contains "...and the run goes on past it" "Add-ons removed: json-tables" "$out"
+contains "...to the database" "Database removed" "$out"
+out="$(STUB_ADDON=1 STUB_TD_RC=0 bash "$TMP/run.sh" 2>&1)"
+lacks    "add-ons that are removed: no warning" "reported issues" "$out"
+contains "...both named" "Add-ons removed: semantic-views, json-tables" "$out"
+contains "...and what one wrote to stderr still reaches it" "json-tables: a note on stderr" "$out"
+
 # --- the launcher's download cache and its empty state folders -----------
 echo
 echo "exakit_uninstall_run removes the launcher cache and the empty state folders:"
@@ -348,6 +477,20 @@ rm -rf "$SBHOME/.exasol"; seed_cache; mkdir -p "$CUSTOM"
 out="$(STUB_DEPLOY_DIR="$CUSTOM" env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
 check    "h3c: no other deployment anywhere: the cache goes" "gone" "$(gone "$CACHE")"
 rm -rf "$SBHOME/custom"
+# (h3e) 2.5.0's cache, <cache root>/exasol/launcher/resources: its two
+# parents are left empty by the cache's removal and go too, while the cache
+# root stays; a parent with something else in it stays (U-01).
+CACHE25="$(dirname "$CACHE")/exasol/launcher/resources"
+seed_cache25() { rm -rf "$CACHE" "$(dirname "$CACHE")/exasol"; mkdir -p "$CACHE25/personal"; head -c 1024 /dev/zero > "$CACHE25/personal/img"; }
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache25
+out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h3e: the 2.5.0 cache, exasol/launcher and exasol are gone, the cache root stays" "gone|gone|gone|kept" \
+    "$(gone "$CACHE25")|$(gone "$(dirname "$CACHE25")")|$(gone "$(dirname "$(dirname "$CACHE25")")")|$(gone "$(dirname "$CACHE")")"
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache25; : > "$(dirname "$CACHE")/exasol/someone-elses"
+out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h3e: a parent with something else in it stays" "gone|gone|kept" \
+    "$(gone "$CACHE25")|$(gone "$(dirname "$CACHE25")")|$(gone "$(dirname "$(dirname "$CACHE25")")")"
+rm -rf "$(dirname "$CACHE")/exasol"
 # (h3d) the launcher cache is a symlink: it is kept, never followed.
 rm -rf "$SBHOME/.exasol"; seed_deploy; rm -rf "$CACHE"
 mkdir -p "$TMP/cache-target/personal" "$(dirname "$CACHE")"; : > "$TMP/cache-target/personal/keep"
@@ -368,6 +511,33 @@ out="$(STUB_TD_RC=1 env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
 check    "h5: a failed teardown keeps the cache" "kept" "$(gone "$CACHE")"
 check    "h5: and the deployments folder" "kept" "$(gone "$SBHOME/.exasol/personal/deployments")"
 rm -rf "$SBHOME/.exasol" "$CACHE"
+# (h6) MODE P: the kit's launcher in its own home, next to an Exasol Personal
+# of the user's, on Linux with the user's XDG_CACHE_HOME set. The launcher's
+# cache the uninstall removes is the private home's (the wrapper gives the
+# launcher that one), never the user's XDG_CACHE_HOME, which a launcher of
+# theirs uses.
+PKIT="$SBHOME/.exasol-starter-kit/personal"
+PDEPLOY="$PKIT/home/.exasol/launcher/deployments/starter-kit-local"
+PCACHE="$PKIT/home/.cache/exasol/launcher/resources"
+UCACHE="$SBHOME/.cache-user/exasol/launcher/resources"
+seed_modep() {
+    rm -rf "$SBHOME/.cache-user" "$PKIT"
+    mkdir -p "$PKIT/bin" "$PKIT/libexec" "$PDEPLOY" "$PCACHE" "$UCACHE"
+    printf '#!/bin/sh\nexit 0\n' > "$PKIT/bin/exasol"; chmod +x "$PKIT/bin/exasol"
+    cp "$PKIT/bin/exasol" "$PKIT/libexec/exasol"     # mode P: the binary behind the wrapper
+    printf '{"deploymentId": "exa-p1"}\n' > "$PDEPLOY/deployment.json"
+    : > "$PCACHE/kits"; : > "$UCACHE/theirs"
+}
+seed_modep
+out="$(STUB_DRY=1 STUB_UNAME=Linux STUB_DEPLOY_DIR="$PDEPLOY" XDG_CACHE_HOME="$SBHOME/.cache-user" bash "$TMP/run.sh" 2>&1)"
+contains "h6: dry run lists the private home's cache" "will remove: Exasol launcher download cache $PCACHE" "$out"
+lacks    "h6: dry run never names the user's cache" "$SBHOME/.cache-user" "$out"
+seed_modep
+out="$(STUB_UNAME=Linux STUB_DEPLOY_DIR="$PDEPLOY" XDG_CACHE_HOME="$SBHOME/.cache-user" bash "$TMP/run.sh" 2>&1)"
+contains "h6: the private home's cache is removed" "Launcher download cache removed: $PCACHE" "$out"
+check    "h6: the user's own cache stays" "kept" "$(gone "$UCACHE/theirs")"
+lacks    "h6: and is never named" "$SBHOME/.cache-user" "$out"
+rm -rf "$SBHOME/.cache-user" "$PKIT"
 
 # --- orphaned boot entries: swept by the kit prefix, whatever the registry says
 echo
@@ -540,6 +710,19 @@ out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/scr
 contains "i3b: an in-use language container is kept with its remedy" "Kept image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" "$out"
 contains "i3b: the others still go" "Container images removed (docker): exasol/nano, exasol/mcp-server" "$out"
 lacks    "i3b: the kept one is not called removed" "mcp-server, script-language-container" "$out"
+# (i3q) W1-03: the dry run listed them as "will remove", and the real run's
+# per-image "Kept image" lines are quiet (the log leaves with the kit home).
+# The images it kept are named on one line that outlives the quiet run.
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_QUIET=1 STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" bash "$TMP/run.sh" 2>&1)"
+contains "i3q: a quiet real run says which images it kept, and why" "INFO Container images kept (docker): exasol/nano, script-language-container. docker did not remove them (a container may still use them, or docker did not answer). Remove them later with: docker rmi exasol/nano:2026.2.0-nano.8 exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" "$out"
+contains "i3q: the one removed is still said" "Container images removed (docker): exasol/mcp-server" "$out"
+check    "i3q: one line, not one per image" "1" "$(printf '%s\n' "$out" | grep -c 'Container images kept')"
+out="$(STUB_QUIET=1 STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
+lacks    "i3q: nothing kept: no such line" "Container images kept" "$out"
+rm -f "$TMP/engcalls"; seed_img_deploy
+out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
+lacks    "i3q: a dry run removes nothing, so keeps nothing either" "Container images kept" "$out"
 # (L1) ANOTHER INSTALLATION ON THE SAME ENGINE (audit LNX-01): a WSL kit on
 # Podman and a Windows kit on Docker Desktop, or the reverse. The engine this
 # deployment did not run on is never asked, and an image of the kit's

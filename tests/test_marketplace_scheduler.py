@@ -92,6 +92,30 @@ class SchedulerTest(unittest.TestCase):
             verb = "ALTER" if present else "CREATE"
             self.assertIn((f'{verb} USER SCHEDULER_SVC IDENTIFIED BY "{password}"', password), queries)
 
+    def test_the_receipt_says_whether_the_kit_created_its_login(self) -> None:
+        # The uninstall drops only a login the kit created (marketplace/kit_logins.py): CREATE USER records it, a
+        # login that was there already is one the kit took over, and the kit's own record of the same login stays.
+        def run(present: bool) -> object:
+            def sql(_ctx, statement, *, secret=""):
+                if "EXAKIT_SCHED_USER_PRESENT" in statement:
+                    return "EXAKIT_SCHED_USER_PRESENT" if present else "EXAKIT_SCHED_USER_MISSING"
+                return "EXAKIT_SCHED_SCHEMA_PRESENT"
+
+            with patch.object(scheduler, "_sql", side_effect=sql):
+                scheduler._user(self.ctx)
+            return self.manifest.get("components.exasol_scheduler.db_user_created", "absent")
+
+        self.assertIs(True, run(False))                                   # created now
+        self.manifest.set_many({"components.exasol_scheduler.db_user": "scheduler_svc"})
+        self.assertIs(True, run(True))                                    # the kit's own, again
+        self.manifest.delete("components.exasol_scheduler.db_user_created")
+        self.assertEqual("absent", run(True))                             # a 0.3.0 receipt: no record made up
+        self.manifest.delete("components.exasol_scheduler.db_user")
+        self.assertIs(False, run(True))                                   # there already: taken over
+        self.manifest.set_many({"components.exasol_scheduler.db_user": "other_svc",
+                                "components.exasol_scheduler.db_user_created": True})
+        self.assertIs(False, run(True))                                   # another login's record proves nothing
+
     def test_administrator_cannot_be_used_or_removed_as_the_scheduler_user(self) -> None:
         with patch.dict("os.environ", {"EXAKIT_EXASOL_SCHEDULER_USER": "sys"}), \
              patch.object(scheduler, "_sql") as sql:

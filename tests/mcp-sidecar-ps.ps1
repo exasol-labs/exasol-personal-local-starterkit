@@ -64,9 +64,16 @@ function Set-McpReadonlyAccess {
     Set-ExakitManifestValue "components.mcp_server.connection.user" "mcp_readonly"
     Set-ExakitManifestValue "components.mcp_server.connection.password_file" $pwFile
 }
+# Every launcher call names the kit's deployment folder (launcher 2.4.0 would
+# otherwise act on a deployment in the current folder): the flag is checked
+# here and left out of what is recorded, and a call without it is kept apart.
+$script:noDeployDir = @()
 function Invoke-ExakitLogged {
     param([Parameter(Mandatory)][string]$Cmd, [Parameter(ValueFromRemainingArguments)]$CmdArgs)
-    $script:calls.Add(($CmdArgs -join " ")); return 0
+    $line = ($CmdArgs -join " ")
+    $dd = " --deployment-dir $($script:PersonalDeployDir)"
+    if ($line.EndsWith($dd)) { $line = $line.Substring(0, $line.Length - $dd.Length) } else { $script:noDeployDir += $line }
+    $script:calls.Add($line); return 0
 }
 # uv, as a function called by name - exactly how `& $uv run ...` calls a path.
 function fake-uv {
@@ -128,6 +135,22 @@ Check "...the definition publishes it" 4898 (($script:definition | ConvertFrom-J
 Check "...and the next run keeps it" 4898 (Get-McpSidecarPort)
 $script:busyPorts = @()
 Reset-Manifest; $script:calls.Clear()
+# Q5 (Krishna, 24 Nov): a port another deployment's MCP server has SAVED is
+# taken even when that deployment is stopped and nothing listens on it now.
+$otherDep = Join-Path $work "other-deployment"
+New-Item -ItemType Directory -Force -Path $otherDep | Out-Null
+Set-Content -LiteralPath (Join-Path $otherDep "sidecars.yaml") -Value "sidecars:`n  mcp:`n    container:`n      ports:`n        - name: mcp`n          containerPort: 4896`n          hostPort: 4896`n  other:`n    container:`n      ports:`n        - {name: x, containerPort: 1, `"hostPort`": 4897}"
+$realOthers = ${function:Get-PersonalOtherDeployments}
+function Get-PersonalOtherDeployments { return @($otherDep) }
+Check "the ports other deployments' MCP servers saved" "4896,4897" ((Get-McpSidecarSavedPorts) -join ",")
+$script:said = @()
+$script:statusQueue.Enqueue($starting)
+Check "port 4896 saved by a stopped deployment of theirs (Q5): applied" $true (Set-McpSidecar -Quiet)
+Check "...moved past both saved ports, to 4898" "4898" (Get-ExakitManifestValue "components.mcp_server.port")
+Check "...the definition publishes it" 4898 (($script:definition | ConvertFrom-Json).container.ports[0].hostPort)
+Set-Item -Path function:Get-PersonalOtherDeployments -Value $realOthers
+Remove-Item -Recurse -Force -LiteralPath $otherDep
+Reset-Manifest; $script:calls.Clear()
 $script:statusQueue.Enqueue($starting); $script:statusQueue.Enqueue($restart)
 Check "a deployment that needs one restart: restarted, then applied" $true (Set-McpSidecar -Quiet)
 Check "...stopped and started once" "personal-stop|personal-start" ((@($script:calls) | Where-Object { $_ -like "personal-*" }) -join "|")
@@ -153,8 +176,16 @@ Reset-Manifest; $script:calls.Clear(); $script:status = $failing
 Check "a first run that never serves: not applied" $false (Set-McpSidecar -Quiet)
 Check "...still records where the server will answer, not validated" "sidecar|http://127.0.0.1:4896/mcp|False" "$(Get-ExakitManifestValue 'components.mcp_server.backend')|$(Get-ExakitManifestValue 'components.mcp_server.url')|$(Get-ExakitManifestValue 'components.mcp_server.validated')"
 Reset-Manifest; $script:helpHas = @("install"); $script:calls.Clear()
+# The kit's own launcher: its update is the fix. A launcher the user installed
+# is not the kit's to update, and the fix says so.
+$realManaged = ${function:Test-ExakitComponentManaged}
+function Test-ExakitComponentManaged { param($Id) return $true }
 Check "a launcher without sidecars: not applied" $false (Set-McpSidecar -Quiet)
 Check "...the fix is a launcher update" "Fix: exakit update personal" $script:McpSidecarProblem[1]
+function Test-ExakitComponentManaged { param($Id) return $false }
+[void](Set-McpSidecar -Quiet)
+Check "...a launcher the user installed: the user updates it" "Fix: update your launcher to Exasol Personal 2.4.0 or later, then run exakit mcp-setup" $script:McpSidecarProblem[1]
+${function:Test-ExakitComponentManaged} = $realManaged
 Check "...and nothing was started" $false (@($script:calls) -contains "start")
 $script:helpHas = @("sidecar", "mcp"); $script:status = $serving
 
@@ -444,6 +475,38 @@ $script:sumOk = @(); $script:sumWarn = @()
 Show-McpSetupSummary -ResultJson '{"status":"success_with_warnings","selected_clients":["vscode_copilot"],"details":{"skipped_clients":[{"client":"vscode_copilot","reason":"cannot be written"}]}}'
 Check "...every client skipped: no Ok line" "" ($script:sumOk -join "|")
 Check "...only the Skipped line" "Skipped GitHub Copilot: cannot be written" ($script:sumWarn -join "|")
+Write-Host "the user's own MCP sidecar on a deployment the kit adopted (OWN-04):"
+# The editor as it answers a sidecar of that name it was told to keep.
+function fake-uv-foreign {
+    $script:calls.Add("editor " + ($args -join " "))
+    if ($args -contains "--keep-foreign") { $global:LASTEXITCODE = 3; "foreign"; return }
+    $global:LASTEXITCODE = 0
+    "changed"
+}
+Reset-Manifest
+Set-ExakitManifestValue "runtime.deployment_dir" $env:EXAKIT_PERSONAL_DEPLOY_DIR
+Set-ExakitManifestValue "runtime.ownership" "user"
+Set-ExakitManifestValue "runtime.ownership_path" $env:EXAKIT_PERSONAL_DEPLOY_DIR
+$script:status = $serving; $script:calls.Clear()
+function Get-ExakitUvBin { return "fake-uv-foreign" }
+Check "the user's own MCP sidecar: not replaced" $false (Set-McpSidecar -Quiet)
+Check "...the kit asked the editor to keep it" $true ((@($script:calls) -join "|") -like "*put*--keep-foreign*")
+Check "...said" $true ((@($script:McpSidecarProblem) -join "|") -like "*already has an MCP server of its own*")
+Check "...no start reconciles it" $false (@($script:calls) -contains "start")
+Check "...nothing recorded as the kit's sidecar" "|" "$(Get-ExakitManifestValue 'components.mcp_server.backend')|$(Get-ExakitManifestValue 'components.mcp_server.sidecar_dir')"
+# The uninstall removes only the sidecar the kit wrote.
+Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+$script:calls.Clear()
+Remove-McpSidecar
+Check "uninstall: the user's own MCP sidecar stays" $false ((@($script:calls) -join "|") -like "*sidecar disable*")
+Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+Set-ExakitManifestValue "components.mcp_server.sidecar_dir" $env:EXAKIT_PERSONAL_DEPLOY_DIR
+$script:calls.Clear()
+Remove-McpSidecar
+Check "uninstall: one the kit wrote in that folder goes" $true ((@($script:calls) -join "|") -like "*sidecar disable mcp*")
+Check "...and its record with it" "" "$(Get-ExakitManifestValue 'components.mcp_server.sidecar_dir')"
+function Get-ExakitUvBin { return "fake-uv" }
+Check "every launcher call named the kit's deployment folder" "" ($script:noDeployDir -join "|")
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"

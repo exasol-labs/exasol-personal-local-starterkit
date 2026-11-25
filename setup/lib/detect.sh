@@ -365,9 +365,17 @@ detect_docker_is_podman() {
 # preflight, which runs before the runtime module is sourced.
 detect_launcher_takes_engine() {
     [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || return 0
-    command -v exasol >/dev/null 2>&1 || return 0
     _dlt_tok='([[:space:]]|,|$)'
     _dlt_lead='^[[:space:]]*(-[-a-zA-Z0-9]+,[[:space:]]*)?'
+    # The kit's own launcher in its private home (mode P, runtime-personal.sh)
+    # is the one that deploys, never the user's on PATH.
+    _dlt_cli="${EXAKIT_HOME:-${HOME:-}/.exasol-starter-kit}/personal/bin/exasol"
+    if [ -x "$_dlt_cli" ]; then
+        _dlt_help="$(_detect_engine_probe "$_dlt_cli" install local --help 2>&1 || true)"
+        printf '%s\n' "$_dlt_help" | grep -E "${_dlt_lead}--container-engine${_dlt_tok}" >/dev/null
+        return
+    fi
+    command -v exasol >/dev/null 2>&1 || return 0
     _dlt_cli="$(command -v exasol)"
     _dlt_help="$(_detect_engine_probe "$_dlt_cli" install --help 2>&1 || true)"
     # No `local` preset: the installer downloads its own launcher, which can.
@@ -514,14 +522,305 @@ detect_podman_iptables_driver() {
     [ "$(detect_podman_firewall_driver)" = "iptables" ]
 }
 
+# detect_personal_deploy_roots — the launcher's home and the folders the kit
+# knows inside it, without a fork:
+#   DETECT_PERSONAL_LAUNCHER_HOME        the home the kit's launcher runs with:
+#                                        EXAKIT_PERSONAL_LAUNCHER_HOME when set,
+#                                        the kit's private home when its own
+#                                        launcher runs through the wrapper at
+#                                        $EXAKIT_HOME/personal/bin/exasol (mode P,
+#                                        runtime-personal.sh), else $HOME
+#   DETECT_PERSONAL_DEPLOY_ROOT_NEW      <home>/.exasol/launcher/deployments (2.5.0+)
+#   DETECT_PERSONAL_DEPLOY_ROOT_LEGACY   <home>/.exasol/personal/deployments (2.4.0 and older)
+#   DETECT_PERSONAL_DEPLOY_NEW           the kit's own deployment in the first,
+#   DETECT_PERSONAL_DEPLOY_LEGACY        and in the second: <root>/starter-kit-local
+#                                        (EXAKIT_PERSONAL_DEPLOYMENT)
+#   DETECT_PERSONAL_USER_ROOT_NEW        the two roots in the user's own home,
+#   DETECT_PERSONAL_USER_ROOT_LEGACY     where a launcher of theirs keeps its
+#                                        deployments, whichever home the kit's runs with
+# Launcher 2.5.0 moved its durable root from ~/.exasol/personal to
+# ~/.exasol/launcher, and it MOVES an existing deployment there by itself, on
+# any command but help (internal/launcherpaths, cmd/exasol/startup_migration.go).
+# Every path is derived from the home alone: the launcher has no flag or
+# variable for its root. Twin of the home and folder logic of
+# Resolve-PersonalDeployDir in exakit-common.ps1.
+detect_personal_deploy_roots() {
+    if [ -n "${EXAKIT_PERSONAL_LAUNCHER_HOME:-}" ]; then
+        DETECT_PERSONAL_LAUNCHER_HOME="$EXAKIT_PERSONAL_LAUNCHER_HOME"
+    elif detect_personal_private_mode; then
+        DETECT_PERSONAL_LAUNCHER_HOME="${EXAKIT_HOME:-${HOME:-}/.exasol-starter-kit}/personal/home"
+    else
+        DETECT_PERSONAL_LAUNCHER_HOME="${HOME:-}"
+    fi
+    DETECT_PERSONAL_DEPLOY_ROOT_NEW="$DETECT_PERSONAL_LAUNCHER_HOME/.exasol/launcher/deployments"
+    DETECT_PERSONAL_DEPLOY_ROOT_LEGACY="$DETECT_PERSONAL_LAUNCHER_HOME/.exasol/personal/deployments"
+    DETECT_PERSONAL_DEPLOY_NEW="$DETECT_PERSONAL_DEPLOY_ROOT_NEW/${EXAKIT_PERSONAL_DEPLOYMENT:-starter-kit-local}"
+    DETECT_PERSONAL_DEPLOY_LEGACY="$DETECT_PERSONAL_DEPLOY_ROOT_LEGACY/${EXAKIT_PERSONAL_DEPLOYMENT:-starter-kit-local}"
+    DETECT_PERSONAL_USER_ROOT_NEW="${HOME:-}/.exasol/launcher/deployments"
+    DETECT_PERSONAL_USER_ROOT_LEGACY="${HOME:-}/.exasol/personal/deployments"
+}
+
+# detect_personal_private_mode — 0 when the kit's launcher runs in the kit's
+# private home (mode P). THE ONE MARKER: its binary in personal/libexec, or the
+# private home the kit recorded (runtime.launcher_home) when that file is gone
+# (security software, a folder removed by hand): the home does not change with
+# it, and a launcher run in the user's own home instead moves their 2.4
+# databases. personal/bin/exasol is no marker, every mode has a launcher there.
+# Twin of personal_launcher_home (marketplace/runtime.py). No fork but the
+# grep of a manifest that names that home. JSON escapes what is not plain
+# ASCII (a home under José, a quote, a backslash): such a value is read with
+# the kit's JSON reader, and where there is none, by how it ends (only the
+# kit's private home is ever recorded there).
+detect_personal_private_mode() {
+    _dppm="${EXAKIT_HOME:-${HOME:-}/.exasol-starter-kit}"
+    [ -x "$_dppm/personal/libexec/exasol" ] && return 0
+    [ -f "${EXAKIT_MANIFEST:-$_dppm/manifest.json}" ] || return 1
+    grep -qF '"launcher_home"' "${EXAKIT_MANIFEST:-$_dppm/manifest.json}" 2>/dev/null || return 1
+    _dppm_at="$(sed -n 's/.*"launcher_home": "\([^"]*\)".*/\1/p' "${EXAKIT_MANIFEST:-$_dppm/manifest.json}" 2>/dev/null | head -n 1)"
+    case "$_dppm_at" in
+        *\\*) _dppm_read=""
+              if command -v manifest_get >/dev/null 2>&1 && command -v exakit_can_run_python_any >/dev/null 2>&1 && \
+                 exakit_can_run_python_any 2>/dev/null; then
+                  _dppm_read="$(manifest_get runtime.launcher_home 2>/dev/null || true)"
+              fi
+              if [ -n "$_dppm_read" ]; then [ "$_dppm_read" = "$_dppm/personal/home" ]; return $?; fi
+              case "$_dppm_at" in */personal/home) return 0 ;; esac
+              return 1 ;;
+    esac
+    [ "$_dppm_at" = "$_dppm/personal/home" ]
+}
+
+# detect_personal_deploy_resolve [<dir> [recorded [<id>]]] — where the Exasol Personal
+# deployment folder is NOW, found the way the launcher finds it. THE ONE PLACE
+# the shell side decides which folder holds a deployment; every other reader
+# goes through it (personal_deploy_dir_refresh in runtime-personal.sh, the
+# ownership compare, the TLS disk check, the virtual-schema engine's
+# --deployment-dir). Twin of Resolve-PersonalDeployDir in exakit-common.ps1.
+#
+# THE KIT'S DATABASE IS THE DEPLOYMENT NAMED starter-kit-local
+# (EXAKIT_PERSONAL_DEPLOYMENT), in the launcher's home (detect_personal_deploy_roots):
+#   DETECT_PERSONAL_DEPLOY_NEW     <home>/.exasol/launcher/deployments/starter-kit-local (2.5.0+)
+#   DETECT_PERSONAL_DEPLOY_LEGACY  <home>/.exasol/personal/deployments/starter-kit-local (2.4.0 and older)
+# A deployment of the user's, whatever its name and wherever the launcher keeps
+# it, is never the answer here: one becomes the kit's only through the
+# installer's one question (personal_deploy_local), which renames it to
+# starter-kit-local and records it.
+#
+# THE LAUNCHER'S FOLDERS. When the launcher has said where its deployments are
+# (`exasol deployments list --json`, asked by personal_launcher_deployments,
+# which sets DETECT_PERSONAL_LAUNCHER_LISTED=1 and one "<path><TAB><status>"
+# line per deployment in DETECT_PERSONAL_LAUNCHER_DEPLOYMENTS), those are the
+# folders, wherever that launcher keeps them; so is any folder in its two
+# roots. The answer, in DETECT_PERSONAL_DEPLOY_DIR (with the launcher's status
+# of it in DETECT_PERSONAL_DEPLOY_STATUS, empty when the launcher did not list it):
+#     - <dir> itself when it is none of the launcher's folders: a folder the
+#       user chose with EXAKIT_PERSONAL_DEPLOY_DIR, which the launcher never moves;
+#     - with "recorded", <dir> itself while it is still on disk: a path the
+#       manifest recorded follows only a folder that moved away from it, so a
+#       second deployment elsewhere never inherits the kit's claim;
+#     - with "recorded <id>", a recorded launcher folder that is gone follows
+#       another of the launcher's folders ONLY when the deployment there
+#       carries <id>, the deployment id the kit recorded (runtime.deployment_id),
+#       whatever the recorded folder's name (`default` from a 0.3.0 kit, or
+#       starter-kit-local): one the launcher lists, else the same name or the
+#       kit's own in either root. No id (a kit that never recorded one) or
+#       another id there: <dir> itself, gone. That deployment is the user's
+#       own, and a kit claim on it would let uninstall destroy it;
+#     - else, for no <dir> or the kit's own name in either root, the kit's
+#       own in the 2.5.0 root when it is there, else in the legacy root when
+#       it is there, else <dir> as given (a deployment just removed keeps
+#       naming its folder, so the uninstall prunes the folders it was in), or
+#       the 2.5.0 one when no <dir> is given (where a fresh install deploys);
+#     - else (another of the launcher's folders) <dir> itself.
+# No fork (but the id reads of a recorded folder that is gone) and no output,
+# so a reader can call it every time;
+# detect_personal_deploy_dir is the printing form. POSIX like the rest of
+# this file: the preflight sources it alone.
+detect_personal_deploy_resolve() {
+    detect_personal_deploy_roots
+    DETECT_PERSONAL_DEPLOY_STATUS=""
+    _dpdr_t='	'   # a TAB: the separator of "<path><TAB><status>"
+    if [ "${DETECT_PERSONAL_LAUNCHER_LISTED:-0}" = 1 ]; then
+        _dpdr_list="${DETECT_PERSONAL_LAUNCHER_DEPLOYMENTS:-}"
+    else
+        _dpdr_list="$DETECT_PERSONAL_DEPLOY_NEW$_dpdr_t
+$DETECT_PERSONAL_DEPLOY_LEGACY$_dpdr_t"
+    fi
+    # Is <dir> one of the launcher's folders (the kit's own name in either
+    # root, any folder in its two roots, or one it listed)?
+    case "${1:-}" in
+        ""|"$DETECT_PERSONAL_DEPLOY_NEW"|"$DETECT_PERSONAL_DEPLOY_LEGACY") ;;
+        "$DETECT_PERSONAL_DEPLOY_ROOT_NEW"/*|"$DETECT_PERSONAL_DEPLOY_ROOT_LEGACY"/*) ;;
+        *)  case "
+$_dpdr_list" in
+                *"
+$1$_dpdr_t"*) ;;
+                *) DETECT_PERSONAL_DEPLOY_DIR="$1"; return 0 ;;
+            esac ;;
+    esac
+    if [ "${2:-}" = recorded ] && [ -n "${1:-}" ]; then
+        DETECT_PERSONAL_DEPLOY_DIR="$1"
+        [ -e "$1" ] && return 0
+        # Gone: followed only to another of the launcher's folders, and only
+        # when the deployment there carries the kit's id
+        # (detect_personal_deployment_id, the one fork of this function).
+        [ -n "${3:-}" ] || return 0
+        _dpdr_rest="$_dpdr_list
+$DETECT_PERSONAL_DEPLOY_ROOT_NEW/${1##*/}$_dpdr_t
+$DETECT_PERSONAL_DEPLOY_ROOT_LEGACY/${1##*/}$_dpdr_t"
+        _dpdr_seen=""
+        while [ -n "$_dpdr_rest" ]; do
+            _dpdr_line="${_dpdr_rest%%
+*}"
+            case "$_dpdr_rest" in *"
+"*) _dpdr_rest="${_dpdr_rest#*
+}" ;; *) _dpdr_rest="" ;; esac
+            _dpdr_to="${_dpdr_line%"$_dpdr_t"*}"
+            [ -n "$_dpdr_to" ] && [ "$_dpdr_to" != "$1" ] && [ -d "$_dpdr_to" ] || continue
+            case "$_dpdr_seen
+" in *"
+$_dpdr_to
+"*) continue ;; esac
+            _dpdr_seen="$_dpdr_seen
+$_dpdr_to"
+            if [ "$(detect_personal_deployment_id "$_dpdr_to")" = "$3" ]; then
+                DETECT_PERSONAL_DEPLOY_DIR="$_dpdr_to"
+                DETECT_PERSONAL_DEPLOY_STATUS="${_dpdr_line##*"$_dpdr_t"}"
+                return 0
+            fi
+        done
+        return 0
+    fi
+    case "${1:-}" in
+        ""|"$DETECT_PERSONAL_DEPLOY_NEW"|"$DETECT_PERSONAL_DEPLOY_LEGACY")
+            if [ -d "$DETECT_PERSONAL_DEPLOY_NEW" ]; then
+                DETECT_PERSONAL_DEPLOY_DIR="$DETECT_PERSONAL_DEPLOY_NEW"
+            elif [ -d "$DETECT_PERSONAL_DEPLOY_LEGACY" ]; then
+                DETECT_PERSONAL_DEPLOY_DIR="$DETECT_PERSONAL_DEPLOY_LEGACY"
+            elif [ -n "${1:-}" ]; then
+                DETECT_PERSONAL_DEPLOY_DIR="$1"
+            else
+                DETECT_PERSONAL_DEPLOY_DIR="$DETECT_PERSONAL_DEPLOY_NEW"
+            fi ;;
+        *)  DETECT_PERSONAL_DEPLOY_DIR="$1" ;;
+    esac
+    # The launcher's word on it, when it listed it.
+    if [ "${DETECT_PERSONAL_LAUNCHER_LISTED:-0}" = 1 ]; then
+        _dpdr_rest="
+$_dpdr_list"
+        case "$_dpdr_rest" in
+            *"
+$DETECT_PERSONAL_DEPLOY_DIR$_dpdr_t"*)
+                _dpdr_rest="${_dpdr_rest#*"
+$DETECT_PERSONAL_DEPLOY_DIR$_dpdr_t"}"
+                DETECT_PERSONAL_DEPLOY_STATUS="${_dpdr_rest%%
+*}" ;;
+        esac
+    fi
+    return 0
+}
+
+# detect_personal_deploy_found <recorded> — DETECT_PERSONAL_DEPLOY_FOUND: for a
+# folder the kit recorded that is gone (and that no deployment with the kit's
+# id replaces), the deployment the launcher has in its place, which the kit
+# cannot prove is its own; empty when there is none. The folder of the same
+# name in the launcher's other root first (a launcher of the user's moved it
+# there, and a kit before 0.3.1 kept no id), then a listed folder of that name,
+# then the first deployment the launcher lists (or, with no list, the kit's
+# own name in either root). Not one the launcher calls not_initialized (it
+# holds none). Never the kit's folder: exakit_personal_kit_missing and
+# exakit_personal_db_state name it, and the kit never acts on it. No fork.
+detect_personal_deploy_found() {
+    detect_personal_deploy_roots
+    DETECT_PERSONAL_DEPLOY_FOUND=""
+    [ -n "${1:-}" ] || return 0
+    _dpdf_t='	'
+    for _dpdf_to in "$DETECT_PERSONAL_DEPLOY_ROOT_NEW/${1##*/}" "$DETECT_PERSONAL_DEPLOY_ROOT_LEGACY/${1##*/}"; do
+        [ "$_dpdf_to" != "$1" ] && [ -d "$_dpdf_to" ] || continue
+        DETECT_PERSONAL_DEPLOY_FOUND="$_dpdf_to"
+        return 0
+    done
+    if [ "${DETECT_PERSONAL_LAUNCHER_LISTED:-0}" = 1 ]; then
+        _dpdf_rest="${DETECT_PERSONAL_LAUNCHER_DEPLOYMENTS:-}"
+    else
+        _dpdf_rest="$DETECT_PERSONAL_DEPLOY_NEW$_dpdf_t
+$DETECT_PERSONAL_DEPLOY_LEGACY$_dpdf_t"
+    fi
+    _dpdf_first=""
+    while [ -n "$_dpdf_rest" ]; do
+        _dpdf_line="${_dpdf_rest%%
+*}"
+        case "$_dpdf_rest" in *"
+"*) _dpdf_rest="${_dpdf_rest#*
+}" ;; *) _dpdf_rest="" ;; esac
+        _dpdf_to="${_dpdf_line%"$_dpdf_t"*}"
+        [ -n "$_dpdf_to" ] && [ "$_dpdf_to" != "$1" ] && [ -d "$_dpdf_to" ] || continue
+        [ "${_dpdf_line##*"$_dpdf_t"}" = not_initialized ] && continue
+        if [ "${_dpdf_to##*/}" = "${1##*/}" ]; then
+            DETECT_PERSONAL_DEPLOY_FOUND="$_dpdf_to"
+            return 0
+        fi
+        [ -n "$_dpdf_first" ] || _dpdf_first="$_dpdf_to"
+    done
+    DETECT_PERSONAL_DEPLOY_FOUND="$_dpdf_first"
+    return 0
+}
+
+# detect_personal_deployment_id <dir> — the launcher's id for the deployment in
+# <dir>, or nothing. THE ONE PLACE the shell side reads it (the follow of a
+# moved folder above, the id the kit records, the leftover scan, the language
+# container lookup). The launcher's own state first: it names its containers
+# from .exasolLauncherState.json, and deployment.json can be older than it,
+# or say "local" (what the launcher writes there when it cannot read its
+# state). Read as JSON, the top-level key only; empty, blank and "local" are
+# no id. Read with the kit's Python (run_python_any, else a python3 on PATH):
+# without one, nothing, and nothing is followed or claimed on an id. Twin of Read-PersonalDeploymentId
+# (exakit-common.ps1) and _personal_folder_deployment_id (marketplace/runtime.py).
+detect_personal_deployment_id() {
+    [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+    if command -v run_python_any >/dev/null 2>&1; then
+        _dpdi_py=run_python_any
+    elif command -v python3 >/dev/null 2>&1; then
+        _dpdi_py=python3            # the preflight, which sources this file alone
+    else
+        return 0
+    fi
+    "$_dpdi_py" - "$1" <<'EXAKIT_DPDI_PY' 2>/dev/null
+import json, os, sys
+for name in (".exasolLauncherState.json", "deployment.json"):
+    try:
+        with open(os.path.join(sys.argv[1], name), encoding="utf-8-sig") as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError):
+        continue
+    value = doc.get("deploymentId") if isinstance(doc, dict) else None
+    if isinstance(value, str) and value.strip() and value.strip() != "local":
+        print(value.strip())
+        break
+EXAKIT_DPDI_PY
+    return 0
+}
+
+# detect_personal_deploy_dir [<dir> [recorded [<id>]]] — detect_personal_deploy_resolve,
+# printed.
+detect_personal_deploy_dir() {
+    detect_personal_deploy_resolve "${1:-}" "${2:-}" "${3:-}"
+    printf '%s\n' "$DETECT_PERSONAL_DEPLOY_DIR"
+}
+
 # _detect_personal_deployment_present — true when an Exasol Personal deployment
 # already exists in the launcher's deployment directory (its deployment.json or
 # state file is there). A file check, not personal_deployment_exists: the
 # preflight runs before the runtime module is sourced and must not start the
-# launcher. Same directory default as runtime-personal.sh.
+# launcher. The folder is the one detect_personal_deploy_resolve finds, or a
+# 0.3.0 kit's `default` in either root (it only softens a refusal to a note).
 _detect_personal_deployment_present() {
-    _dpdp_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
-    [ -f "$_dpdp_dir/deployment.json" ] || [ -f "$_dpdp_dir/.exasolLauncherState.json" ]
+    detect_personal_deploy_resolve "${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+    for _dpdp_dir in "$DETECT_PERSONAL_DEPLOY_DIR" "$DETECT_PERSONAL_DEPLOY_ROOT_NEW/default" "$DETECT_PERSONAL_DEPLOY_ROOT_LEGACY/default"; do
+        [ -f "$_dpdp_dir/deployment.json" ] || [ -f "$_dpdp_dir/.exasolLauncherState.json" ] || continue
+        return 0
+    done
+    return 1
 }
 
 # detect_podman_backend_not_netavark — true when Podman is on PATH and answers
@@ -1036,12 +1335,11 @@ preflight_report() {
     else
         _pf_port="${EXAKIT_DB_PORT:-8563}"
     fi
+    # A NEW starter-kit-local takes the next free port when this one is in use
+    # (personal_pick_port), so a busy port is a note, never a refusal, and
+    # whatever holds it is never adopted.
     if port_in_use "$_pf_port"; then
-        if [ "$(detect_os)" = "macos" ]; then
-            _pf_note "Port $_pf_port is in use — fine if that is an existing local Exasol (it is adopted); otherwise stop the other application (the macOS deployment cannot use a different port)"
-        else
-            _pf_note "Port $_pf_port is in use — fine if that is an existing local Exasol; otherwise stop the other application or set EXAKIT_DB_PORT"
-        fi
+        _pf_note "Port $_pf_port is in use — fine: the starter kit's new database then takes the next free port"
     else
         _pf_ok "Port $_pf_port is free"
     fi

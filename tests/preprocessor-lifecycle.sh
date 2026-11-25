@@ -58,11 +58,15 @@ EOF
 chmod +x "$WORK/bin/exapump"
 
 # A small release.sql with the real one's shape: an unguarded CREATE ROLE, the
-# two schemas, the scripts the kit checks for, the Python module resolver a
-# local deployment cannot create, the seed rule, the refresh.
+# two schemas and their owner, the four grants (0.9.1's own, in its order), the
+# scripts the kit checks for, the Python module resolver a local deployment
+# cannot create, the seed rule, the refresh.
 PKG="$WORK/release.sql"
 {
     printf 'CREATE ROLE PREPROC_ADMIN;\nCREATE SCHEMA IF NOT EXISTS PREPROC;\nCREATE SCHEMA IF NOT EXISTS PREPROC_RT;\n'
+    printf 'ALTER SCHEMA PREPROC CHANGE OWNER PREPROC_ADMIN;\nALTER SCHEMA PREPROC_RT CHANGE OWNER PREPROC_ADMIN;\n'
+    printf 'GRANT EXECUTE ON SCHEMA PREPROC_RT TO PUBLIC;\nGRANT SELECT ON SCHEMA PREPROC_RT TO PUBLIC;\n'
+    printf 'GRANT SELECT ANY DICTIONARY TO PREPROC_ADMIN;\nGRANT CREATE SCRIPT TO PREPROC_ADMIN;\n'
     for s in PREPROC_RT.MASTER PREPROC_RT.CONTROL_SUGAR_V1 PREPROC.REFRESH_CORE PREPROC.REFRESH \
              PREPROC.STATUS PREPROC.RULE_ENSURE PREPROC.RULE_DROP PREPROC.RULE_LIST \
              PREPROC.MODULE_REGISTER PREPROC.MODULE_RETIRE PREPROC.MODULE_RECLAIM; do
@@ -321,6 +325,117 @@ ensure --package "$PKG"
 check "a missing script: exit 1" "1" "$RC"
 has "...named" "PREPROC.STATUS" "$OUT"
 lacks "...and release.sql is not replayed" "CREATE ROLE" "$(calls)"
+
+printf '\n== only the role is missing: put back as the package makes it, then adopted ==\n'
+# An uninstall over a database of the user's hands PREPROC and PREPROC_RT to SYS
+# and drops the role; the framework and the slot stay (marketplace/kit_logins.py).
+# The next install then refused the framework, "objects are missing (PREPROC_ADMIN)".
+# uninstalled <scenario> - the database and the record after that uninstall and a
+# new install on the same database: no framework record, a user's own rule.
+uninstalled() {
+    scenario "$1"
+    ensure --package "$PKG"
+    python3 - "$D/state.json" "$D/fresh.json" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+json.dump({k: doc.get(k) for k in ("role", "owners", "grants")}, open(sys.argv[2], "w"), sort_keys=True)
+doc["rules"].append({"id": 7, "script": "PREPROC_RT.SOMEONES_MODULE_V1", "enabled": False})
+doc.update(role=False, owners={"PREPROC": "SYS", "PREPROC_RT": "SYS"}, calls=[],
+           grants=[g for g in doc.get("grants", []) if not g.endswith(" TO PREPROC_ADMIN")])
+json.dump(doc, open(sys.argv[1], "w"))
+EOF
+    printf '{"runtime": {"deployment_id": "exa-mine", "ownership": "user"}, "components": {}, "steps_completed": []}\n' > "$D/manifest.json"
+}
+# the role, the owners and the grants, against what the fresh install left.
+same_as_fresh() { python3 - "$D/state.json" "$D/fresh.json" <<'EOF'
+import json, sys
+doc, fresh = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+print("same" if all(sorted(doc[k]) == sorted(fresh[k]) if isinstance(doc[k], list) else doc[k] == fresh[k]
+                    for k in ("role", "owners", "grants")) else "differs")
+EOF
+}
+# what the uninstall would do with the record as it is now.
+plan_roles() { python3 - "$ROOT" "$D" <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "marketplace"))
+from pathlib import Path
+import kit_logins
+doc = json.load(open(os.path.join(sys.argv[2], "manifest.json")))
+plan = kit_logins.build_plan(doc, Path(sys.argv[2]), "starter-kit-local")
+print(" ".join(plan.roles), " ".join(plan.owned.get("PREPROC_ADMIN", [])))
+EOF
+}
+uninstalled role-only
+_rules="$(st rules)"
+_scripts="$(st scripts)"
+ensure
+check "only the role is missing: put back and adopted, without the package" "0 active true" "$RC $(rec state) $(rec validated)"
+check "...the role, the schemas' owner and the grants are a fresh install's" "same" "$(same_as_fresh)"
+check "...the statements are the package's own, in its order" \
+    "$(grep -E '^(CREATE ROLE|ALTER SCHEMA|GRANT) ' "$PKG" | tr -d ';')" \
+    "$(calls | grep -E '^(CREATE ROLE|ALTER SCHEMA|GRANT) ')"
+check "...in a session that bypasses any preprocessor" "ALTER SESSION SET sql_preprocessor_script = ''" \
+    "$(python3 -c 'import json,sys; print(next(c[0] for c in json.load(open(sys.argv[1]))["calls"] if "CREATE ROLE PREPROC_ADMIN" in c))' "$D/state.json")"
+check "...no rule is touched" "$_rules" "$(st rules)"
+check "...no script either" "$_scripts" "$(st scripts)"
+lacks "...and the rest of release.sql is not replayed" "CREATE SCHEMA" "$(calls)"
+lacks "...nor the slot" "ALTER SYSTEM" "$(calls)"
+check "...recorded: the framework was there, the role is the kit's, in this database" "pre-existing true exa-mine null" \
+    "$(rec origin) $(rec role_created) $(rec made_in) $(rec role_restoring)"
+check "a second uninstall drops the role again, its schemas first" "PREPROC_ADMIN PREPROC PREPROC_RT" "$(plan_roles)"
+reset_calls
+ensure
+check "the next pass verifies" "0" "$RC"
+lacks "...and puts nothing back" "CHANGE OWNER" "$(calls)"
+lacks "...nor creates the role" "CREATE ROLE" "$(calls)"
+check "...and the uninstall still drops the role" "PREPROC_ADMIN PREPROC PREPROC_RT" "$(plan_roles)"
+
+uninstalled role-twice
+for _round in 1 2; do
+    ensure
+    check "uninstalled and installed again ($_round): the role is back" "0 same" "$RC $(same_as_fresh)"
+    python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["role"]=False; d["owners"]={"PREPROC": "SYS", "PREPROC_RT": "SYS"}; json.dump(d,open(p,"w"))' "$D/state.json"
+    printf '{"runtime": {"deployment_id": "exa-mine", "ownership": "user"}, "components": {}, "steps_completed": []}\n' > "$D/manifest.json"
+done
+
+for _fault in "ALTER SCHEMA PREPROC_RT CHANGE OWNER" "GRANT CREATE SCRIPT"; do
+    uninstalled "role-dies-$(printf '%s' "$_fault" | tr -d ' ')"
+    fault "fail_on:$_fault"
+    ensure
+    check "a run that dies at $_fault: exit 1" "1" "$RC"
+    has "...said" "the framework's role PREPROC_ADMIN could not be put back: injected failure on $_fault" "$OUT"
+    python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["faults"]=[]; d["calls"]=[]; json.dump(d,open(p,"w"))' "$D/state.json"
+    ensure
+    check "...the next run finishes it" "0 same null" "$RC $(same_as_fresh) $(rec role_restoring)"
+    lacks "...without creating the role twice" "CREATE ROLE" "$(calls)"
+    check "...and the uninstall drops it" "PREPROC_ADMIN PREPROC PREPROC_RT" "$(plan_roles)"
+done
+
+# refused <name> - the old refusal, and nothing changed in the database.
+refused() {
+    ensure --package "$PKG"
+    check "$1: still refused" "1" "$RC"
+    has "...with the same message" "framework objects are missing (" "$OUT"
+    lacks "...no role created" "CREATE ROLE" "$(calls)"
+    lacks "...no owner changed" "CHANGE OWNER" "$(calls)"
+    lacks "...no grant" "GRANT " "$(calls)"
+    check "...and no record that the kit made one" "null" "$(rec role_created)"
+}
+uninstalled role-and-script
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["scripts"]=[s for s in d["scripts"] if s!="PREPROC.STATUS"]; json.dump(d,open(p,"w"))' "$D/state.json"
+refused "the role and a script missing"
+uninstalled role-and-schema
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["schemas"]=["PREPROC_RT"]; json.dump(d,open(p,"w"))' "$D/state.json"
+refused "the role and a schema missing"
+# A schema that went to somebody else is theirs: the uninstall gives them to SYS only.
+uninstalled role-foreign-owner
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["owners"]["PREPROC"]="TEAM_ADMIN"; json.dump(d,open(p,"w"))' "$D/state.json"
+refused "the role missing and a schema owned by a role of the user's"
+uninstalled role-inactive
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["system_slot"]=""; json.dump(d,open(p,"w"))' "$D/state.json"
+ensure --package "$PKG"
+check "the role missing and the slot empty: a conflict, as before" "3" "$RC"
+lacks "...nothing created" "CREATE ROLE" "$(calls)"
 
 printf '\n== a cleared slot is reactivated; a newer pin is reported, not forced ==\n'
 scenario cleared
@@ -988,6 +1103,7 @@ bridge_mcp() {
     : > "$B/launcher"
     bridge eval '. "$ROOT/setup/lib/mcp.sh"
         personal_cli() { printf "%s\n" "$B/sbin/exasol"; }
+        personal_launcher_deployments() { return 1; }
         exakit_ensure_uv() { EXAKIT_UV_BIN="$B/sbin/uv"; }
         EXAKIT_MCP_SIDECAR_WAIT=0
         manifest_set components.mcp_server.backend "'"$1"'"
@@ -1001,7 +1117,8 @@ B_OUT="$(bridge_mcp sidecar)"
 has "the framework is activated" "installed, tested and activated" "$B_OUT"
 check "...then the running server is restarted: switched off and reconciled, the framework already in the slot" \
     "mcp status --json slot=PREPROC_RT.MASTER|sidecar disable mcp slot=PREPROC_RT.MASTER|start slot=PREPROC_RT.MASTER|mcp status --json slot=PREPROC_RT.MASTER" \
-    "$(tr '\n' '|' < "$B/launcher" | sed 's/|$//')"
+    "$(sed 's/ --deployment-dir [^ ]*//' "$B/launcher" | tr '\n' '|' | sed 's/|$//')"
+check "...each call naming the kit's deployment folder" "0" "$(grep -vc -- '--deployment-dir ' "$B/launcher")"
 has "...said in one line" "The MCP server was restarted to pick up the SQL Preprocessor" "$B_OUT"
 # The install screen's "SQL Preprocessor" sub-line ends "MCP server restarted",
 # found by matching the start of that line: the line mcp.sh says must match.
@@ -1017,11 +1134,11 @@ check "...leaves the server alone" "" "$(cat "$B/launcher")"
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["system_slot"]=""; json.dump(d,open(p,"w"))' "$B/state.json"
 B_OUT="$(bridge_mcp sidecar)"
 has "a cleared slot is activated again" "activating it again" "$B_OUT"
-check "...and the server restarted after it" "sidecar disable mcp slot=PREPROC_RT.MASTER" "$(grep 'sidecar disable' "$B/launcher")"
+check "...and the server restarted after it" "sidecar disable mcp slot=PREPROC_RT.MASTER" "$(grep 'sidecar disable' "$B/launcher" | sed 's/ --deployment-dir [^ ]*//')"
 u5_fresh
 printf '%s\n' '{"name": "mcp", "running": false, "health": "stopped"}' > "$B/sidecar-status"
 B_OUT="$(bridge_mcp sidecar)"
-check "a server that is not running is not restarted" "mcp status --json slot=PREPROC_RT.MASTER" "$(cat "$B/launcher")"
+check "a server that is not running is not restarted" "mcp status --json slot=PREPROC_RT.MASTER" "$(sed 's/ --deployment-dir [^ ]*//' "$B/launcher")"
 u5_fresh
 printf '%s\n' "$U5_SERVING" > "$B/sidecar-status"
 B_OUT="$(bridge_mcp stdio)"

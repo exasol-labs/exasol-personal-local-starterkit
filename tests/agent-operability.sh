@@ -1128,8 +1128,11 @@ printf '\n== repair-runtime actually replaces the database ==\n'
 EXAKIT_SH="$(cat "$ROOT/setup/exakit")"
 has "repair-runtime forces a fresh deployment" 'export EXAKIT_REUSE_DB=0' "$EXAKIT_SH"
 has "...and the Windows twin does too" '$env:EXAKIT_REUSE_DB = "0"' "$(cat "$ROOT/setup/exakit.ps1")"
-# The runtime asks, and takes the flag as the answer.
-has "the personal runtime honours it" 'confirm_env EXAKIT_REUSE_DB' \
+# The runtime takes the flag as the answer: 0 (a new database) skips reusing
+# the kit's own, through EXAKIT_REUSE_DB's own parser (it also takes a name).
+has "the personal runtime honours it" '0|n|N|no|NO|No|new) return 0 ;;' \
+    "$(cat "$ROOT/setup/lib/runtime-personal.sh")"
+has "...where it decides whether the kit's own is reused" '_personal_reuse_declined' \
     "$(cat "$ROOT/setup/lib/runtime-personal.sh")"
 # On macOS, declining reuse of a STOPPED deployment must be as harmless as
 # declining it for a running one: the deletion has its own question and its
@@ -1421,7 +1424,7 @@ has "the deploy approves host preparation" \
 has "...and so does the reuse start" \
     'run_logged "$(personal_cli)" start $(personal_auto_approve_flag start)' "$RP_SH"
 has "...and the start command itself" \
-    'if ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start); then' "$RP_SH"
+    'if ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start) --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR"; then' "$RP_SH"
 # A launcher that does not take the flag must never be handed it: 2.2 is still
 # a supported deployment and an unknown flag is a hard failure, not a warning.
 # Behavioural, against a stub whose install advertises the flag and whose start
@@ -1715,8 +1718,13 @@ has "the deployment installs podman before anything else" "personal_install_podm
 # platform (macOS), an existing deployment keeps its own, a fresh one is chosen
 # for - and the Podman install follows on the Podman branch, still before the
 # launcher is asked for anything.
-_p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | head -1)"
+# After the folder is read (personal_deploy_dir_refresh), which acts on
+# nothing, and the one question of a first install (personal_choose_database:
+# which database, before the engine is read from it), which installs nothing.
+_p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | grep -v 'personal_deploy_dir_refresh$' | grep -v 'personal_choose_database || return 1$' | head -1)"
 has "...right after the engine is settled" "personal_engine_platform" "$_p2first"
+has "...after the one question, which installs nothing" "personal_choose_database || return 1" \
+    "$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | grep -v 'personal_deploy_dir_refresh$' | head -1)"
 _p2pod="$(printf '%s\n' "$_p2dep" | grep -n 'personal_install_podman || return 1' | cut -d: -f1 | head -1)"
 _p2launch="$(printf '%s\n' "$_p2dep" | grep -n '"$(personal_cli)" install local' | cut -d: -f1 | head -1)"
 check "...and before the launcher is asked for anything" yes \
@@ -1815,7 +1823,8 @@ for _p2setup in setup-linux.sh setup-macos.sh; do
     # redeploy fails the same single way - it used to fall straight through to
     # rollback_clear and let every later step discover the missing database one
     # refused connection at a time.
-    check "...on all three arms: the install, the redeploy and the start" "3"         "$(printf '%s' "$_p2body" | grep -c 'exakit_record_soft_failure runtime')"
+    # Four: the install, the kit's own database gone (the deploy step's questions again), the redeploy and the start.
+    check "...on all four arms: the install, the kit database missing, the redeploy and the start" "4"         "$(printf '%s' "$_p2body" | grep -c 'exakit_record_soft_failure runtime')"
 done
 
 # The steps that need a database say so ONCE, together, and the exakit helper
@@ -1839,7 +1848,7 @@ _p2winsu="$(cat "$ROOT/setup/setup-windows.ps1")"
 has "windows flags a podman-less deploy rather than failing it"     'script:PersonalNoDatabase = $true' "$_p2winrt"
 has "...leaving the same kind of reason"     'Set-ExakitFailureReason "Podman is not installed and the launcher' "$_p2winrt"
 has "...and the windows step records it"     'Register-ExakitSoftFailure -Component "runtime"' "$_p2winsu"
-check "...on both arms, like the sh side" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'Register-ExakitSoftFailure -Component "runtime"')"
+check "...on all three arms, like the sh side" "3"     "$(printf '%s' "$_p2winsu" | grep -c 'Register-ExakitSoftFailure -Component "runtime"')"
 has "...and the db-dependent steps skip in one line"     "they all need the database, which is not installed" "$_p2winsu"
 check "...guarding the rest too: the AI bridge and its client offers" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
 check "...and Setup Utilities' database items as one block" "1"     "$(printf '%s' "$_p2winsu" | grep -c '^    if (\$dbReady) {$')"
@@ -1853,9 +1862,11 @@ lacks "...and never exakit update"     'Component "runtime" -Repair "exakit upda
 lacks "the deploy hints never send the reader to exakit update (sh)"     "run 'exakit update'" "$(cat "$ROOT/setup/lib/runtime-personal.sh")"
 lacks "...nor on windows"     "run 'exakit update'" "$_p2winrt"
 _p2sfsh="$(sed -n '/^exakit_print_soft_failures()/,/^}/p' "$ROOT/setup/lib/common.sh")"
-has "a failed database is not called ready in the summary (sh)"     "Everything that does not need the database is ready" "$_p2sfsh"
+has "a failed database is not called ready in the summary (sh)"     "No database is usable, so the steps that need one were skipped." "$_p2sfsh"
+lacks "...no ready line beside a failed database (sh)"     "Everything that does not need the database is ready" "$_p2sfsh"
 _p2sfps="$(sed -n '/^function Write-ExakitSoftFailures/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
-has "...nor on windows"     "Everything that does not need the database is ready" "$_p2sfps"
+has "...nor on windows"     "No database is usable, so the steps that need one were skipped." "$_p2sfps"
+lacks "...no ready line beside a failed database (windows)"     "Everything that does not need the database is ready" "$_p2sfps"
 
 # A WINDOWS FILE LOCK IS RETRIED. The launcher renames a temp file over
 # runtime-artifacts\index.json, and Windows refuses that while a scanner holds
@@ -1990,8 +2001,12 @@ lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
 # Sixteen with a replace refused because this run's start already failed on
 # the WSL kernel's nftables error (nothing is deleted). Eighteen with a
 # deployment that never started: its replacement declined, or refused by the
-# WSL check before its destroy.
-check "...set by each cause that leaves no database" "18" \
+# WSL check before its destroy. Nineteen with a failed deployment that is not
+# the kit's, which is never deployed again (OWN-06). Twenty-two with a
+# rename of the database the user picked that did not happen, no free port
+# from 8563 to 8663 for a new starter-kit-local, and a database of the user's
+# that does not start (never offered for a replace).
+check "...set by each cause that leaves no database" "22" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \
@@ -2580,6 +2595,13 @@ _dc_yes="$(sed -n '/if \[ "\$_uni_yes" = 1 \]; then/,/^    fi/p' "$ROOT/setup/ex
 has "a --yes uninstall warns that the database data goes" 'including all database data' "$_dc_yes"
 has "...says nothing is exported, and names the full list" 'not exported. To see every item first: exakit uninstall --dry-run' "$_dc_yes"
 has "...and still performs the removal"       'exakit_uninstall_run 0' "$_dc_yes"
+# W-01: a database that is not the kit's, or no runtime recorded, stays, and
+# the warning says so instead of "all database data".
+has "...a database the kit does not remove is said to stay" "Removes the starter kit. Your own Exasol database and its data stay." "$_dc_yes"
+has "...that line too names the full list"    'info "To see every item first: exakit uninstall --dry-run"' "$_dc_yes"
+_dc_yes_ps="$(sed -n '/if (\$AssumeYes) {/,/^    }/p' "$ROOT/setup/exakit.ps1")"
+has "the Windows twin says the same"          'Warn2 "Removes the starter kit. Your own Exasol database and its data stay."' "$_dc_yes_ps"
+has "...and keeps the data warning for the kit's own" 'Warn2 "Removes the full kit, including all database data."' "$_dc_yes_ps"
 
 # LIF-12: the rescue line printed before repair-runtime named `exakit sql
 # --json`, whose {"ok","rows","row_count"} envelope nothing in the kit ingests
@@ -2761,7 +2783,7 @@ has "...and warns that a WSL remedy may not be yours to run" 'not every `remedie
     "$(cat "$ROOT/AGENTS.md")"
 
 # DOC-11: two adjacent bullets gave two tokens for one state - the JSON says
-# `ahead`, the human table prints `none`, and the more specific bullet named
+# `ahead`, the human table printed `none`, and the more specific bullet named
 # the one that can never appear in JSON.
 _js_agents="$(cat "$ROOT/AGENTS.md")"
 has "the ahead state is documented by its JSON token" 'reports that row'"'"'s `status` as **`ahead`**' "$_js_agents"

@@ -185,6 +185,29 @@ check "...and the user's file is byte-for-byte what it was" "$_before" "$(cksum 
 lacks "...and no carriage-return warning is needed any more" "carriage return" "$_win"
 check "...and the copy is gone afterwards" "0" "$(ls -d "${TMPDIR:-/tmp}"/exakit-lf.* 2>/dev/null | wc -l | tr -d ' ')"
 lacks "...with no delimiter flag for a comma file" "--delimiter" "$(cat "$SHAPES_GOT/argv")"
+# W3-01: MIXED LINE ENDINGS. PowerShell's `"a`nb`nc" | Set-Content` ends its
+# rows in LF and its last line in CRLF: only the first terminator was read, so
+# the file went over as it was and failed on "value='9.25<CR>'" (seen live on
+# Windows 11). Any CRLF anywhere flags it, and the LF copy goes over.
+printf 'id,amount\n1,7\n2,9.25\r\n' > "$SHAPES/mixed-last.csv"
+check "a file whose last line alone ends in CRLF is flagged" ",|crlf,mixed-eol" "$(exakit_csv_inspect "$SHAPES/mixed-last.csv")"
+: > "$SHAPES_GOT/argv"
+_mixed="$( ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/mixed-last.csv" T.MIXED ) 2>&1 )"
+lacks "...and is not handed over as it is" "upload $SHAPES/mixed-last.csv " "$(cat "$SHAPES_GOT/argv")"
+check "...but as an LF copy" "$(printf 'id,amount\n1,7\n2,9.25\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+lacks "...with no carriage-return warning" "carriage return" "$_mixed"
+# A last record ended by a CR alone, no LF after it: flagged as on Windows
+# (review 0.3.1, item 2, the twins agree), and the copy ends it in LF.
+printf 'a,b\n1,2\r' > "$SHAPES/eof-cr.csv"
+check "a file that ends in a lone CR is flagged" ",|crlf,mixed-eol" "$(exakit_csv_inspect "$SHAPES/eof-cr.csv")"
+: > "$SHAPES_GOT/argv"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/eof-cr.csv" T.EOFCR ) >/dev/null 2>&1
+check "...and goes over as an LF copy" "$(printf 'a,b\n1,2\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+printf 'id,amount\r\n1,7\n2,9.25\n' > "$SHAPES/mixed-first.csv"
+check "a CRLF header over LF rows is flagged CRLF" ",|crlf" "$(exakit_csv_inspect "$SHAPES/mixed-first.csv")"
+( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/mixed-first.csv" T.MIXED ) >/dev/null 2>&1
+check "...and goes over as an LF copy" "$(printf 'id,amount\n1,7\n2,9.25\n' | cksum)" "$(cksum < "$SHAPES_GOT/received")"
+check "an LF file is still not flagged" ",|" "$(exakit_csv_inspect "$SHAPES/plain.csv")"
 # A CRLF inside a quoted field is data, not a record end: it stays.
 printf 'id,note,amount\r\n1,"two\r\nlines",10.5\r\n2,"say ""hi""",7\r\n' > "$SHAPES/quoted.csv"
 ( EXAKIT_UPLOAD_QUIET=1 exapump_upload "$SHAPES/quoted.csv" T.QUOTED ) >/dev/null 2>&1

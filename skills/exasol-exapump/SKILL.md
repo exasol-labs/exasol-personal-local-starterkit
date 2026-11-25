@@ -181,7 +181,7 @@ Matching numbers is the whole point — the AI's answer becomes the user's
 
 | You see | It means | Do |
 |---|---|---|
-| `Failed to connect to 127.0.0.1:8563` | the database is not running | `exakit start`, confirm with `exakit status` |
+| `Failed to connect to 127.0.0.1:8563` (or the kit's own port) | the database is not running | `exakit start`, confirm with `exakit status` |
 | `syntax error, unexpected FETCH_` / `TOP_` | Exasol does not support those | rewrite with `LIMIT <n>` |
 | `object <NAME> not found` | wrong name or missing schema | describe it first, then fix the query |
 | `Parser error: Invalid timezone "UTC": only offset based timezones supported without chrono-tz feature` | exapump 0.14.0 cannot print a `TIMESTAMP WITH LOCAL TIME ZONE` value (`CURRENT_TIMESTAMP`, or a column of that type) | cast it with `CAST(x AS TIMESTAMP)`, or query it through MCP or pyexasol |

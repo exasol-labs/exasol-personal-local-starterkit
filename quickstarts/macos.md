@@ -27,7 +27,7 @@ curl https://www.exasol.com/install/starter-kit.sh | sh
 What happens, in order:
 
 1. The installer checks your Mac (chip, memory, disk) and shows the plan
-2. The database is deployed and started
+2. The kit's database, the Exasol Personal deployment `starter-kit-local`, is deployed and started
 3. exapump (the data tool) is installed and tested
 4. The sample data is loaded and verified
 5. The AI bridge is set up with a read-only database login, and your AI clients are connected
@@ -61,12 +61,13 @@ Then try the [example questions](../data/example-questions.md).
 
 ```bash
 exakit version         # installed vs the versions the maintainers advertise
-exakit update          # the quick ones in seconds, then it asks before touching the database
-exakit update --yes    # unattended: applies a waiting database update without asking
+exakit update          # the quick ones in seconds, then the database update with one restart
 ```
 
-When a database update is waiting, `exakit update` asks `Stop the database and update the
-runtime now? [y/N]`, and `y` runs the whole sequence for you. A major Exasol
+When a database update is waiting, `exakit update` stops the database, updates it
+and starts it again for you, with no question. Coming from kit 0.3.0, it also
+renames the database to `starter-kit-local`, with the same data, port and
+sources. A major Exasol
 Personal version never starts that way. It is a data migration, so it goes
 through the backup-gated route, one step at a time:
 
@@ -88,8 +89,10 @@ For the full detail, see [Staying up to date](../README.md#staying-up-to-date).
 | Company-managed Mac blocks virtualization | Use a machine you control |
 | `exakit start` keeps failing after a crash or hard power-off | `exakit status` says `interrupted`. The launcher cannot restart that deployment, so rebuild it with `exakit repair-runtime`. **This deletes the database content.** The bundled sample data is reloaded, but anything you loaded yourself is not |
 | On an Intel Mac, `exakit data-load` will not take a `.json` file | The JSON Tables add-on is published for Apple silicon only. Everything else in the kit runs on both. Convert the file to CSV or Parquet, or load it from an Apple silicon Mac |
-| Where did everything go? | Commands: `~/.local/bin` · kit state and credentials: `~/.exasol-starter-kit` · the database itself (deployment, data, `secrets.json`): `~/.exasol/personal/deployments/default` |
+| I already have Exasol Personal | The kit's database is its own deployment, `starter-kit-local`, with its own port: 8563, or the next free port when another Exasol uses it. With Exasol Personal 2.5 and databases of yours, the installer asks one question: a new database for the kit (the default, press Enter), or one of yours, which is then renamed to `starter-kit-local` and keeps its data. Your other databases are not touched. With Exasol Personal 2.4, or one newer than 2.5, the kit runs its own launcher in its own folder, `~/.exasol-starter-kit/personal/`, and leaves yours alone |
+| `exasol status` does not show the kit's database | Typed by hand, `exasol status` looks at the launcher's `default` deployment. The kit's database is `starter-kit-local`: run `exakit status`. `exakit exasol status -d starter-kit-local` shows it too |
+| Where did everything go? | Commands: `~/.local/bin` · kit state and credentials: `~/.exasol-starter-kit` · the database itself (deployment, data, `secrets.json`): `~/.exasol/launcher/deployments/starter-kit-local`, or under `~/.exasol-starter-kit/personal/` when the kit runs its own launcher next to yours. A kit 0.3.0 database was `~/.exasol/personal/deployments/default`: the update renames it to `starter-kit-local` and it moves to the new folder by itself, which `exakit info --json` names in `runtime.deployment_dir` |
 
 You can stop and start the database at any time with `exakit stop` and `exakit start`. Your data is kept.
 
-To remove everything, run `exakit uninstall`.
+To remove everything, run `exakit uninstall`. It removes the kit's own database and its data. A database of yours that the kit used is kept, with only the kit's logins removed from it.

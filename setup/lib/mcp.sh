@@ -19,6 +19,13 @@
 # Legacy fallback used only when older manifest state does not yet contain the
 # validated connection block. Keep it aligned with the provisioned read-only
 # database user name.
+# The one rule of exakit_personal_db_state (common.sh). A caller that loaded
+# this file without common.sh (a test of one function) gets a guard that lets
+# everything through, as before the rule; common.sh, sourced first or later,
+# defines the real one.
+command -v exakit_kit_database_guard >/dev/null 2>&1 || exakit_kit_database_guard() { return 0; }
+command -v exakit_personal_db_state >/dev/null 2>&1 || exakit_personal_db_state() { return 0; }
+
 EXAKIT_MCP_USER="${EXAKIT_MCP_USER:-mcp_readonly}"
 
 # mcp_command_path — the uvx the AI clients are told to launch.
@@ -282,19 +289,101 @@ mcp_sidecar_image_version() {
 mcp_sidecar_supported() {
     [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
     command -v personal_cli >/dev/null 2>&1 || return 1
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || return 1
     _mss_help="$(exakit_run_bounded "${EXAKIT_PERSONAL_PROBE_TIMEOUT:-20}" "$(personal_cli)" --help 2>&1)" || return 1
     printf '%s\n' "$_mss_help" | personal_help_names_token sidecar || return 1
     printf '%s\n' "$_mss_help" | personal_help_names_token mcp
 }
 
+# mcp_sidecar_is_kits — 0 when the `mcp` sidecar of the deployment in use is
+# the kit's to write and remove (OWN-04): the deployment is the kit's own, or
+# the kit wrote the sidecar in this very folder (components.mcp_server.
+# sidecar_dir, recorded by _mcp_sidecar_put, followed where the launcher moved
+# it), or a kit from before that record set it up (backend "sidecar") on a
+# database not known to be the user's. A deployment the kit adopted can carry
+# the launcher's own MCP server, set up by its user: never replaced, never
+# removed. Twin of Test-McpSidecarIsKits.
+mcp_sidecar_is_kits() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    _msik_owner=unknown
+    command -v exakit_component_ownership >/dev/null 2>&1 && _msik_owner="$(exakit_component_ownership database)"
+    [ "$_msik_owner" = kit ] && return 0
+    _msik="$(manifest_get components.mcp_server.sidecar_dir 2>/dev/null || true)"
+    if [ -n "$_msik" ]; then
+        command -v exakit_personal_deploy_dir_now >/dev/null 2>&1 && _msik="$(exakit_personal_deploy_dir_now "$_msik")"
+        [ "$_msik" = "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ]
+        return
+    fi
+    # A kit from before that record set one up as backend "sidecar": its own,
+    # unless the database is known to be the user's.
+    [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && [ "$_msik_owner" != user ]
+}
+
+# mcp_sidecar_claim — the record a kit before 0.3.1 never wrote
+# (components.mcp_server.sidecar_dir), written by the update once the
+# database is followed by its id, when the `mcp` sidecar of the deployment in
+# use is provably the kit's: the kit's MCP server is recorded (backend
+# "sidecar", its read-only login and its port), AND the sidecar saved in the
+# deployment's sidecars.yaml signs in with that login and publishes that
+# port (sidecar_definition.py is-kits). Without it, a database the user let
+# the 0.3.0 kit use (runtime.ownership user) kept the kit's MCP server
+# running after `exakit uninstall`, since mcp_sidecar_is_kits could not tell
+# it was the kit's. A sidecar the user set up (the launcher's own signs in
+# with the deployment's user) is never claimed, and nothing is claimed when
+# the proof cannot be read: no sidecars.yaml, no usable uv, a record already
+# there, or a database that is not the kit's to act on. Always 0. Twin of
+# the PowerShell side's claim (mcp.ps1).
+# mcp_sidecar_claim offline — the same, NEVER DOWNLOADING: the uv the kit
+# has and PyYAML from its cache, or nothing claimed. For a caller whose
+# database is stopped (the one question's rename, before the deploy step
+# starts it), so a slow or blocked network never keeps it down longer. The
+# update claims after its one start instead.
+mcp_sidecar_claim() {
+    [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] || return 0
+    [ -z "$(manifest_get components.mcp_server.sidecar_dir 2>/dev/null || true)" ] || return 0
+    # The kit's own database: its sidecar is the kit's without a record.
+    [ "$(exakit_component_ownership database 2>/dev/null || true)" != kit ] || return 0
+    _mscl_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
+    _mscl_port="$(manifest_get components.mcp_server.port 2>/dev/null || true)"
+    [ -n "$_mscl_user" ] && [ -n "$_mscl_port" ] || return 0
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    [ -f "${EXAKIT_PERSONAL_DEPLOY_DIR:-}/sidecars.yaml" ] || return 0
+    [ -z "$(exakit_personal_db_state 2>/dev/null || true)" ] || return 0
+    _mscl_root="$(exakit_repo_root 2>/dev/null)" || return 0
+    command -v exakit_ensure_uv >/dev/null 2>&1 || return 0
+    _mscl_offline=""
+    if [ "${1:-}" = offline ]; then
+        # exakit_ensure_uv installs nothing for a read-only query.
+        _mscl_ro_set="${EXAKIT_READONLY_QUERY+set}"; _mscl_ro="${EXAKIT_READONLY_QUERY-}"
+        EXAKIT_READONLY_QUERY=1
+        _mscl_uv=0
+        exakit_ensure_uv >/dev/null 2>&1 || _mscl_uv=1
+        if [ -n "$_mscl_ro_set" ]; then EXAKIT_READONLY_QUERY="$_mscl_ro"; else unset EXAKIT_READONLY_QUERY; fi
+        [ "$_mscl_uv" = 0 ] || return 0
+        _mscl_offline=--offline
+    else
+        exakit_ensure_uv >/dev/null 2>&1 || return 0
+    fi
+    "$EXAKIT_UV_BIN" run ${_mscl_offline:+"$_mscl_offline"} --no-project --quiet --with "$EXAKIT_SIDECAR_PYYAML" python \
+        "$_mscl_root/setup/lib/sidecar_definition.py" is-kits \
+        "$EXAKIT_PERSONAL_DEPLOY_DIR/sidecars.yaml" "$EXAKIT_MCP_SIDECAR" "$_mscl_user" "$_mscl_port" \
+        >/dev/null 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || return 0
+    manifest_set components.mcp_server.sidecar_dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
+    return 0
+}
+
 # mcp_sidecar_remove — switch the kit's MCP sidecar off and drop its record: for
 # uninstalling the MCP component, never as a way out of a failure.
 mcp_sidecar_remove() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    # Never a sidecar of a deployment that is not the kit's (exakit_personal_db_state).
     if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
-       command -v personal_cli >/dev/null 2>&1; then
-        run_logged "$(personal_cli)" sidecar disable "$EXAKIT_MCP_SIDECAR" >/dev/null 2>&1 || true
+       command -v personal_cli >/dev/null 2>&1 && \
+       [ -z "$(exakit_personal_db_state 2>/dev/null || true)" ] && mcp_sidecar_is_kits; then
+        run_logged "$(personal_cli)" sidecar disable "$EXAKIT_MCP_SIDECAR" --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
     fi
+    manifest_del components.mcp_server.sidecar_dir 2>/dev/null || true
     manifest_del components.mcp_server.backend 2>/dev/null || true
     manifest_del components.mcp_server.url 2>/dev/null || true
     manifest_del components.mcp_server.bridge 2>/dev/null || true
@@ -379,7 +468,9 @@ PY
 }
 
 # _mcp_sidecar_put <user> <password file> <port> — write the definition into
-# the deployment's sidecars.yaml; prints "changed" or "unchanged".
+# the deployment's sidecars.yaml; prints "changed" or "unchanged". A sidecar
+# of that name the kit did not write (mcp_sidecar_is_kits) is kept: it prints
+# "foreign" and returns 3. The folder written is recorded as the kit's.
 _mcp_sidecar_put() {
     _msp_root="$(exakit_repo_root)" || return 1
     _msp_def="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-sidecar.XXXXXX")" || return 1
@@ -388,12 +479,19 @@ _mcp_sidecar_put() {
         rm -f "$_msp_def"
         return 1
     fi
+    # The folder the deployment is in now: launcher 2.5.0 moves it.
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    # Only into the kit's own deployment (exakit_personal_db_state).
+    exakit_kit_database_guard || { rm -f "$_msp_def"; return 1; }
+    _msp_keep=""
+    mcp_sidecar_is_kits || _msp_keep="--keep-foreign"
     "$EXAKIT_UV_BIN" run --no-project --quiet --with "$EXAKIT_SIDECAR_PYYAML" python \
         "$_msp_root/setup/lib/sidecar_definition.py" put \
-        "$EXAKIT_PERSONAL_DEPLOY_DIR/sidecars.yaml" "$EXAKIT_MCP_SIDECAR" "$_msp_def" \
+        "$EXAKIT_PERSONAL_DEPLOY_DIR/sidecars.yaml" "$EXAKIT_MCP_SIDECAR" "$_msp_def" $_msp_keep \
         2>>"${EXAKIT_LOG_FILE:-/dev/null}"
     _msp_rc=$?
     rm -f "$_msp_def"
+    [ "$_msp_rc" = 0 ] && manifest_set components.mcp_server.sidecar_dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1
     return $_msp_rc
 }
 
@@ -407,7 +505,10 @@ _mcp_sidecar_put() {
 # database takes it at its next start. Nothing for any other backend.
 # ⇄ twin: Update-McpSidecarDefinition in mcp.ps1.
 mcp_sidecar_refresh() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] || return 0
+    # A server the kit did not write is not the kit's to refresh (OWN-04).
+    mcp_sidecar_is_kits || return 0
     _msr_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
     _msr_pw="$(manifest_get components.mcp_server.connection.password_file 2>/dev/null || true)"
     [ -n "$_msr_user" ] && [ -f "$_msr_pw" ] || return 0
@@ -418,7 +519,7 @@ mcp_sidecar_refresh() {
     [ "$_msr_changed" = changed ] || return 0
     if personal_deployment_running >/dev/null 2>&1; then
         _msr_cli="$(personal_cli)"
-        run_logged "$_msr_cli" start || return 1
+        run_logged "$_msr_cli" start --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" || return 1
         _mcp_sidecar_wait "$_msr_cli"
         [ "$_msw_state" = serving ] || return 1
     fi
@@ -438,10 +539,13 @@ mcp_sidecar_refresh() {
 # serves again (or there was nothing to restart).
 # ⇄ twin: Restart-McpSidecar in mcp.ps1.
 mcp_sidecar_restart() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] || return 0
+    exakit_kit_database_guard || return 1
+    mcp_sidecar_is_kits || return 0
     command -v personal_cli >/dev/null 2>&1 || return 0
     _msx_cli="$(personal_cli)"
-    _msx_status="$(exakit_run_bounded 60 "$_msx_cli" mcp status --json 2>/dev/null || true)"
+    _msx_status="$(exakit_run_bounded 60 "$_msx_cli" mcp status --json --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" 2>/dev/null || true)"
     [ "$(_mcp_sidecar_field "$_msx_status" running)" = true ] || \
         [ "$(_mcp_sidecar_field "$_msx_status" health)" = serving ] || return 0
     _msx_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
@@ -453,13 +557,13 @@ mcp_sidecar_restart() {
         warn "The MCP server beside your database could not be restarted (uv is not available). Fix: exakit mcp-doctor"
         return 1
     fi
-    run_logged "$_msx_cli" sidecar disable "$EXAKIT_MCP_SIDECAR" >/dev/null 2>&1 || true
+    run_logged "$_msx_cli" sidecar disable "$EXAKIT_MCP_SIDECAR" --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
     if ! _mcp_sidecar_put "$_msx_user" "$_msx_pw" "$_msx_port" >/dev/null; then
         warn "The MCP server beside your database could not be restarted (its definition was not written). Fix: exakit mcp-doctor"
         manifest_set components.mcp_server.validated false
         return 1
     fi
-    run_logged "$_msx_cli" start >/dev/null 2>&1 || true
+    run_logged "$_msx_cli" start --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
     _mcp_sidecar_wait "$_msx_cli"
     if [ "$_msw_state" != serving ]; then
         warn "The MCP server beside your database did not come back after its restart. Fix: exakit mcp-doctor"
@@ -475,10 +579,11 @@ mcp_sidecar_restart() {
 # status JSON) - variables, not output, so the caller keeps both. The budget is EXAKIT_MCP_SIDECAR_WAIT (the probe's own startup
 # window is a minute; twice that before calling it stuck).
 _mcp_sidecar_wait() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     _msw_budget="${EXAKIT_MCP_SIDECAR_WAIT:-120}"
     _msw_waited=0
     while :; do
-        _msw_status="$(exakit_run_bounded 60 "$1" mcp status --json 2>/dev/null || true)"
+        _msw_status="$(exakit_run_bounded 60 "$1" mcp status --json --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" 2>/dev/null || true)"
         if [ "$(_mcp_sidecar_field "$_msw_status" restartRequired)" = true ]; then
             _msw_state=restart; return 0
         fi
@@ -502,14 +607,42 @@ _mcp_sidecar_unhealed() {
     manifest_set components.mcp_server.validated false
 }
 
+# _mcp_sidecar_saved_ports — the host ports the MCP servers of the user's
+# other deployments have saved (their sidecars.yaml), " 4896 4897 " form. A
+# stopped deployment binds its port when it starts, so a saved port is taken
+# even when nothing listens on it now (Q5, as the database port, D3). Read as
+# text: no Python.
+_mcp_sidecar_saved_ports() {
+    _mssp=" "
+    command -v personal_saved_port_deployments >/dev/null 2>&1 || { printf '%s' "$_mssp"; return 0; }
+    while IFS= read -r _mssp_dep; do
+        [ -n "$_mssp_dep" ] && [ -f "$_mssp_dep/sidecars.yaml" ] || continue
+        for _mssp_p in $(sed -n 's/.*"\{0,1\}hostPort"\{0,1\}[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$_mssp_dep/sidecars.yaml" 2>/dev/null); do
+            _mssp="$_mssp$_mssp_p "
+        done
+    done <<EXAKIT_MSSP_DEPS
+$(personal_saved_port_deployments)
+EXAKIT_MSSP_DEPS
+    printf '%s' "$_mssp"
+}
+
+# _mcp_sidecar_port_taken <port> [<saved ports>] — 0 when something listens
+# on <port> now, or another deployment's MCP server has it saved.
+_mcp_sidecar_port_taken() {
+    case "${2:-$(_mcp_sidecar_saved_ports)}" in *" $1 "*) return 0 ;; esac
+    port_in_use "$1"
+}
+
 # _mcp_sidecar_free_port <port> — the first port from <port>+1 to <port>+20
-# nothing listens on; nothing printed when all of them are taken.
+# that is neither in use nor saved by another deployment's MCP server; nothing
+# printed when all of them are taken.
 _mcp_sidecar_free_port() {
     _msfp="$1"
     _msfp_last=$(( $1 + 20 ))
+    _msfp_saved="$(_mcp_sidecar_saved_ports)"
     while [ "$_msfp" -lt "$_msfp_last" ]; do
         _msfp=$(( _msfp + 1 ))
-        port_in_use "$_msfp" || { printf '%s\n' "$_msfp"; return 0; }
+        _mcp_sidecar_port_taken "$_msfp" "$_msfp_saved" || { printf '%s\n' "$_msfp"; return 0; }
     done
     return 1
 }
@@ -530,9 +663,23 @@ _mcp_sidecar_free_port() {
 # serves.
 # ⇄ twin: Set-McpSidecar in mcp.ps1.
 mcp_sidecar_apply() {
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    # Beside the kit's own database only (exakit_personal_db_state).
+    exakit_kit_database_guard || return 1
     if ! mcp_sidecar_supported; then
-        error "The Exasol Personal launcher here has no MCP sidecar (it predates 2.4.0)."
-        info "Fix: exakit update personal"
+        # The true reason, of the three mcp_sidecar_supported can fail on: no
+        # deployment of the kit's own, a launcher the user installed, or the
+        # kit's own launcher from before 2.4.0.
+        if [ ! -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ]; then
+            error "This kit has no database deployment yet, so the MCP server has nothing to run beside."
+            info "Fix: once the database is installed, run exakit mcp-setup"
+        elif ! exakit_component_is_managed personal; then
+            error "Your own Exasol launcher has no MCP sidecar, so the MCP server cannot run beside the database."
+            info "Fix: update your launcher to Exasol Personal 2.4.0 or later, then run exakit mcp-setup"
+        else
+            error "The Exasol Personal launcher here has no MCP sidecar (it predates 2.4.0)."
+            info "Fix: exakit update personal"
+        fi
         return 1
     fi
     _msa_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
@@ -561,9 +708,11 @@ mcp_sidecar_apply() {
     _msa_cli="$(personal_cli)"
     _msa_port="$(manifest_get components.mcp_server.port 2>/dev/null || true)"
     case "$_msa_port" in ''|*[!0-9]*) _msa_port="$EXAKIT_MCP_SIDECAR_PORT" ;; esac
-    _msa_status="$(exakit_run_bounded 60 "$_msa_cli" mcp status --json 2>/dev/null || true)"
+    _msa_status="$(exakit_run_bounded 60 "$_msa_cli" mcp status --json --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" 2>/dev/null || true)"
     # A port that answers while our server does not serve is someone else's.
-    if [ "$(_mcp_sidecar_field "$_msa_status" health)" != serving ] && port_in_use "$_msa_port"; then
+    # So is a port another deployment's MCP server has saved (Q5): it binds
+    # it when that deployment starts.
+    if [ "$(_mcp_sidecar_field "$_msa_status" health)" != serving ] && _mcp_sidecar_port_taken "$_msa_port"; then
         _msa_free="$(_mcp_sidecar_free_port "$_msa_port" || true)"
         if [ -z "$_msa_free" ]; then
             error "Port $_msa_port and the 20 after it are in use, so the MCP server has nowhere to listen."
@@ -571,10 +720,19 @@ mcp_sidecar_apply() {
             manifest_set components.mcp_server.validated false
             return 1
         fi
-        info "Self-heal: port $_msa_port is in use by another program - the MCP server moves to $_msa_free"
+        if port_in_use "$_msa_port"; then
+            info "Self-heal: port $_msa_port is in use by another program - the MCP server moves to $_msa_free"
+        else
+            info "Self-heal: port $_msa_port is saved by another Exasol Personal deployment - the MCP server moves to $_msa_free"
+        fi
         _msa_port="$_msa_free"
     fi
     _msa_changed="$(_mcp_sidecar_put "$_msa_user" "$_msa_pw" "$_msa_port")" || {
+        if [ "$_msa_changed" = foreign ]; then
+            # The user's own MCP server (OWN-04): kept, and nothing recorded as the kit's.
+            error "This deployment already has an MCP server of its own (sidecar '$EXAKIT_MCP_SIDECAR'). The kit leaves it as it is and sets up no server beside it."
+            return 1
+        fi
         error "The MCP server's definition could not be written into $EXAKIT_PERSONAL_DEPLOY_DIR/sidecars.yaml."
         info "Fix: exakit mcp-doctor (exakit logs setup says what failed)"
         _mcp_sidecar_unhealed "$_msa_port"
@@ -583,7 +741,7 @@ mcp_sidecar_apply() {
     if [ "$_msa_changed" = changed ] || [ "$(_mcp_sidecar_field "$_msa_status" health)" != serving ]; then
         # `exasol start` reconciles saved definitions even when the database is
         # already running: it recreates only what changed, the database stays up.
-        run_logged "$_msa_cli" start || _exakit_log_file "WARN  MCP: exasol start reported a failure; waiting for the sidecar anyway"
+        run_logged "$_msa_cli" start --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" || _exakit_log_file "WARN  MCP: exasol start reported a failure; waiting for the sidecar anyway"
     fi
     _msa_restarted=0
     _msa_recreated=0
@@ -617,9 +775,9 @@ mcp_sidecar_apply() {
                 fi
                 _msa_recreated=1
                 info "Self-heal: the MCP server did not start - recreating it"
-                run_logged "$_msa_cli" sidecar disable "$EXAKIT_MCP_SIDECAR" >/dev/null 2>&1 || true
+                run_logged "$_msa_cli" sidecar disable "$EXAKIT_MCP_SIDECAR" --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
                 _mcp_sidecar_put "$_msa_user" "$_msa_pw" "$_msa_port" >/dev/null || true
-                run_logged "$_msa_cli" start >/dev/null 2>&1 || true
+                run_logged "$_msa_cli" start --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
                 ;;
         esac
     done
