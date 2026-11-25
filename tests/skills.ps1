@@ -57,6 +57,9 @@ foreach ($needed in @("Get-ExakitSkillRoots", "Get-ExakitSkillField", "Copy-Exak
 }
 
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-skills-" + [guid]::NewGuid())
+# The uninstall functions lifted below reach the Startup folder: never the real
+# one (tests/autostart-sandbox-guard.sh).
+$env:EXAKIT_STARTUP_DIR = Join-Path $sandbox "Startup"
 $rootA = Join-Path $sandbox "claude-skills"
 $rootB = Join-Path $sandbox "agents skills"   # a space, on purpose: that is why the separator is ';'
 $src   = Join-Path $sandbox "src"

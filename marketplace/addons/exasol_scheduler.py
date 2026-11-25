@@ -23,7 +23,7 @@ from pathlib import Path
 
 from process import ManagedProcess, _command, _creation
 from runtime import cmd_file_bytes, AddonFailure, KitContext, cmd_quote, venv_python, write_private, host_machine
-from runtime import glibc_floor_reason
+from runtime import glibc_floor_reason, id_text, made_in_this_database, personal_deployment_dir, uninstall_keeps_database
 
 ID = "exasol-scheduler"
 RECEIPT = "components.exasol_scheduler"
@@ -60,15 +60,38 @@ def _launcher(ctx: KitContext) -> str | None:
 
 
 def _deployment(ctx: KitContext) -> Path | None:
+    # Followed to where launcher 2.5.0 moved it (personal_deployment_dir): the sidecars.yaml is in there. Only
+    # a folder whose deployment carries the id the kit recorded: never the user's own deployment.
+    # In the launcher's home (runtime.launcher_home: the kit's private one in mode P), asked of the launcher the kit
+    # recorded (runtime.launcher), whatever the recorded folder's name.
     raw = os.environ.get("EXAKIT_PERSONAL_DEPLOY_DIR") or ctx.manifest.get("runtime.deployment_dir")
-    return Path(str(raw)) if raw and Path(str(raw)).is_dir() else None
+    return personal_deployment_dir(raw, deployment_id=ctx.manifest.get("runtime.deployment_id"),
+                                   ownership=ctx.manifest.get("runtime.ownership"),
+                                   launcher_home=ctx.manifest.get("runtime.launcher_home"),
+                                   launcher=ctx.manifest.get("runtime.launcher"))
 
 
 def _launch(ctx: KitContext, *args: str, timeout: int = 300) -> subprocess.CompletedProcess:
+    """The launcher, on the kit's own deployment. Every command but --help and version names that folder
+    (--deployment-dir): without it the launcher acts on the deployment in the folder it runs from, or on its
+    default, which next to a deployment of the user's is theirs. Run from the kit, never the caller's folder."""
     launcher = _launcher(ctx)
     if not launcher:
         raise AddonFailure("The Exasol Personal launcher is missing; repair with: exakit update personal")
-    return subprocess.run([launcher, *args], capture_output=True, text=True, check=False, timeout=timeout)
+    argv = [launcher, *args]
+    if args and args[0] not in ("--help", "version"):
+        deployment = _deployment(ctx)
+        if deployment is None:
+            raise AddonFailure("The Exasol Personal deployment was not found; check exakit status")
+        argv += ["--deployment-dir", str(deployment)]
+    return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout, cwd=str(ctx.root))
+
+
+def _sidecar_status_command(ctx: KitContext) -> str:
+    """The launcher command a fix names, on the kit's own deployment: a bare `exasol sidecar status` reads the
+    launcher's default deployment, which can be the user's (WSL-04)."""
+    deployment = _deployment(ctx)
+    return f"exasol sidecar status {SIDECAR}" + (f" --deployment-dir {deployment}" if deployment else "")
 
 
 def _sidecar_mode(ctx: KitContext) -> bool:
@@ -368,7 +391,17 @@ def _user(ctx: KitContext) -> tuple[str, str, bool]:
     present = "EXAKIT_SCHED_USER_PRESENT" in _sql(
         ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_DBA_USERS WHERE USER_NAME = "
         f"'{user}') THEN 'EXAKIT_SCHED_USER_PRESENT' ELSE 'EXAKIT_SCHED_USER_MISSING' END AS STATUS")
+    # WHO MADE THE LOGIN, for the uninstall (marketplace/kit_logins.py drops only a login the kit created): the kit,
+    # when this CREATE makes it, or when its own receipt says so for the same login; a login that was there already
+    # is one the kit takes over, never dropped. A receipt from before this record (0.3.0) keeps none.
+    recorded = str(ctx.manifest.get(f"{RECEIPT}.db_user", "") or "").upper()
+    if recorded == user and not made_in_this_database(ctx.manifest.get, RECEIPT):
+        recorded = ""                       # made in another database: this one's login of that name is not the kit's
+    created = ctx.manifest.get(f"{RECEIPT}.db_user_created") if present and recorded == user else not present
     _sql(ctx, f'{"ALTER" if present else "CREATE"} USER {user} IDENTIFIED BY "{password}"', secret=password)
+    if created is not None:
+        ctx.manifest.set_many({f"{RECEIPT}.db_user_created": created is True or str(created).lower() == "true",
+                               f"{RECEIPT}.made_in": id_text(ctx.manifest.get("runtime.deployment_id"))})
     _sql(ctx, f"GRANT CREATE SESSION TO {user}")
     bootstrap = not _schema_exists(ctx, schema)
     if bootstrap:
@@ -516,7 +549,7 @@ def status(ctx: KitContext) -> str:
         if state.get("running"):
             return "running"
         reason = state.get("error") or state.get("healthError")
-        return f"stopped ({reason}; diagnose: exasol sidecar status {SIDECAR})" if reason else "stopped"
+        return f"stopped ({reason}; diagnose: {_sidecar_status_command(ctx)})" if reason else "stopped"
     home, launcher, _, _, _ = paths(ctx)
     # A launcher an earlier kit wrote (needs_update) is still an install: only no engine or no launcher at all is not.
     if not installed_version(ctx) or not (launcher.is_file() or _legacy_launcher(ctx)):
@@ -546,7 +579,7 @@ def start(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
         # Re-enabling keeps the saved definition (the scheduler user, the image).
         if _launch(ctx, "sidecar", "enable", SIDECAR).returncode != 0:
-            raise AddonFailure(f"The scheduler sidecar did not start. Diagnose: exasol sidecar status {SIDECAR}")
+            raise AddonFailure(f"The scheduler sidecar did not start. Diagnose: {_sidecar_status_command(ctx)}")
         return
     home, _, engine, log, credential = paths(ctx)
     python = venv_python(home / "python")
@@ -580,8 +613,10 @@ def start(ctx: KitContext) -> None:
 
 def stop(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
-        # Disable keeps the definition, so the next start brings back the same one.
-        _launch(ctx, "sidecar", "disable", SIDECAR)
+        # Disable keeps the definition, so the next start brings back the same one. With the kit's own
+        # deployment gone there is nothing to disable, and no other deployment is asked.
+        if _deployment(ctx) is not None:
+            _launch(ctx, "sidecar", "disable", SIDECAR)
         return
     service = _service(ctx)
     pid = service.recorded_pid()
@@ -697,30 +732,35 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path | str]:
     user = _ident(str(ctx.manifest.get(f"{RECEIPT}.db_user", "scheduler_svc")))
     schema = _ident(str(ctx.manifest.get(f"{RECEIPT}.schema", "SCHED")))
     owner = str(ctx.manifest.get("runtime.user", "sys"))
+    # A full uninstall over a database the user let the kit use: the database side stays (its login goes with the
+    # kit's other logins, its schema handed to SYS: kit_logins.py). The service and the files here still go.
+    keep = uninstall_keeps_database()
     if dry_run:
         # Every action the removal below performs, in its order: a preview of the files alone hid that the
         # database user goes and the task schema changes owner.
         plan: list[Path | str] = [f"the scheduler sidecar '{SIDECAR}' beside the database" if sidecar
                                   else "the running scheduler service (it is stopped first)"]
-        plan.append(f"the database user {user} (DROP USER); schema {schema} and its tasks stay, handed to {owner}")
+        if not keep:
+            plan.append(f"the database user {user} (DROP USER); schema {schema} and its tasks stay, handed to {owner}")
         return plan + targets
     if sidecar:
         _launch(ctx, "sidecar", "disable", SIDECAR, "--remove")
-    if user in ("SYS", owner.upper()):
+    if not keep and user in ("SYS", owner.upper()):
         raise AddonFailure("Scheduler must use a dedicated database user; the administrator will not be removed")
     stop(ctx)
-    others = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
-                  f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME <> '{schema}') "
-                  "THEN 'EXAKIT_SCHED_OTHER_SCHEMAS' ELSE 'EXAKIT_SCHED_NO_OTHER_SCHEMAS' END AS STATUS")
-    if "EXAKIT_SCHED_OTHER_SCHEMAS" in others:
-        raise AddonFailure("Scheduler owns other schemas; transfer them before retrying removal")
-    owned = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
-                 f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME = '{schema}') "
-                 "THEN 'EXAKIT_SCHED_OWNS_SCHEMA' ELSE 'EXAKIT_SCHED_SCHEMA_NOT_OWNED' END AS STATUS")
-    if "EXAKIT_SCHED_OWNS_SCHEMA" in owned:
-        quoted_owner = '"' + owner.replace('"', '""') + '"'
-        _sql(ctx, f"ALTER SCHEMA {schema} CHANGE OWNER {quoted_owner}")
-    _sql(ctx, f"DROP USER IF EXISTS {user}")
+    if not keep:
+        others = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
+                      f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME <> '{schema}') "
+                      "THEN 'EXAKIT_SCHED_OTHER_SCHEMAS' ELSE 'EXAKIT_SCHED_NO_OTHER_SCHEMAS' END AS STATUS")
+        if "EXAKIT_SCHED_OTHER_SCHEMAS" in others:
+            raise AddonFailure("Scheduler owns other schemas; transfer them before retrying removal")
+        owned = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
+                     f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME = '{schema}') "
+                     "THEN 'EXAKIT_SCHED_OWNS_SCHEMA' ELSE 'EXAKIT_SCHED_SCHEMA_NOT_OWNED' END AS STATUS")
+        if "EXAKIT_SCHED_OWNS_SCHEMA" in owned:
+            quoted_owner = '"' + owner.replace('"', '""') + '"'
+            _sql(ctx, f"ALTER SCHEMA {schema} CHANGE OWNER {quoted_owner}")
+        _sql(ctx, f"DROP USER IF EXISTS {user}")
     for target in targets:
         if target.is_dir():
             shutil.rmtree(target)

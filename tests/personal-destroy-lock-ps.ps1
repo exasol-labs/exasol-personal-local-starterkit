@@ -13,6 +13,8 @@ $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
 . (Join-Path $repo "setup/lib/runtime-personal.ps1")
+# A launcher without `deployments list` (2.4.x): the kit's two known folders, no extra call.
+function Get-PersonalLauncherDeployments { return $null }
 $script:LogFile = $null
 $script:PASS = 0
 $script:FAIL = 0
@@ -29,6 +31,9 @@ $lock = 'Error: Deployment directory is locked by another operation. Please wait
 
 # The stub launcher: destroy answers from <case>/destroy.<n>.rc and .out; every
 # call is recorded in <case>/calls. A .cmd on Windows, a sh script elsewhere.
+# Named exasol-stub, not exasol: the stale-lock check asks the process table
+# for the launcher's image name, and a real `exasol` running on this machine
+# must not decide the "stale" case.
 function New-StubCase([string]$Name, [object[]]$Answers) {
     $dir = Join-Path $work $Name
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -38,7 +43,7 @@ function New-StubCase([string]$Name, [object[]]$Answers) {
         Set-Content -Path (Join-Path $dir "destroy.$n.out") -Value $Answers[$i + 1] -Encoding Ascii
     }
     if ($onWindows) {
-        $stub = Join-Path $dir "exasol.cmd"
+        $stub = Join-Path $dir "exasol-stub.cmd"
         $body = @(
             '@echo off',
             ('set D=' + $dir),
@@ -54,7 +59,7 @@ function New-StubCase([string]$Name, [object[]]$Answers) {
             'exit /b %RC%')
         Set-Content -Path $stub -Value $body -Encoding Ascii
     } else {
-        $stub = Join-Path $dir "exasol"
+        $stub = Join-Path $dir "exasol-stub"
         $body = @(
             '#!/bin/sh',
             ('D="' + $dir + '"'),
@@ -79,7 +84,8 @@ try {
     $script:stub = New-StubCase "stale" @("1", $lock, "0", "destroyed")
     function Get-PersonalCli { return $script:stub }
     Check "stale: destroyed" $true (Invoke-PersonalDestroy)
-    Check "stale: launcher calls" "destroy --remove --auto-approve|diag unlock --auto-approve|destroy --remove --auto-approve" (Get-Calls "stale")
+    $dd = "--deployment-dir $($script:PersonalDeployDir)"
+    Check "stale: launcher calls" "destroy --remove --auto-approve $dd|diag unlock --auto-approve $dd|destroy --remove --auto-approve $dd" (Get-Calls "stale")
 
     Write-Host "== a running launcher keeps its lock"
     $script:stub = New-StubCase "busy" @("1", $lock)
@@ -87,18 +93,18 @@ try {
     $holder = Join-Path $work "holder"
     New-Item -ItemType Directory -Force -Path $holder | Out-Null
     if ($onWindows) {
-        Copy-Item (Join-Path $env:SystemRoot "System32\PING.EXE") (Join-Path $holder "exasol.exe")
-        $proc = Start-Process -FilePath (Join-Path $holder "exasol.exe") -ArgumentList "-n", "60", "127.0.0.1" -PassThru -WindowStyle Hidden
+        Copy-Item (Join-Path $env:SystemRoot "System32\PING.EXE") (Join-Path $holder "exasol-stub.exe")
+        $proc = Start-Process -FilePath (Join-Path $holder "exasol-stub.exe") -ArgumentList "-n", "60", "127.0.0.1" -PassThru -WindowStyle Hidden
         Start-Sleep -Milliseconds 500
     } else {
         # pwsh on macOS/Linux: a copied system binary will not run, so the process
         # table is stubbed (a function outranks the cmdlet); Windows runs the real one.
         $proc = $null
-        function Get-Process { param([string]$Name, $ErrorAction) if ($Name -eq "exasol") { return [pscustomobject]@{ Id = 1; ProcessName = "exasol" } } }
+        function Get-Process { param([string]$Name, $ErrorAction) if ($Name -eq "exasol-stub") { return [pscustomobject]@{ Id = 1; ProcessName = "exasol-stub" } } }
     }
     try {
         Check "busy: not destroyed" $false (Invoke-PersonalDestroy)
-        Check "busy: no unlock" "destroy --remove --auto-approve" (Get-Calls "busy")
+        Check "busy: no unlock" "destroy --remove --auto-approve --deployment-dir $($script:PersonalDeployDir)" (Get-Calls "busy")
         Contains "busy: the launcher's words" "locked by another operation" $script:PersonalDestroyError
     } finally {
         if ($proc) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -108,7 +114,7 @@ try {
     Write-Host "== any other failure is quoted, never retried"
     $script:stub = New-StubCase "other" @("1", "Destroying...`nwarning: slow`nError: disk full")
     Check "other: not destroyed" $false (Invoke-PersonalDestroy)
-    Check "other: one destroy" "destroy --remove --auto-approve" (Get-Calls "other")
+    Check "other: one destroy" "destroy --remove --auto-approve --deployment-dir $($script:PersonalDeployDir)" (Get-Calls "other")
     Check "other: the last error line" "Error: disk full" $script:PersonalDestroyError
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

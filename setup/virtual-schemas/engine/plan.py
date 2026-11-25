@@ -629,6 +629,16 @@ def validate_inputs(connector, given):
                     remedy="give --set files=%s for this path, or a %s path" % (
                         scheme, "s3://bucket/prefix/" if chosen["files"] == "s3" else
                         "abfss://container@account.dfs.core.windows.net/prefix/"))
+        if chosen["catalog"] == "unity" and chosen["files"] == "vended" and not values.get("region") \
+                and re.match(r"https://[^/]+\.cloud\.databricks\.com(?:[:/]|$)", values.get("workspace_url", ""), re.I):
+            # A workspace on AWS vends S3 credentials without their region,
+            # and the engine reaches S3 by region (measured: an empty one is
+            # "s3..amazonaws.com", refused only after the connect started). An
+            # Azure or GCP workspace vends no S3 files, so it stays optional there.
+            raise PlanError("region is required for a Unity Catalog workspace on AWS (%s): its tables' files are on "
+                            "S3, which is reached by the bucket's region" % values["workspace_url"],
+                            remedy="give --set region=<the bucket's region>, e.g. us-east-2 (S3 > the bucket > "
+                                   "Properties in the AWS console)")
         return values
     return _validate_flat(connector, given)
 

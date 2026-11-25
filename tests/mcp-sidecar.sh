@@ -153,6 +153,23 @@ STUB_PORTS_TAKEN=""
 mcp_sidecar_apply >/dev/null 2>&1
 check "...and the recorded port is kept on the next run" '"hostPort": 4897' "$(grep -o '"hostPort": [0-9]*' "$STUB_DEF")"
 
+# Q5: another deployment of the user's has 4896 SAVED for its MCP server. It
+# is stopped (nothing listens), but it binds 4896 when it starts.
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+mkdir -p "$WORK/their-dev"
+printf 'mcp:\n  container:\n    ports:\n    - containerPort: 4896\n      hostPort: 4896\n      name: mcp\n' > "$WORK/their-dev/sidecars.yaml"
+_status starting false "" > "$STUB_STATUS_FILE"; SERVING_AT 4897 > "$STUB_STATUS_FILE.after-start"
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "Q5: 4896 saved by another deployment, nothing listening: still served" 0 "$rc"
+has "...said as a self-heal" "Self-heal: port 4896 is saved by another Exasol Personal deployment - the MCP server moves to 4897" "$out"
+check "...on 4897, recorded for the clients" "4897|http://127.0.0.1:4897/mcp" "$(manifest_get components.mcp_server.port)|$(manifest_get components.mcp_server.url)"
+STUB_PORTS_TAKEN="4897"
+check "Q5: the next free port skips one in use too" "4898" "$(_mcp_sidecar_free_port 4896)"
+STUB_PORTS_TAKEN=""
+printf 'mcp:\n  container:\n    ports:\n    - hostPort: 4897\n' > "$WORK/their-dev/sidecars.yaml"
+check "Q5: a saved 4897 is skipped" "4898" "$(_mcp_sidecar_free_port 4896)"
+rm -rf "$WORK/their-dev"
+
 _fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
 _status starting true "" > "$STUB_STATUS_FILE"; SERVING_AT 4896 > "$STUB_STATUS_FILE.after-restart"
 out="$(mcp_sidecar_apply 2>&1)"; rc=$?
@@ -172,7 +189,7 @@ _status failing false "" > "$STUB_STATUS_FILE"
 out="$(mcp_sidecar_apply 2>&1)"; rc=$?
 check "a container that never serves: an error after one recreate" 1 "$rc"
 has "...said as a self-heal first" "Self-heal: the MCP server did not start - recreating it" "$out"
-check "...one recreate (disable, then start again)" 1 "$(grep -c '^sidecar disable mcp$' "$STUB_CALLS")"
+check "...one recreate (disable, then start again)" 1 "$(grep -c "^sidecar disable mcp --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR\$" "$STUB_CALLS")"
 has "...the error names the status" "did not start (status: failing)" "$out"
 has "...and the fix" "Fix: exakit mcp-doctor" "$out"
 check "...the record stays for the doctor, not validated" "sidecar|false" \
@@ -187,9 +204,13 @@ check "a container the recreate brings up: served" 0 "$(mcp_sidecar_apply >/dev/
 
 rm -f "$STUB_STATUS_FILE"*; STUB_STATUS="$SERVING"
 _fresh_manifest; manifest_set components.mcp_server.backend sidecar
-out="$(STUB_HELP='install start stop' mcp_sidecar_apply 2>&1)"; rc=$?
+# The kit's own launcher: its update is the fix. A launcher the user installed
+# is not the kit's to update, and the fix says so.
+out="$(exakit_component_is_managed(){ return 0; }; STUB_HELP='install start stop' mcp_sidecar_apply 2>&1)"; rc=$?
 check "an older launcher: an error, nothing else to fall back to" 1 "$rc"
 has "...naming the fix" "Fix: exakit update personal" "$out"
+out="$(exakit_component_is_managed(){ return 1; }; STUB_HELP='install start stop' mcp_sidecar_apply 2>&1)"
+has "...a launcher the user installed: the user updates it" "Fix: update your launcher to Exasol Personal 2.4.0 or later, then run exakit mcp-setup" "$out"
 check "...the record stays" "sidecar" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
 _fresh_manifest; manifest_set components.mcp_server.connection.password_file "$WORK/gone"
 exakit_configure_mcp_readonly_access() { manifest_set components.mcp_server.connection.password_file "$EXAKIT_HOME/credentials/mcp_readonly_password"; }
@@ -317,7 +338,7 @@ _fresh_manifest; manifest_set components.mcp_server.backend sidecar
 printf '%s\n' "$SERVING" > "$STUB_STATUS_FILE"; : > "$STUB_CALLS"; rm -f "$STUB_DEF" "$STUB_DEF.seen"
 out="$(mcp_sidecar_restart 2>&1)"; rc=$?
 check "a running server is restarted" 0 "$rc"
-check "...switched off, written again, then reconciled - in that order" "mcp status --json|sidecar disable mcp|put|start|mcp status --json" \
+check "...switched off, written again, then reconciled - in that order" "mcp status --json --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|sidecar disable mcp --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|put|start --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|mcp status --json --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR" \
     "$(sed 's/^.*sidecar_definition.py put.*/put/' "$STUB_CALLS" | tr '\n' '|' | sed 's/|$//')"
 has "...said in one line" "The MCP server was restarted to pick up the SQL Preprocessor. If an AI chat is open, reconnect it" "$out"
 check "...as the read-only user still" '{"name": "EXA_USER", "value": "mcp_readonly"}' \
@@ -325,7 +346,7 @@ check "...as the read-only user still" '{"name": "EXA_USER", "value": "mcp_reado
 lacks "...and the database is not restarted" "stop" "$(cat "$STUB_CALLS")"
 printf '%s\n' '{"name": "mcp", "enabled": true, "running": false, "health": "stopped"}' > "$STUB_STATUS_FILE"; : > "$STUB_CALLS"
 out="$(mcp_sidecar_restart 2>&1)"; rc=$?
-check "a server that is not running: nothing restarted" "0 mcp status --json" "$rc $(tr '\n' ' ' < "$STUB_CALLS" | sed 's/ $//')"
+check "a server that is not running: nothing restarted" "0 mcp status --json --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR" "$rc $(tr '\n' ' ' < "$STUB_CALLS" | sed 's/ $//')"
 lacks "...and nothing said" "restarted" "$out"
 manifest_set components.mcp_server.backend stdio; printf '%s\n' "$SERVING" > "$STUB_STATUS_FILE"; : > "$STUB_CALLS"
 check "a kit whose MCP server is not the sidecar: untouched" "0 0" \
@@ -419,6 +440,45 @@ _PS_WRITER="$(awk '/^function Write-McpSidecarDefinition/,/^}/' "$ROOT/setup/lib
 lacks "no Set-Content for the definition" "Set-Content" "$_PS_WRITER"
 has "...a BOM-less UTF-8 encoder" 'UTF8Encoding($false)' "$_PS_WRITER"
 lacks "...and the editor's stderr is not discarded" '2>$null' "$_PS_WRITER"
+
+echo "the user's own MCP sidecar on a deployment the kit adopted (OWN-04):"
+# The editor as it answers a sidecar of that name it was told to keep.
+cat > "$WORK/bin/uv-foreign" <<'UV'
+#!/bin/sh
+while [ "$1" != "python" ]; do shift; done; shift
+printf '%s\n' "$*" >> "$STUB_CALLS"
+case " $* " in *" --keep-foreign "*) echo foreign; exit 3 ;; esac
+echo changed
+UV
+chmod +x "$WORK/bin/uv-foreign"
+_fresh_manifest
+manifest_set runtime.deployment_dir "$EXAKIT_PERSONAL_DEPLOY_DIR"
+manifest_set runtime.ownership user
+manifest_set runtime.ownership_path "$EXAKIT_PERSONAL_DEPLOY_DIR"
+: > "$STUB_CALLS"
+out="$( exakit_ensure_uv() { EXAKIT_UV_BIN="$WORK/bin/uv-foreign"; }; mcp_sidecar_apply 2>&1; echo "RC $?")"
+has "the kit asks the editor to keep a sidecar of that name" "--keep-foreign" "$(grep ' put ' "$STUB_CALLS")"
+has "...which is the user's: the kit says so" "already has an MCP server of its own" "$out"
+has "...and sets up nothing" "RC 1" "$out"
+lacks "...no start reconciles it" "start --deployment-dir" "$(cat "$STUB_CALLS")"
+check "...nothing recorded as the kit's sidecar" "|" "$(manifest_get components.mcp_server.backend)|$(manifest_get components.mcp_server.sidecar_dir)"
+# On the kit's own deployment the definition is the kit's to write.
+: > "$STUB_CALLS"
+( exakit_component_ownership() { printf kit; }; exakit_ensure_uv() { EXAKIT_UV_BIN="$WORK/bin/uv-foreign"; }
+  _mcp_sidecar_put mcp_readonly "$EXAKIT_HOME/credentials/mcp_readonly_password" 4896 >/dev/null 2>&1 )
+lacks "the kit's own deployment: written without --keep-foreign" "--keep-foreign" "$(grep ' put ' "$STUB_CALLS")"
+# The uninstall removes only the sidecar the kit wrote.
+manifest_del components.mcp_server.sidecar_dir
+manifest_set components.mcp_server.backend sidecar
+: > "$STUB_CALLS"
+mcp_sidecar_remove
+lacks "uninstall: the user's own MCP sidecar stays" "sidecar disable" "$(cat "$STUB_CALLS")"
+manifest_set components.mcp_server.backend sidecar
+manifest_set components.mcp_server.sidecar_dir "$EXAKIT_PERSONAL_DEPLOY_DIR"
+: > "$STUB_CALLS"
+mcp_sidecar_remove
+has "uninstall: one the kit wrote in that folder goes" "sidecar disable mcp" "$(cat "$STUB_CALLS")"
+check "...and its record with it" "" "$(manifest_get components.mcp_server.sidecar_dir)"
 
 echo ""
 echo "mcp-sidecar.sh: $PASS passed, $FAIL failed"

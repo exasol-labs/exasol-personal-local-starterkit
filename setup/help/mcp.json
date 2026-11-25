@@ -4,7 +4,7 @@
   "kind": "component",
   "title": "MCP server (Exasol MCP server, beside the database)",
   "tagline": "The read-only bridge between your AI client and the database.",
-  "role": "The Exasol Personal launcher runs this server beside the database (a sidecar on http://127.0.0.1:4896/mcp), and your AI client queries the database through it. It connects as a dedicated mcp_readonly user, so reads work everywhere and writes are rejected by the database itself - not by client-side filtering. When it does not serve, exakit mcp-doctor heals it.",
+  "role": "The Exasol Personal launcher runs this server beside the database (a sidecar on http://127.0.0.1:4896/mcp, or on the port in components.mcp_server.url of exakit info --json), and your AI client queries the database through it. It connects as a dedicated mcp_readonly user, so reads work everywhere and writes are rejected by the database itself - not by client-side filtering. When it does not serve, exakit mcp-doctor heals it.",
   "repo": "exasol/mcp-server",
   "docs": "https://exasol.github.io/mcp-server/main/index.html",
   "package": "exasol-mcp-server",
@@ -64,11 +64,11 @@
       ]
     },
     {
-      "command": "exasol mcp status",
-      "options": "[--json]",
+      "command": "exakit exasol mcp status",
+      "options": "-d starter-kit-local [--json]",
       "summary": "The launcher's own account of the server: serving or not, and why.",
       "examples": [
-        "exasol mcp status"
+        "exakit exasol mcp status -d starter-kit-local"
       ]
     }
   ],

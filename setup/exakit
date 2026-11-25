@@ -9,10 +9,9 @@
 #                       installed version beside the advertised one
 #   update [what] [--yes]
 #                       apply the advertised versions without deleting database data.
-#                       A runtime change stops the database, so on a terminal it is
-#                       offered ("stop the database and update it now?") and applied
-#                       on yes; without a terminal it is deferred unless --yes (or
-#                       EXAKIT_CONFIRM_RUNTIME_UPDATE=1) says otherwise.
+#                       A runtime change stops the database, updates it and starts
+#                       it again with no question. EXAKIT_CONFIRM_RUNTIME_UPDATE=0
+#                       keeps it back, and so does --json without --yes.
 #                       Personal major upgrades take --plan, --backup, --apply
 #                       behind their target: exakit update personal --plan
 #                       (macOS, Linux and WSL only - the Windows CLI has no
@@ -276,6 +275,16 @@ _require_install() {
     fi
 }
 
+# _require_kit_database [json:0|1] — a command that starts, stops or changes
+# the database runs only on the kit's own deployment, or one the user adopted
+# (exakit_personal_db_state). With the kit's own gone and another deployment
+# in its place: refused with no launcher call, exit 3 as for no database, and
+# the installer as the remedy (exakit_kit_database_guard says it).
+_require_kit_database() {
+    exakit_kit_database_guard "${1:-0}" && return 0
+    exit 3
+}
+
 # _not_installed_answer <json:0|1> — the not-installed answer for a STATE QUERY.
 #
 # A bare `die` here fails an agent twice over: it exits 1 where the documented
@@ -401,8 +410,15 @@ cmd_status() {
         _cs_p_ds=$!
     fi
     if [ "$_cs_json" -eq 0 ]; then ui_spin_begin "Checking the database"; fi
+    # THE KIT'S OWN DATABASE GONE, another deployment in its place
+    # (exakit_personal_db_state): no database of the kit's, whatever that one
+    # answers. "not installed", so the remedy is the installer, which asks
+    # which database to use; runtime.state names the case and
+    # runtime.found the folder (AGENTS.md). Its launcher is not asked.
+    _cs_state=""
+    [ "$_type" = personal ] && _cs_state="$(exakit_personal_db_state 2>/dev/null || true)"
     case "$_type" in
-        personal) _cs_db="$(personal_status)" ;;
+        personal) if [ -n "$_cs_state" ]; then _cs_db="not installed"; else _cs_db="$(personal_status)"; fi ;;
         # NO RUNTIME RECORDED is a state the kit knows exactly, not an unknown:
         # the installer has not reached its runtime step, so no database is
         # deployed. It used to answer "unknown", a word in no documented status
@@ -584,12 +600,33 @@ cmd_status() {
                 "$EXAKIT_MANIFEST" "$(_exakit_platform_json_fields)"
             exit 3
         fi
+        # WHOSE DATABASE, WHERE, AND WHICH LAUNCHER (AGT-05): an install that
+        # adopted the user's own database, or drives a newer launcher than the
+        # one the kit is tested with, says so only on the installer's screen.
+        # The ownership is the computed one (exakit_component_ownership: the
+        # recorded receipt checked against the deployment id now on disk);
+        # the folder is the kit's own while it is missing (runtime.found then
+        # names the other). ⇄ twin: the same fields in Invoke-CmdStatus.
+        _cs_owner=""; _cs_dir=""; _cs_lver=""; _cs_lpin=""
+        if [ "$_type" = personal ]; then
+            _cs_owner="$(exakit_component_ownership database 2>/dev/null || true)"
+            if [ -n "$_cs_state" ]; then
+                _cs_dir="${_cs_state#*|}"; _cs_dir="${_cs_dir%%|*}"
+            else
+                personal_deploy_dir_refresh 2>/dev/null || true
+                _cs_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+            fi
+            _cs_lver="$(personal_launcher_version 2>/dev/null || true)"
+            _cs_lpin="${EXAKIT_PERSONAL_VERSION:-$(exakit_component_available personal 2>/dev/null || true)}"
+            _cs_lpin="${_cs_lpin:-${EXAKIT_PERSONAL_VERSION_FALLBACK:-}}"
+        fi
         run_python_any - "$(manifest_get kit_level 2>/dev/null)" "${_type:-}" "$_cs_db"             "${_cs_autostart:-false}" "$_cs_datasets" "${_cs_pyx:-}" "$EXAKIT_MANIFEST"             "$(manifest_get steps_completed 2>/dev/null)" "$_cs_services" "$_cs_note" "$_cs_note_at" \
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
             "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" "$_cs_failed" \
             "$_cs_skew" "$EXAKIT_CLOCK_SKEW_LIMIT" "$(exakit_clock_skew_words "${_cs_skew:-0}" 2>/dev/null)" \
-            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" "$_cs_engine" "$_cs_engine_down" "$_cs_tls_wrong" <<'EXAKIT_SJ_PY'
+            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" "$_cs_engine" "$_cs_engine_down" "$_cs_tls_wrong" \
+            "$_cs_state" "$_cs_owner" "$_cs_dir" "$_cs_lver" "$_cs_lpin" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
@@ -601,6 +638,9 @@ uv_report = (sys.argv[27:28] + [""])[0]
 tls_fp, tls_live = (sys.argv[28:30] + [""] * 2)[:2]
 engine, engine_down = (sys.argv[30:32] + [""] * 2)[:2]
 tls_wrong = (sys.argv[32:33] + [""])[0] == "1"
+# "kit_database_missing|<the kit's folder>|<the folder found>" (exakit_personal_db_state).
+db_state = ((sys.argv[33:34] + [""])[0].split("|") + ["", "", ""])[:3]
+db_owner, db_dir, launcher_version, launcher_pin = (sys.argv[34:38] + [""] * 4)[:4]
 # The steps the installer booked as not finished, with their reason and repair
 # (exakit_record_soft_failure). The failure note that carried the reason is
 # consumed during the install, so this is where it survives.
@@ -726,6 +766,11 @@ if not running:
         elif wsl_unread:
             remedies["database"] = "wsl --version"
             remedy_hints["database"] = WSL_UNREAD_HINT
+    elif db.startswith("not installed") and db_state[0]:
+        remedies["database"] = install_cmd
+        remedy_hints["database"] = ("the kit's own database was not found at %s, and the deployment at %s is not the "
+                                    "kit's, so no kit command acts on it. The installer asks which database to use"
+                                    % (db_state[1], db_state[2]))
     elif db.startswith("not installed"):
         remedies["database"] = install_cmd
         remedy_hints["database"] = "no database is deployed; the installer resumes at the unfinished step"
@@ -926,7 +971,16 @@ payload = {
     # (no engine there) and with no runtime. engine_running is false only for
     # a stopped Docker deployment whose Docker is down - probed for nothing else.
     "runtime": {"type": rtype or None, "status": db, "engine": engine or None,
-                "engine_running": (False if engine_down else None)},
+                "engine_running": (False if engine_down else None),
+                # "kit_database_missing" when the kit's own database is gone and
+                # another deployment is in its place (found), null otherwise.
+                "state": db_state[0] or None, "found": db_state[2] or None,
+                # Whose database (kit, user, unknown: the computed answer, not
+                # the raw receipt), the deployment folder, the launcher's own
+                # version and the release the kit is tested with. Null off a
+                # Personal runtime, or where nothing answered.
+                "ownership": db_owner or None, "deployment_dir": db_dir or None,
+                "launcher_version": launcher_version or None, "launcher_tested_version": launcher_pin or None},
     # WHICH MACHINE THIS IS, as a token rather than as prose. Every WSL-specific
     # remedy the kit emits asks for an action on a DIFFERENT operating system -
     # a .wslconfig edit under %USERPROFILE%, `wsl --shutdown` "from
@@ -1288,6 +1342,16 @@ EXAKIT_CS_SOFT
             "$(printf '%s\n' "$_cs_strays" | wc -l | tr -d ' ')" \
             "$EXAKIT_BIN_DIR" "rm $(printf '%s ' $_cs_strays)")"
     fi
+    # The kit's own database gone from the folder it recorded, and a
+    # deployment that is not provably the kit's in the launcher's folder
+    # (exakit_personal_kit_missing): said plainly, with both folders, so the
+    # rows above are not read as the kit's own database.
+    _cs_kit_gone=""
+    [ -n "$_cs_state" ] && _cs_kit_gone="${_cs_state#*|}"
+    if [ -n "$_cs_kit_gone" ]; then
+        _cs_row 'Not found:' "the kit's own database, at $(ui_tilde "${_cs_kit_gone%%|*}")"
+        _cs_row '' "The deployment at $(ui_tilde "${_cs_kit_gone#*|}") is not the kit's, and the kit leaves it alone."
+    fi
     if [ "$_cs_running" -ne 1 ]; then
         # An interrupted deployment cannot be started, so pointing at `exakit
         # start` here is worse than useless: it is the loop the reader was
@@ -1300,7 +1364,12 @@ EXAKIT_CS_SOFT
             # and the row names the SAME runnable command `status --json`
             # hoists into `remedy` -- the two channels disagreeing about the one
             # thing to do next is how an agent ends up on `exakit start`.
-            'not installed'*) _cs_row 'Deploy it:' "$(exakit_install_command)   (it resumes at the unfinished step)" ;;
+            'not installed'*)
+                if [ -n "$_cs_state" ]; then
+                    _cs_row 'Use it:' "$(exakit_install_command)   (the installer asks which database to use)"
+                else
+                    _cs_row 'Deploy it:' "$(exakit_install_command)   (it resumes at the unfinished step)"
+                fi ;;
             # The launcher is here but there is no deployment for `exakit
             # start` to start, so it refuses exactly as reliably as it does
             # for `interrupted`. The command that CREATES one is the repair
@@ -1407,12 +1476,14 @@ _start_database_run() {
                     # A runner the reaper spared (too young to judge, or live
                     # by the launcher's word) is Exasol's, and says so here.
                     case "${PERSONAL_PORT_HOLDER:-}" in
+                        runner_other)
+                            die "Port $(personal_db_port) is held by the Exasol Personal runner of another deployment (pid ${PERSONAL_PORT_HOLDER_PID}), not the kit's. Stop that deployment with its own launcher (exasol stop --deployment-dir <its folder>), then: exakit start" ;;
                         runner_young)
-                            die "Port $EXAKIT_PERSONAL_PORT is held by an Exasol Personal runner that started a moment ago (pid ${PERSONAL_PORT_HOLDER_PID}): the database is still starting, or an interrupted run left it. Wait about ${PERSONAL_PORT_HOLDER_WAIT}s, then: exakit start" ;;
+                            die "Port $(personal_db_port) is held by an Exasol Personal runner that started a moment ago (pid ${PERSONAL_PORT_HOLDER_PID}): the database is still starting, or an interrupted run left it. Wait about ${PERSONAL_PORT_HOLDER_WAIT}s, then: exakit start" ;;
                         runner_live)
-                            die "Port $EXAKIT_PERSONAL_PORT is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that does not answer as this kit's database. Check it with: exakit status. If it is a leftover, free the port with: kill ${PERSONAL_PORT_HOLDER_PID}   then: exakit start" ;;
+                            die "Port $(personal_db_port) is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that does not answer as this kit's database. Check it with: exakit status. If it is a leftover, free the port with: kill ${PERSONAL_PORT_HOLDER_PID}   then: exakit start" ;;
                     esac
-                    die "Port $EXAKIT_PERSONAL_PORT is held by another process$(personal_port_holder_hint), not by Exasol, so the database cannot start. Stop that process, then: exakit start"
+                    die "Port $(personal_db_port) is held by another process$(personal_port_holder_hint), not by Exasol, so the database cannot start. Stop that process, then: exakit start"
                 fi
             else
                 exakit_ensure_runtime_running deploy
@@ -1449,9 +1520,25 @@ _start_addon_reported() {
     ok "$1 started"
 }
 
+# _stop_addon_reported <id> - stop one add-on service and say so, the way
+# _start_addon_reported says a start: `exakit stop` named only the database.
+# Twin of Stop-ExakitServiceReported.
+_stop_addon_reported() {
+    _sar_was="$(exakit_service_status "$1" 2>/dev/null)"
+    if ! exakit_service_stop "$1"; then
+        warn "$1 did not stop. Diagnose: exakit logs $1"
+        return 1
+    fi
+    case "$_sar_was" in
+        stopped*) ok "$1 is already stopped" ;;
+        *)        ok "$1 stopped" ;;
+    esac
+}
+
 cmd_start() {
     _service_scope start "$@"
     _require_install
+    case "$EXAKIT_SERVICE_SCOPE" in ""|database) personal_private_move_recover; _require_kit_database ;; esac
     # Logging FIRST: run_logged only routes the launcher's raw JSON stream to
     # the logfile when one exists — without this, `exakit start` interleaved
     # multi-line launcher logs with its own [ok] lines on stdout.
@@ -1510,7 +1597,7 @@ _stop_database_scoped() {
         info "Running add-on services need the database: $_sds_list"
         if confirm_env EXAKIT_STOP_ADDONS "Stop them too, before the database" y; then
             for _sds_id in $_sds_running; do
-                exakit_service_stop "$_sds_id" || true
+                _stop_addon_reported "$_sds_id" || true
             done
         else
             warn "Stopping only the database. Still running without it: $_sds_list"
@@ -1525,6 +1612,7 @@ _stop_database_scoped() {
 cmd_stop() {
     _service_scope stop "$@"
     _require_install
+    case "$EXAKIT_SERVICE_SCOPE" in ""|database) personal_private_move_recover; _require_kit_database ;; esac
     exakit_init_logging 2>/dev/null || true
     if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
         _exakit_log_file "INFO  stop scoped to $EXAKIT_SERVICE_SCOPE"
@@ -1532,14 +1620,14 @@ cmd_stop() {
             _stop_database_scoped
             return $?
         fi
-        exakit_service_stop "$EXAKIT_SERVICE_SCOPE"
+        _stop_addon_reported "$EXAKIT_SERVICE_SCOPE"
         return $?
     fi
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
     for _stop_id in $(exakit_service_ids); do
         [ "$_stop_id" = "database" ] && continue
-        exakit_service_stop "$_stop_id" || true
+        _stop_addon_reported "$_stop_id" || true
     done
     case "$(_runtime_type)" in
         personal) personal_stop ;;
@@ -1606,6 +1694,25 @@ cmd_repair_runtime() {
         esac
     done
     [ "${EXAKIT_CONFIRM_RUNTIME_REPAIR:-0}" = "1" ] && _rr_yes=1
+
+    personal_private_move_recover
+    # A RUNNING DATABASE IS STOPPED FIRST, the user's as the kit's own: said
+    # before the warning and the question, with nothing re-run and nothing
+    # recorded. The deploy step says the same words to a run that gets there.
+    # ⇄ twin: the same check in Invoke-CmdRepairRuntime.
+    if [ "$(_runtime_type || true)" = personal ] && command -v personal_deployment_running >/dev/null 2>&1 && \
+       personal_deployment_running; then
+        _rr_runs="An Exasol database is already running on port $(personal_db_port)."
+        _rr_stop="Stop it first ('exakit stop'), then re-run the installer to deploy a fresh one - port $(personal_db_port) stays in use while it is running: $(exakit_install_command)"
+        if [ "$_rr_json" -eq 1 ]; then
+            exakit_json_out '{"ok": false, "status": "refused", "changed": false, "reason": "%s", "remedy": "exakit stop", "remedy_hint": "%s"}\n' \
+                "$(_exakit_json_string "$_rr_runs")" "$(_exakit_json_string "$_rr_stop")"
+            return 3
+        fi
+        info "$_rr_runs"
+        info "$_rr_stop"
+        return 7
+    fi
 
     _rr_kit="$(exakit_repo_root)" || die "Could not find the kit copy to re-run setup from. Re-run the installer instead."
     case "$(detect_os)" in
@@ -1684,6 +1791,13 @@ cmd_repair_runtime() {
     # answered its own destructive prompt.
     export EXAKIT_REUSE_DB=0
     export EXAKIT_REPLACE_DB=1
+    # A DATABASE OF THE USER'S (runtime.ownership user: the one question, or a
+    # 0.3.0 kit's "Use it instead?") is rebuilt like the kit's own once they
+    # confirm (Q19), and stays theirs: the deploy step records the rebuilt
+    # starter-kit-local as the user's, so uninstall still keeps it.
+    if [ "$(manifest_get runtime.ownership 2>/dev/null || true)" = user ]; then
+        export EXAKIT_REBUILD_OWNER=user
+    fi
     if [ "$_rr_json" -eq 1 ]; then
         # A machine-readable answer has to outlive the rebuild, so this path
         # cannot `exec` the setup script away. Its narration goes to stderr and
@@ -2166,7 +2280,7 @@ cmd_uninstall() {
     fi
 
     # Nothing installed anywhere we can see? Say so and stop.
-    if [ ! -f "$EXAKIT_MANIFEST" ] && [ ! -e "$EXAKIT_BIN_DIR/exasol" ] && \
+    if [ ! -f "$EXAKIT_MANIFEST" ] && [ ! -e "$EXAKIT_BIN_DIR/exasol" ] && [ ! -e "$EXAKIT_HOME/personal/bin/exasol" ] && \
        [ ! -e "$EXAKIT_BIN_DIR/exakit" ] && [ ! -d "$EXAKIT_HOME" ]; then
         info "Nothing to uninstall — no manifest, kit home, or installed binaries were found."
         exit 0
@@ -2199,15 +2313,25 @@ cmd_uninstall() {
         exit 0
     fi
 
+    personal_private_move_recover
     if [ "$_uni_yes" = 1 ]; then
         printf '\n'
-        warn "Removes the full kit, including all database data."
         # NO PLAN LIST ON THIS PATH ANY MORE. It printed every area and path
         # (thirty-odd lines) before a run that then printed its own record,
         # which buried the one warning that matters. The record lines the run
         # promotes (ok_step) still name every area it removed, in the agent's
         # transcript; the itemised list is what --dry-run is for.
-        info "Your tables are not exported. To see every item first: exakit uninstall --dry-run"
+        # THE WARNING NAMES THE DATA ONLY WHEN THE RUN REMOVES IT (W-01): a
+        # database that is not the kit's, or no runtime recorded at all, is
+        # left in place by exakit_uninstall_run, so "all database data" was
+        # false there. Twin of the same arm in Invoke-CmdUninstall.
+        if [ -n "$(_runtime_type || true)" ] && exakit_component_is_managed database; then
+            warn "Removes the full kit, including all database data."
+            info "Your tables are not exported. To see every item first: exakit uninstall --dry-run"
+        else
+            warn "Removes the starter kit. Your own Exasol database and its data stay."
+            info "To see every item first: exakit uninstall --dry-run"
+        fi
         if ! exakit_uninstall_run 0; then
             # The run has just named what survived and the command that removes
             # it. "Uninstall complete" here was the bug: exit 0 over a database
@@ -2285,6 +2409,26 @@ cmd_kit2_script() {
 
 # cmd_logs [target] [-f|--follow] [--lines N] [--path] — every log the kit can
 # show, in one place. No target lists what is available; a target tails it.
+# cmd_exasol <args...> — the KIT'S OWN Exasol Personal launcher, run with the
+# arguments exactly as given (personal_cli: modes K and U the kit folder's, mode
+# P the wrapper with the kit's private home there). The
+# launcher takes this process over (exec), so stdin, stdout, stderr and the
+# exit code are its own. The kit's launcher never lives on PATH, so this is
+# how a user reaches it; an advanced user may alias it themselves
+# (alias exasol='exakit exasol'). The kit never writes that alias.
+# ⇄ twin: Invoke-CmdExasol in exakit.ps1.
+cmd_exasol() {
+    _cx_cli=""
+    if [ -n "$(manifest_get components.personal.ownership 2>/dev/null || true)" ]; then
+        _cx_cli="$(personal_cli 2>/dev/null || true)"
+    fi
+    if [ -z "$_cx_cli" ] || [ ! -x "$_cx_cli" ]; then
+        warn "The starter kit has no Exasol launcher of its own yet. Run the installer first."
+        return 1
+    fi
+    exec "$_cx_cli" "$@"
+}
+
 cmd_logs() {
     _log_target=""
     _log_follow=0
@@ -2396,7 +2540,7 @@ $_dl_path
        exakit_runtime_answers_quick; then
         EXAKIT_RUNTIME_CHECK_DEFERRED=1
     else
-        exakit_ensure_runtime_running deploy
+        exakit_ensure_runtime_running deploy || exit $?
     fi
     if [ -n "$_dl_force" ]; then
         _kit_root="$(exakit_repo_root)" || \
@@ -2601,6 +2745,21 @@ cmd_mcp_doctor() {
         else
             warn "No runtime is recorded in the manifest yet, so there is no database to diagnose against."
             info "Finish the install first: $(exakit_install_command)"
+        fi
+        exit 3
+    fi
+    # The kit's own database gone, another deployment in its place
+    # (exakit_personal_db_state): nothing to diagnose, nothing repaired on it.
+    _cmd_state="$(exakit_personal_db_state 2>/dev/null || true)"
+    if [ -n "$_cmd_state" ]; then
+        _cmd_state="${_cmd_state#*|}"
+        if [ "$_cmd_json" -eq 1 ]; then
+            exakit_json_out '{"installed": true, "status": "no database", "database": "not installed", "remedy": "%s", "remedy_hint": "%s", "runtime": {"state": "kit_database_missing", "found": "%s"}}\n' \
+                "$(_exakit_json_string "$(exakit_install_command)")" \
+                "$(_exakit_json_string "the kit's own database was not found at ${_cmd_state%%|*}, and the deployment at ${_cmd_state#*|} is not the kit's, so no kit command acts on it. The installer asks which database to use")" \
+                "$(_exakit_json_string "${_cmd_state#*|}")"
+        else
+            exakit_kit_database_guard || true
         fi
         exit 3
     fi
@@ -2911,12 +3070,22 @@ cmd_info_json() {
         _ij_installing=1
     fi
     _ij_db=""
-    if [ "$_ij_running" = 0 ] && [ "$_ij_rtype" = personal ] && command -v personal_status >/dev/null 2>&1; then
+    # The kit's own database gone, another deployment in its place: not the
+    # kit's database, whether that one runs or not (exakit_personal_db_state).
+    _ij_state=""
+    [ "$_ij_rtype" = personal ] && _ij_state="$(exakit_personal_db_state 2>/dev/null || true)"
+    if [ -n "$_ij_state" ]; then
+        _ij_running=0
+    elif [ "$_ij_running" = 0 ] && [ "$_ij_rtype" = personal ] && command -v personal_status >/dev/null 2>&1; then
         _ij_db="$(personal_status 2>/dev/null || true)"
     fi
+    # runtime.ownership is the COMPUTED owner (AGT-05): the raw receipt said
+    # "kit" for a folder that now holds the user's deployment.
+    _ij_owner=""
+    [ "$_ij_rtype" = personal ] && _ij_owner="$(exakit_component_ownership database 2>/dev/null || true)"
     if exakit_can_run_python_any; then
         run_python_any - "$EXAKIT_MANIFEST" "$_ij_running" "$_ij_skills_want" "${_ij_rtype:-}" "$(exakit_install_command)" \
-            "$_ij_installing" "$_ij_db" <<'EXAKIT_IJ_PY'
+            "$_ij_installing" "$_ij_db" "$_ij_state" "$_ij_owner" <<'EXAKIT_IJ_PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     doc = json.load(handle)
@@ -2925,8 +3094,24 @@ rtype = sys.argv[4]
 install_cmd = sys.argv[5]
 installing = (sys.argv[6:7] or ["0"])[0] == "1"
 db_state = (sys.argv[7:8] or [""])[0]
+kit_state = (((sys.argv[8:9] or [""])[0]).split("|") + ["", "", ""])[:3]
+owner = (sys.argv[9:10] or [""])[0]
 doc["installed"] = True
-if running:
+# The computed owner, authoritative; the receipt as written beside it.
+if owner and isinstance(doc.get("runtime"), dict):
+    doc["runtime"]["ownership_recorded"] = doc["runtime"].get("ownership")
+    doc["runtime"]["ownership"] = owner
+if kit_state[0]:
+    doc["status"] = "no database"
+    doc["database"] = "not running"
+    doc["remedy"] = install_cmd
+    doc["remedy_hint"] = ("the kit's own database was not found at %s, and the deployment at %s is not the kit's, "
+                          "so no kit command acts on it. The installer asks which database to use"
+                          % (kit_state[1], kit_state[2]))
+    if isinstance(doc.get("runtime"), dict):
+        doc["runtime"]["state"] = kit_state[0]
+        doc["runtime"]["found"] = kit_state[2]
+elif running:
     doc["status"] = "running"
     doc["remedy"] = None
 elif installing:
@@ -3351,6 +3536,8 @@ _with_notice() {
 #
 # `sql` is excluded on purpose: its argument is arbitrary SQL text, and a
 # statement that happens to contain --help is a query, not a request for help.
+# So is `exasol`: everything after it is the launcher's, exactly as typed
+# (cmd_exasol), its own --help and -h included.
 #
 # A leading help flag is excluded too: `exakit --help --json` is the help
 # COMMAND with an option, not a request for a topic literally named "--help".
@@ -3363,7 +3550,7 @@ case "${1:-}" in
     help|--help|-h) _help_skip=1 ;;
     *)              _help_skip=0 ;;
 esac
-if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
+if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$1" != "exasol" ] && [ "$_help_skip" -eq 0 ]; then
     for _help_arg in "$@"; do
         case "$_help_arg" in
             --help|-h)
@@ -3469,7 +3656,7 @@ _exakit_update_refuse_options() {
 # its argument is arbitrary SQL text, and a statement containing --json is a
 # query. It carries its own --json parsing and its own _sql_reject anyway.
 case "${1:-}" in
-    sql) : ;;
+    sql|exasol) : ;;
     *)
         for _rj_arg in "$@"; do
             case "$_rj_arg" in
@@ -3548,6 +3735,7 @@ case "${1:-help}" in
     connect)  shift; cmd_connect "$@" ;;
     source)   shift; cmd_source "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
+    exasol)   shift; cmd_exasol "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
     persona)
         shift

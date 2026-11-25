@@ -27,7 +27,8 @@ try {
     $json = Show-ExakitHelpJson 'json-tables' | ConvertFrom-Json
     $ingest = @($json.commands | Where-Object { $_.command -eq 'exasol-json-tables ingest' })[0]
     if (-not (@($ingest.parameters | Where-Object { $_.name -like '--input*' }).Count)) { throw 'JSON lost parameter metadata' }
-    foreach ($topic in @('exakit uninstall','exakit connect','exapump profile init','exasol mcp status')) {
+    # The launcher's commands are listed as exakit exasol ... (its launcher is not on PATH).
+    foreach ($topic in @('exakit uninstall','exakit connect','exapump profile init','exakit exasol mcp status')) {
         $json = Show-ExakitHelpJson $topic -CommandHelp | ConvertFrom-Json
         if ($json.commands[0].invocation -ne $topic) { throw "wrong command for $topic" }
         $checks++

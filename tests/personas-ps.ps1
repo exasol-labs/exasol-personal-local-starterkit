@@ -13,8 +13,9 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 # This release ships General alone; what several personas do together is still the kit's, so these checks run on a
 # copy of the kit with two fixture personas, analyst offered and engineer not (tests/release_kit.py), as
 # tests/personas.sh does.
-$py = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+# Not the Microsoft Store alias under \WindowsApps\ (python3 on a normal Windows
+# box): it only prints "Python was not found". As in mcp-sidecar-ps.ps1.
+$py = @(Get-Command python3, python -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object { "$($_.Source)" -notlike "*\WindowsApps\*" }) | Select-Object -First 1
 if (-not $py) { throw "FAIL: no python on PATH for tests/release_kit.py" }
 $repo = ("" + (& $py.Source -c "import sys; sys.path.insert(0, sys.argv[1] + '/tests'); from pathlib import Path; from release_kit import kit_with_hidden_parts_on; print(kit_with_hidden_parts_on(Path(sys.argv[2]), personas=('analyst',), addons=()))" $shipped (Join-Path $work "release-kit"))).Trim()
 if (-not $repo -or -not (Test-Path -LiteralPath (Join-Path $repo "setup"))) { throw "FAIL: tests/release_kit.py made no kit copy" }

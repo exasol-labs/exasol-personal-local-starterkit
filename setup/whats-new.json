@@ -20,6 +20,12 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.3.1": [
+    "Exasol Personal 2.5: the kit follows its new deployment folder.",
+    "Your own Exasol Personal can be used, and uninstall keeps it.",
+    "Update several components at once: exakit update exapump uv",
+    "Clearer messages when a federated source cannot be read."
+  ],
   "0.3.0": [
     "Federate: exakit connect turns other sources into live SQL tables.",
     "Fuse: Semantic Views model local and federated tables as one.",

@@ -8,11 +8,10 @@
 #   version               kit source, install date, and every component's
 #                         installed version beside the advertised one
 #   update [what] [-Yes]  apply the advertised versions without deleting database
-#                         data. A runtime change stops the database, so on a
-#                         console it is offered ("stop the database and update it
-#                         now?") and applied on yes; without a console it is
-#                         deferred unless -Yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1)
-#                         says otherwise
+#                         data. A runtime change stops the database, updates it
+#                         and starts it again with no question.
+#                         EXAKIT_CONFIRM_RUNTIME_UPDATE=0 keeps it back, and so
+#                         does -Json without -Yes
 #   info [--json]         print the connection details panel; --json prints the
 #                         install record (manifest.json) plus the state keys
 #                         installed / status / remedy / skills, nothing else
@@ -85,12 +84,102 @@
 # Installed to %USERPROFILE%\.local\bin by setup-windows.ps1; also
 # runs straight from a repo checkout (setup\exakit.ps1).
 
+# THE TWO PARAMETERS HAVE NAMES NO OPTION CAN SPELL. The binder takes any prefix
+# of a parameter's name, before the script runs: with -Command and -RestArgs
+# here, `exakit exasol -c` ended in "Missing an argument for parameter
+# 'Command'" and `-c uninstall` became the kit's own command (Windows PowerShell
+# 5.1 and pwsh alike). Nothing is ever given to them by name.
 param(
-    [Parameter(Position = 0)][string]$Command = "help",
-    [Parameter(Position = 1, ValueFromRemainingArguments)][string[]]$RestArgs = @()
+    [Parameter(Position = 0)][string]${!Command} = "help",
+    [Parameter(Position = 1, ValueFromRemainingArguments)][string[]]${!RestArgs} = @()
 )
+[string]$Command = ${!Command}
+[string[]]$RestArgs = @(${!RestArgs})
 
 $ErrorActionPreference = "Stop"
+
+# `exakit exasol <args>` HANDS ITS ARGUMENTS TO THE LAUNCHER EXACTLY AS TYPED,
+# and the param block above cannot: it takes -d for -Debug and -v for -Verbose,
+# refuses -o and -i as ambiguous, and splits --x=C:\y at the
+# colon. So they are read from the line itself, before anything reads $Command:
+#   - exakit.cmd puts the whole line in EXAKIT_EXASOL_LINE and passes only the
+#     word exasol (Get-ExakitCmdShimContent)
+#   - started as `powershell -File exakit.ps1 exasol ...` (an older exakit.cmd,
+#     an agent), the process's own argument list has them unbound
+#   - run inside a PowerShell session there is neither: a line the binder took
+#     something from is refused, never run as something else
+# Split-ExakitCommandLine <line> - a Windows command line as its arguments, by
+# the rules programs there use (quotes, and backslashes before a quote).
+function Split-ExakitCommandLine {
+    param([AllowEmptyString()][string]$Line)
+    $out = New-Object System.Collections.Generic.List[string]
+    $n = $Line.Length
+    $i = 0
+    while ($i -lt $n) {
+        while ($i -lt $n -and ($Line[$i] -eq ' ' -or $Line[$i] -eq "`t")) { $i++ }
+        if ($i -ge $n) { break }
+        $word = New-Object System.Text.StringBuilder
+        $quoted = $false
+        while ($i -lt $n) {
+            $c = $Line[$i]
+            if (-not $quoted -and ($c -eq ' ' -or $c -eq "`t")) { break }
+            if ($c -eq '\') {
+                $slashes = 0
+                while ($i -lt $n -and $Line[$i] -eq '\') { $slashes++; $i++ }
+                if ($i -lt $n -and $Line[$i] -eq '"') {
+                    [void]$word.Append('\', [int][math]::Floor($slashes / 2))
+                    if ($slashes % 2) { [void]$word.Append('"'); $i++ }
+                } else { [void]$word.Append('\', $slashes) }
+                continue
+            }
+            if ($c -eq '"') {
+                if ($quoted -and $i + 1 -lt $n -and $Line[$i + 1] -eq '"') { [void]$word.Append('"'); $i += 2; continue }
+                $quoted = -not $quoted
+                $i++
+                continue
+            }
+            [void]$word.Append($c)
+            $i++
+        }
+        $out.Add($word.ToString())
+    }
+    return ,$out.ToArray()
+}
+$exasolArgs = $null
+$exasolLine = "" + $env:EXAKIT_EXASOL_LINE
+Remove-Item -LiteralPath Env:EXAKIT_EXASOL_LINE -ErrorAction SilentlyContinue
+if ($exasolLine -and $Command -eq "exasol" -and @($RestArgs).Count -eq 0) {
+    $exasolWords = Split-ExakitCommandLine $exasolLine
+    if ($exasolWords.Count -gt 0 -and $exasolWords[0] -eq "exasol") { $exasolArgs = @($exasolWords | Select-Object -Skip 1) }
+} elseif (-not $MyInvocation.PSCommandPath) {
+    $exasolWords = @([Environment]::GetCommandLineArgs())
+    for ($at = 1; $at -lt $exasolWords.Count - 1; $at++) {
+        $here = ""
+        try { $here = [System.IO.Path]::GetFullPath($exasolWords[$at]) } catch { continue }
+        if ($here -ne [System.IO.Path]::GetFullPath($PSCommandPath)) { continue }
+        # This script is what the process runs: right after -File, or first.
+        if ($at -gt 1 -and $exasolWords[$at - 1] -notmatch '^[-/]f(i(l(e)?)?)?$') { break }
+        if ($exasolWords[$at + 1] -eq "exasol") { $exasolArgs = @($exasolWords | Select-Object -Skip ($at + 2)) }
+        break
+    }
+}
+if ($null -ne $exasolArgs) {
+    $Command = "exasol"
+    $RestArgs = [string[]]@($exasolArgs)
+    # What the binder took (-d as -Debug, -v as -Verbose, -w as -WarningAction)
+    # set these for the whole script: the launcher has the arguments, and the
+    # kit's own output stays as it is.
+    $DebugPreference = "SilentlyContinue"
+    $VerbosePreference = "SilentlyContinue"
+    $InformationPreference = "SilentlyContinue"
+    $WarningPreference = "Continue"
+    $ErrorActionPreference = "Stop"
+} elseif ($Command -eq "exasol" -and
+          (@($PSBoundParameters.Keys | Where-Object { @("!Command", "!RestArgs") -notcontains $_ }).Count -gt 0 -or
+           @($RestArgs | Where-Object { "$_" -like "-*:" }).Count -gt 0)) {
+    [Console]::Error.WriteLine("exakit exasol: run it as the exakit command, so the launcher gets its arguments exactly as typed.")
+    exit 2
+}
 
 # Set by the machine-readable paths (`info --json`) so the update notice at the
 # bottom of the dispatcher stays off stdout and the output remains parseable.
@@ -118,7 +207,7 @@ if (Test-Path (Join-Path $scriptDir "lib\exakit-common.ps1")) {
 # Discovery reads shipped documents and must not create an installation merely
 # by importing common helpers. SQL arguments are text, so do not scan them.
 $script:ExakitReadOnlyHelp = (@('help','catalog','--help','-h','-?') -contains $Command) -or
-    ($Command -ne 'sql' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h')) -or
+    ($Command -ne 'sql' -and $Command -ne 'exasol' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h')) -or
     ($Command -eq 'uninstall' -and ($RestArgs -contains '-DryRun' -or $RestArgs -contains '--dry-run' -or $RestArgs -contains '-n'))
 $script:ExakitReadOnlyQuery = $Command -in @('status','version','info','mcp-status','mcp-doctor','skills','catalog','logs','help','whats-new','--help','-h','-?')
 
@@ -341,7 +430,18 @@ function Invoke-CmdStatus {
     # slow one, and "Checking the database" is a different experience from a
     # blank line for two seconds.
     $type = Get-RuntimeType
+    # THE KIT'S OWN DATABASE GONE, another deployment in its place
+    # (Get-ExakitPersonalDbState): no database of the kit's, whatever that one
+    # answers - "not installed", the installer as the remedy, runtime.state
+    # and runtime.found naming the case. Its launcher is not asked. Twin of
+    # _cs_state in cmd_status.
+    $kitDbState = ""
+    if ($type -eq "personal" -and (Get-Command Get-ExakitPersonalDbState -ErrorAction SilentlyContinue)) {
+        try { $kitDbState = "" + (Get-ExakitPersonalDbState) } catch { $kitDbState = "" }
+    }
+    $kitDbParts = @(($kitDbState + "||").Split("|"))
     $status = Invoke-ExakitWithSpinner -Quiet:$Json -Label "Checking the database" -Body {
+        if ($kitDbState) { return "not installed" }
         # NO RUNTIME RECORDED is a state the kit knows exactly, not an unknown:
         # the installer has not reached its runtime step, so no database is
         # deployed. "unknown" is in no documented status vocabulary and matched
@@ -553,6 +653,9 @@ function Invoke-CmdStatus {
                     $remedies["database"] = "wsl --version"
                     $remedyHints["database"] = $wslUnreadHint
                 }
+            } elseif ("$status".StartsWith("not installed") -and $kitDbState) {
+                $remedies["database"] = $installCmd
+                $remedyHints["database"] = "the kit's own database was not found at $($kitDbParts[1]), and the deployment at $($kitDbParts[2]) is not the kit's, so no kit command acts on it. The installer asks which database to use"
             } elseif ("$status".StartsWith("not installed")) {
                 $remedies["database"] = $installCmd
                 $remedyHints["database"] = "no database is deployed; the installer resumes at the unfinished step"
@@ -732,6 +835,18 @@ function Invoke-CmdStatus {
                 if (-not $topRemedy -and $property.Value.repair) { $topRemedy = "$($property.Value.repair)" }
             }
         }
+        $statusOwner = $null; $statusDeployDir = $null; $statusLauncherVersion = $null; $statusLauncherPin = $null
+        if ($type -eq "personal") {
+            try { $statusOwner = "" + (Get-ExakitComponentOwnership "database") } catch { $statusOwner = $null }
+            if ($kitDbState) { $statusDeployDir = $kitDbParts[1] }
+            else { Update-PersonalDeployDir; $statusDeployDir = "" + $script:PersonalDeployDir }
+            try { $statusLauncherVersion = Get-PersonalLauncherVersion } catch { $statusLauncherVersion = $null }
+            $statusLauncherPin = Get-PersonalTargetVersion
+            if (-not $statusOwner) { $statusOwner = $null }
+            if (-not $statusDeployDir) { $statusDeployDir = $null }
+            if (-not $statusLauncherVersion) { $statusLauncherVersion = $null }
+            if (-not $statusLauncherPin) { $statusLauncherPin = $null }
+        }
         $payload = [ordered]@{
             installed       = $true
             status          = $statusWord
@@ -748,6 +863,18 @@ function Invoke-CmdStatus {
                 status         = $status
                 engine         = $(if ($runtimeEngine) { $runtimeEngine } else { $null })
                 engine_running = $(if ($engineDown) { $false } else { $null })
+                # "kit_database_missing" when the kit's own database is gone
+                # and another deployment is in its place (found), null otherwise.
+                state          = $(if ($kitDbState) { $kitDbParts[0] } else { $null })
+                found          = $(if ($kitDbState) { $kitDbParts[2] } else { $null })
+                # Whose database (the computed answer, not the raw receipt), the
+                # deployment folder (the kit's own while it is missing), the
+                # launcher's own version and the release the kit is tested
+                # with (AGT-05). Twin of the same fields in cmd_status.
+                ownership      = $statusOwner
+                deployment_dir = $statusDeployDir
+                launcher_version = $statusLauncherVersion
+                launcher_tested_version = $statusLauncherPin
             }
             running         = $running
             # Seconds the database's clock is from this computer's (negative:
@@ -1079,6 +1206,16 @@ function Invoke-CmdStatus {
     }
     # No "Manifest:" row: an internal file path, on the last line of the screen,
     # that nothing on this screen asks the reader to open.
+    # The kit's own database gone from the folder it recorded, and a
+    # deployment that is not provably the kit's in the launcher's folder: said
+    # plainly, with both folders. Twin of the 'Not found:' row in cmd_status.
+    $kitGone = ""
+    if ($kitDbState) { $kitGone = $kitDbParts[1] + "|" + $kitDbParts[2] }
+    if ($kitGone) {
+        $kitGoneParts = $kitGone -split '\|', 2
+        Write-StatusRow "Not found:" "the kit's own database, at $(Get-ExakitTilde $kitGoneParts[0])"
+        Write-StatusRow "" "The deployment at $(Get-ExakitTilde $kitGoneParts[1]) is not the kit's, and the kit leaves it alone."
+    }
     if (-not $running) {
         # THE SCREEN NAMES THE SAME COMMAND THE JSON HOISTS INTO `remedy`. An
         # interrupted deployment cannot be started and a runtime that was never
@@ -1089,6 +1226,8 @@ function Invoke-CmdStatus {
             Write-Host "Repair it:  exakit repair-runtime   (replaces the database; its data is not recoverable)"
         } elseif ("$status".StartsWith("conflict")) {
             Write-Host "Free the port: another process is listening on the database port - stop it, then: exakit start"
+        } elseif ("$status".StartsWith("not installed") -and $kitDbState) {
+            Write-Host "Use it:     $(Get-ExakitInstallCommand)   (the installer asks which database to use)"
         } elseif ("$status".StartsWith("not installed")) {
             Write-Host "Deploy it:  $(Get-ExakitInstallCommand)   (it resumes at the unfinished step)"
         } elseif ("$status".StartsWith("not deployed")) {
@@ -1395,10 +1534,33 @@ function Start-ExakitServiceReported {
     Ok "$Id started"
 }
 
+# Stop-ExakitServiceReported - stop one add-on service and say so, the way
+# Start-ExakitServiceReported says a start: `exakit stop` named only the
+# database. -Scoped (exakit stop <id>) fails on an error; the bare form warns
+# and goes on to the next. Twin of _stop_addon_reported.
+function Stop-ExakitServiceReported {
+    param([Parameter(Mandatory)][string]$Id, [switch]$Scoped)
+    $was = ""
+    try { $was = "$(Get-ExakitServiceStatus -Id $Id)" } catch { }
+    try {
+        Stop-ExakitService -Id $Id
+    } catch {
+        $why = "$($_.Exception.Message)".Trim().TrimEnd('.')
+        $line = "$Id did not stop"
+        if ($why) { $line += ": $why" }
+        $line += ". Diagnose: exakit logs $Id"
+        if ($Scoped) { Fail $line }
+        Warn2 $line
+        return
+    }
+    if ($was.StartsWith("stopped")) { Ok "$Id is already stopped" } else { Ok "$Id stopped" }
+}
+
 function Invoke-CmdStart {
     param([string[]]$Scope = @())
     $id = Resolve-ExakitServiceScope -Verb "start" -Arguments $Scope
     Assert-ExakitInstalled
+    if ((-not $id -or $id -eq "database") -and -not (Test-ExakitKitDatabaseGuard)) { exit 3 }
     # Logging first: launcher output belongs in the logfile, not interleaved
     # with the [ok] lines on stdout. Twin of the same fix in cmd_start.
     Initialize-ExakitLogging
@@ -1443,7 +1605,7 @@ function Stop-ExakitDatabaseScoped {
         $list = $running -join ", "
         Info "Running add-on services need the database: $list"
         if (Confirm-ExakitEnvPrompt -EnvName "EXAKIT_STOP_ADDONS" -Question "Stop them too, before the database" -DefaultYes $true) {
-            foreach ($sid in $running) { Stop-ExakitService -Id $sid }
+            foreach ($sid in $running) { Stop-ExakitServiceReported -Id $sid }
         } else {
             Warn2 "Stopping only the database. Still running without it: $list"
             foreach ($sid in $running) {
@@ -1458,20 +1620,21 @@ function Invoke-CmdStop {
     param([string[]]$Scope = @())
     $id = Resolve-ExakitServiceScope -Verb "stop" -Arguments $Scope
     Assert-ExakitInstalled
+    if ((-not $id -or $id -eq "database") -and -not (Test-ExakitKitDatabaseGuard)) { exit 3 }
     Initialize-ExakitLogging
     # One named service, and only that one: the bare form below is the only
     # one that touches the database without naming it. Twin of cmd_stop.
     if ($id) {
         Write-ExakitLog "INFO" "stop scoped to $id"
         if ($id -eq "database") { Stop-ExakitDatabaseScoped; return }
-        Stop-ExakitService -Id $id
+        Stop-ExakitServiceReported -Id $id -Scoped
         return
     }
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
     foreach ($sid in (Get-ExakitServiceIds)) {
         if ($sid -eq "database") { continue }
-        Stop-ExakitService -Id $sid
+        Stop-ExakitServiceReported -Id $sid
     }
     switch (Get-RuntimeType) { "personal" { Stop-Personal } }
 }
@@ -1512,6 +1675,36 @@ function Invoke-CmdRepairRuntime {
     Assert-ExakitInstalled -Json:$Json
     $confirmed = [bool]$Yes
     if ($env:EXAKIT_CONFIRM_RUNTIME_REPAIR -eq "1") { $confirmed = $true }
+
+    # A DATABASE OF THE USER'S IS REBUILT LIKE THE KIT'S OWN (Krishna, Q19):
+    # once they let the kit use it as starter-kit-local, the kit may do
+    # anything with it but remove it at uninstall. Same warning, question and
+    # exit codes. The deploy step is told so in this process alone
+    # ($global:ExakitRebuildOwner), and the record says `user` throughout: a
+    # window closed halfway never leaves it recorded as the kit's, which an
+    # uninstall would remove. Twin of the same rule in cmd_repair_runtime.
+    $repairUserDb = (("" + (Get-ExakitManifestValue "runtime.type")) -eq "personal" -and ("" + (Get-ExakitManifestValue "runtime.ownership")) -eq "user")
+
+    # A RUNNING DATABASE IS STOPPED FIRST, the user's as the kit's own: said
+    # before the warning and the question, with nothing re-run and nothing
+    # recorded. The deploy step says the same words to a run that gets there.
+    if (("" + (Get-ExakitManifestValue "runtime.type")) -eq "personal" -and
+        (Get-Command Test-PersonalDeploymentRunning -ErrorAction SilentlyContinue) -and (Test-PersonalDeploymentRunning)) {
+        $repairRuns = "An Exasol database is already running on port $(Get-PersonalDbPort)."
+        $repairStop = "Stop it first ('exakit stop'), then re-run the installer to deploy a fresh one - port $(Get-PersonalDbPort) stays in use while it is running: $(Get-ExakitInstallCommand)"
+        if ($Json) {
+            [ordered]@{
+                ok = $false; status = "refused"; changed = $false
+                reason = $repairRuns
+                remedy = "exakit stop"
+                remedy_hint = $repairStop
+            } | ConvertTo-Json -Compress | Write-Output
+            exit 3
+        }
+        Info $repairRuns
+        Info $repairStop
+        exit 7
+    }
 
     $kit = Get-ExakitRepoRoot
     if (-not $kit) { Fail "Could not find the kit copy to re-run setup from. Re-run the installer instead." }
@@ -1566,10 +1759,13 @@ function Invoke-CmdRepairRuntime {
     Reset-ExakitDatasetFlags
     Info "Re-running setup\setup-windows.ps1 to rebuild the database"
     $env:EXAKIT_BANNER_SHOWN = "1"
-    # The deployment step must NOT offer to reuse what is there: its reuse
-    # question defaults to YES, so a repair the user had just confirmed as
-    # destructive answered itself with "keep the existing database".
-    # Twin of the same export in cmd_repair_runtime (setup/exakit).
+    # The deployment step must NOT reuse what is there: it starts the kit's
+    # own stopped database with no question, so a repair the user had just
+    # confirmed as destructive answered itself with "keep the existing
+    # database". EXAKIT_REUSE_DB=0 is "a new database": the kit's own goes to
+    # the replace question below, and so does a database of the user's in this
+    # confirmed rebuild. Twin of the same export in cmd_repair_runtime
+    # (setup/exakit).
     $env:EXAKIT_REUSE_DB = "0"
     # AND THE DELETION'S OWN CONSENT. Declining reuse is harmless on purpose:
     # the deployment step then asks a separate DELETE question, default no -
@@ -1578,6 +1774,9 @@ function Invoke-CmdRepairRuntime {
     # repaired nothing. This command may answer it because it just asked its
     # own. Twin of the same export in cmd_repair_runtime.
     $env:EXAKIT_REPLACE_DB = "1"
+    # A database of the user's: said to the deploy step, for this run alone
+    # (see above).
+    if ($repairUserDb) { $global:ExakitRebuildOwner = "user" }
     if ($Json) {
         # One object on stdout and nothing else: the rebuild's own narration is
         # routed to stderr. Twin of the --json branch in cmd_repair_runtime.
@@ -1598,6 +1797,7 @@ function Invoke-CmdRepairRuntime {
             $repairCode = 1
         } finally {
             $ErrorActionPreference = $prevRepairEap
+            $global:ExakitRebuildOwner = ""
         }
         # EXIT 0 IS NOT A DATABASE. The setup script finishes with 0 when the
         # database step was recorded as not finished (a Podman that cannot run
@@ -1655,8 +1855,45 @@ function Invoke-CmdRepairRuntime {
         $repairCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prevRepairEap
+        $global:ExakitRebuildOwner = ""
     }
     exit $repairCode
+}
+
+# Invoke-CmdExasol <args...> - `exakit exasol <args...>`: the kit's own
+# Exasol Personal launcher, run with the arguments exactly as given. That is
+# the kit's own in its folder (never on PATH) in every mode, and, until its
+# update, the one a 0.3.0 kit's launcher receipt names. Its output and its
+# exit code are its own. Windows PowerShell 5.1 (and Legacy argument passing)
+# drops an empty argument to a native program and splits on embedded quotes,
+# so those are passed in a form it keeps. Twin of cmd_exasol.
+function Invoke-CmdExasol {
+    param([string[]]$Arguments = @())
+    $cli = "" + (Get-ExakitManifestValue "components.personal.ownership_path")
+    $owner = "" + (Get-ExakitManifestValue "components.personal.ownership")
+    # The launcher in the kit's folder is the kit's by its place, also with no
+    # receipt (Sync-PersonalBinPath).
+    if (Get-Command Sync-PersonalBinPath -ErrorAction SilentlyContinue) {
+        Sync-PersonalBinPath
+        if ($script:PersonalSeparate -and (Test-Path -LiteralPath $script:PersonalBinPath -PathType Leaf)) { $cli = "" + $script:PersonalBinPath; $owner = "kit" }
+    }
+    if (-not $cli -or @("kit", "user") -notcontains $owner -or -not (Test-Path -LiteralPath $cli -PathType Leaf)) {
+        [Console]::Error.WriteLine("The starter kit has no Exasol launcher of its own yet. Run the installer first.")
+        exit 1
+    }
+    $legacy = ($PSVersionTable.PSVersion.Major -lt 7) -or
+        ("" + (Get-Variable -Name PSNativeCommandArgumentPassing -ValueOnly -ErrorAction SilentlyContinue)) -eq "Legacy"
+    $pass = @()
+    foreach ($a in @($Arguments)) {
+        $v = "" + $a
+        if ($legacy) {
+            if ($v -eq "") { $v = '""' }
+            elseif ($v.Contains('"') -or ($v -match '\s' -and $v.EndsWith('\'))) { $v = '"' + ($v -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
+        }
+        $pass += $v
+    }
+    & $cli @pass
+    exit $LASTEXITCODE
 }
 
 # Invoke-CmdMigrate docker-nano [options] - the after-the-install road of the
@@ -2103,8 +2340,15 @@ function Write-ExakitUninstallLeftoverReport {
     $left = @($script:PersonalTeardownLeftovers)
     if ($left.Count -eq 0) { $left = @("the local Exasol Personal deployment") }
     foreach ($line in $left) { Info "  $line" }
+    # Only a remedy that removes the deployment folder deletes data: a
+    # container alone is stopped by it and the files stay. Twin of
+    # _exakit_uninstall_leftover_report.
     if ($script:PersonalTeardownRemedy) {
-        Info "Remove it with this PowerShell command (it deletes the database and all its data):"
+        if ("$($script:PersonalTeardownRemedy)".Contains("Remove-Item -Recurse")) {
+            Info "Remove it with this PowerShell command (it deletes the database and all its data):"
+        } else {
+            Info "Stop it with this PowerShell command, only if it is yours to stop (it deletes no data):"
+        }
         Info "  $($script:PersonalTeardownRemedy)"
     }
 }
@@ -2144,16 +2388,11 @@ function Get-ExakitUninstallKitImageIds {
     else { $record.Engine = "" + (Get-ExakitManifestValue "runtime.engine") }
     if ($record.Engine -ne "docker" -and $record.Engine -ne "podman") { $record.Engine = ""; return $record }
     $engine = Get-Command $record.Engine -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
     $dir = "" + $script:PersonalDeployDir
     if (-not $engine -or -not $dir -or -not (Test-Path -LiteralPath $dir)) { return $record }
     $raw = @()
-    $id = ""
-    foreach ($name in @(".exasolLauncherState.json", "deployment.json")) {
-        $file = Join-Path $dir $name
-        if (-not (Test-Path -LiteralPath $file)) { continue }
-        $text = "" + (Get-Content -Raw -LiteralPath $file -ErrorAction SilentlyContinue)
-        if ($text -match '"deploymentId"\s*:\s*"([^"]+)"') { $id = $Matches[1]; break }
-    }
+    $id = Read-PersonalDeploymentId -Dir $dir
     if ($id -and $id -ne "local") {
         $names = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
             -Arguments @("ps", "-a", "--filter", "name=exasol-db-$id", "--format", "{{.Names}}")
@@ -2210,6 +2449,8 @@ function Invoke-ExakitUninstallKitImages {
             continue
         }
         $gone = @()
+        $kept = @()
+        $keptRefs = @()
         $seenIds = @{}
         # Tagged rows first, then <none> rows: every tag of an image is removed
         # by its own name (an image with two tags needs both, or it stays), and
@@ -2274,12 +2515,27 @@ function Invoke-ExakitUninstallKitImages {
                 if ($repo -eq "exasol/script-language-container") { $label = "script-language-container" }
                 if ($gone -notcontains $label) { $gone += $label }
             }
-            else { Info "Kept image ${name}: $engineName did not remove it (a container may still use it, or $engineName did not answer). Remove it later with: $engineName rmi $ref" }
+            else {
+                Info "Kept image ${name}: $engineName did not remove it (a container may still use it, or $engineName did not answer). Remove it later with: $engineName rmi $ref"
+                $label = $repo
+                if ($repo -eq "exasol/script-language-container") { $label = "script-language-container" }
+                if ($kept -notcontains $label) { $kept += $label }
+                $keptRefs += $ref
+            }
         }
         if ((-not $DryRun) -and $gone.Count -gt 0) {
             # In the fixed repository order, whatever order the engine listed them.
             $ordered = @($kitRepos | ForEach-Object { if ($_ -eq "exasol/script-language-container") { "script-language-container" } else { $_ } } | Where-Object { $gone -contains $_ })
             OkStep "Container images removed ($engineName): $($ordered -join ', ')"
+        }
+        # THE ONES IT KEPT ARE SAID TOO, on one line that outlives the quiet
+        # run. The dry run listed them as "will remove"; the real run's "Kept
+        # image" lines above go only to the log, which leaves with the kit
+        # home, so an image another container still used (the WSL kit on the
+        # same Docker Desktop) stayed without a word (W1-03). Twin of
+        # _kim_kept in _exakit_uninstall_kit_images.
+        if ((-not $DryRun) -and $kept.Count -gt 0) {
+            InfoStep "Container images kept ($engineName): $($kept -join ', '). $engineName did not remove them (a container may still use them, or $engineName did not answer). Remove them later with: $engineName rmi $($keptRefs -join ' ')"
         }
     }
     if (-not $anyEngine) {
@@ -2356,6 +2612,140 @@ function Test-ExakitUninstallBlocked {
     return ($runs.Count -gt 0)
 }
 
+# Get-ExakitUninstallOwnerUserDb - the folder name of the database the user let
+# the kit use (runtime.ownership "user"), when the uninstall keeps it and the
+# kit may still act on it: the recorded folder is the one in use
+# (Get-ExakitPersonalDbState is "") and it is on disk. "" for every other
+# database: the kit's own (destroyed), one with no receipt, or a deployment of
+# the user's found where the kit's was, whose logins the kit never made. Twin
+# of _exakit_uninstall_owner_user_db in common.sh.
+function Get-ExakitUninstallOwnerUserDb {
+    if (("" + (Get-ExakitManifestValue "runtime.type")) -ne "personal") { return "" }
+    if (("" + (Get-ExakitManifestValue "runtime.ownership")) -ne "user") { return "" }
+    $state = "unknown"
+    try { $state = "" + (Get-ExakitPersonalDbState) } catch { $state = "unknown" }
+    if ($state) { return "" }
+    if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
+    $dir = "" + $script:PersonalDeployDir
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return "" }
+    return (Split-Path -Leaf $dir)
+}
+
+# Invoke-ExakitUninstallKitLogins -Database <name> [-DryRun] - SEC-01: what the
+# kit made inside a database the user let it use goes, the database stays. The
+# SQL lives once, in marketplace\kit_logins.py (its own comment says what it
+# drops, keeps and prints); this renders its lines with the kit's marks. A dry
+# run lists the steps and asks no database. A database that is not running is
+# never started: the module prints the statements to run later. Never fatal:
+# the uninstall goes on either way. Twin of _exakit_uninstall_kit_logins in
+# common.sh.
+function Invoke-ExakitUninstallKitLogins {
+    param([Parameter(Mandatory)][string]$Database, [switch]$DryRun)
+    $module = Join-Path (Join-Path (Get-ExakitMarketplaceRoot) "marketplace") "kit_logins.py"
+    if (-not (Test-Path -LiteralPath $module)) { return }
+    if ($DryRun) { $arguments = @("plan") } else { $arguments = @("drop") }
+    $arguments += @("--home", $script:ExakitHome, "--database", $Database)
+    $result = $null
+    try { $result = Invoke-ExakitPythonFile -Path $module -Arguments $arguments } catch { $result = $null }
+    $lines = @()
+    $code = -1
+    if ($result) { $lines = @($result.Lines); $code = $result.Code }
+    foreach ($line in $lines) {
+        $text = "$line"
+        $space = $text.IndexOf(" ")
+        if ($space -lt 1) { continue }
+        $body = $text.Substring($space + 1)
+        switch -CaseSensitive ($text.Substring(0, $space)) {
+            "PLAN" { Info "  will remove: $body" }
+            "OK"   { OkStep $body }
+            "WARN" { Warn2 $body }
+            "INFO" { if ($DryRun) { Info "  $body" } else { InfoStep $body } }
+        }
+    }
+    if ($code -notin @(0, 1, 3) -and $lines.Count -eq 0) {
+        Warn2 "The kit's logins in your database '$Database' could not be checked, so they were not removed."
+    }
+}
+
+# Get-ExakitUninstallLauncherUsers - the deployments beside the kit's own that
+# use the kit's Exasol Personal launcher, by folder name (D4). Read before
+# anything is destroyed: once the kit's own is gone, the folder in use can
+# resolve to one of the user's. A deployment is a folder holding the
+# launcher's state (.exasolLauncherState.json, or deployment.json): a stray
+# file or an empty folder needs no launcher to go. Twin of
+# _exakit_uninstall_launcher_users bin in common.sh (Windows has no private
+# launcher).
+function Get-ExakitUninstallLauncherUsers {
+    $names = @()
+    $others = @()
+    if (Get-Command Get-PersonalOtherDeployments -ErrorAction SilentlyContinue) {
+        try { $others = @(Get-PersonalOtherDeployments) } catch { $others = @() }
+    }
+    foreach ($entry in $others) {
+        $path = "" + $entry
+        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Container)) { continue }
+        if (-not ((Test-Path -LiteralPath (Join-Path $path ".exasolLauncherState.json") -PathType Leaf) -or
+                  (Test-Path -LiteralPath (Join-Path $path "deployment.json") -PathType Leaf))) { continue }
+        $name = Split-Path -Leaf $path
+        if ($names -notcontains $name) { $names += $name }
+    }
+    return $names
+}
+
+# Get-ExakitLauncherKeptLine <names> - why the kit's launcher stays (D4). ""
+# for none. Twin of _exakit_launcher_kept_line in common.sh.
+function Get-ExakitLauncherKeptLine {
+    param([string[]]$Names = @())
+    $quoted = @(@($Names) | Where-Object { $_ } | ForEach-Object { "'$_'" })
+    if ($quoted.Count -eq 0) { return "" }
+    if ($quoted.Count -eq 1) { return "Keeping the Exasol Personal launcher: your deployment $($quoted[0]) still uses it." }
+    $head = @($quoted[0..($quoted.Count - 2)]) -join ", "
+    return "Keeping the Exasol Personal launcher: your deployments $head and $($quoted[$quoted.Count - 1]) still use it."
+}
+
+# Test-ExakitUninstallUserLauncher <kit launcher> - can a launcher of the
+# user's open the deployments the kit's launcher runs: the one on PATH, or the
+# one the install recorded as theirs (components.personal.user_launcher), its
+# version readable and on the pinned release line (2.5) or newer? A 2.4 does
+# not find a deployment in the 2.5 folder, and one that answers no version
+# proves nothing: neither counts. A link to the kit's own launcher is not
+# theirs. It is asked `version` only, time-bounded, and never changed. Twin of
+# _exakit_uninstall_user_launcher in common.sh.
+function Test-ExakitUninstallUserLauncher {
+    param([string]$KitLauncher)
+    foreach ($helper in @('Get-PersonalTargetVersion', 'Get-PersonalVersionLine', 'Test-PersonalVersionOutranks', 'Invoke-ExakitBounded')) {
+        if (-not (Get-Command $helper -ErrorAction SilentlyContinue)) { return $false }
+    }
+    $pinLine = Get-PersonalVersionLine ("" + (Get-PersonalTargetVersion))
+    if (-not $pinLine) { return $false }
+    $onPath = Get-Command exasol -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $found = @()
+    if ($onPath) { $found += "" + $onPath.Source }
+    $found += "" + (Get-ExakitManifestValue 'components.personal.user_launcher')
+    $kitRoot = ("" + $script:ExakitHome).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    foreach ($cli in $found) {
+        if (-not $cli -or $cli -eq $KitLauncher -or -not (Test-Path -LiteralPath $cli -PathType Leaf)) { continue }
+        $kits = $cli.StartsWith($kitRoot, [StringComparison]::OrdinalIgnoreCase)
+        try {
+            $link = Get-Item -LiteralPath $cli -Force -ErrorAction Stop
+            foreach ($target in @($link.Target)) {
+                if (-not $target) { continue }
+                $full = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $cli), "" + $target))
+                if ($full.StartsWith($kitRoot, [StringComparison]::OrdinalIgnoreCase)) { $kits = $true }
+            }
+        } catch { }
+        if ($kits) { continue }
+        $seconds = [int]("0" + (Get-Variable -Name PersonalProbeTimeout -Scope Script -ValueOnly -ErrorAction SilentlyContinue))
+        if ($seconds -le 0) { $seconds = 10 }
+        $raw = (("" + (Invoke-ExakitBounded -FilePath $cli -Arguments @("version") -TimeoutSeconds $seconds)) -split "`n")[0].Trim() -replace '^v', ''
+        if ($raw -notmatch '^[0-9][0-9A-Za-z.+_-]*$') { continue }
+        # The release line: 2.5.3 is 2.5, 2.6.0 is 2.6.
+        $line = Get-PersonalVersionLine $raw
+        if ($line -and -not (Test-PersonalVersionOutranks "$pinLine.0" "$line.0")) { return $true }
+    }
+    return $false
+}
+
 function Invoke-ExakitUninstallRun {
     param([switch]$DryRun)
     # Set when the database survived the teardown; the caller must not print
@@ -2417,8 +2807,16 @@ function Invoke-ExakitUninstallRun {
 
     $preservedComponentPaths = @(Get-ExakitPreservedComponentPaths)
     $protectedBinNames = @()
+    # THE KIT'S LAUNCHER BY ITS PLACE, with no receipt of its own:
+    # the one in the kit's folder, never a file of the user's at .local\bin (#41).
+    $ownedExasol = "" + (Get-ExakitManifestValue 'components.personal.ownership_path')
+    if (("" + (Get-ExakitManifestValue 'components.personal.ownership')) -ne 'kit' -and
+        (Get-Command Get-PersonalSeparateBinPath -ErrorAction SilentlyContinue) -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) {
+        $byPlace = "" + (Get-PersonalSeparateBinPath)
+        if ($byPlace -and (Test-Path -LiteralPath $byPlace -PathType Leaf) -and ("" + (Get-PersonalCli)) -eq $byPlace) { $ownedExasol = $byPlace }
+    }
     $ownedCoreBinPaths = @{
-        'exasol.exe' = Get-ExakitManifestValue 'components.personal.ownership_path'
+        'exasol.exe' = $ownedExasol
         'exapump.exe' = Get-ExakitManifestValue 'components.exapump.ownership_path'
     }
     # Read once, here: the registry is marketplace/catalog.json under the kit
@@ -2439,6 +2837,22 @@ function Invoke-ExakitUninstallRun {
                 $Entry.StartsWith($kept + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return $true }
         }
         return $false
+    }
+
+    # 0) A DATABASE THE USER LET THE KIT USE (owner user) is never destroyed,
+    #    and it keeps the name it has (D5): nothing renames it back. The one
+    #    change made inside it is SEC-01 (Invoke-ExakitUninstallKitLogins):
+    #    the kit's own logins and roles go, each schema they own handed to SYS
+    #    first. First, while the add-ons' receipts still name their logins;
+    #    the add-ons' own removal below then leaves the database alone
+    #    (EXAKIT_UNINSTALL_KEEP_DATABASE) and takes only what they put on this
+    #    computer. Any other database the kit does not own is left as it is.
+    #    Twin of step 0 in exakit_uninstall_run.
+    $unUserDb = "" + (Get-ExakitUninstallOwnerUserDb)
+    if ($unUserDb) {
+        Info "Keeping your database '$unUserDb' and all its data. It keeps the name '$unUserDb'."
+        UninstallPhase "Removing the kit's logins from your database"
+        Invoke-ExakitUninstallKitLogins -Database $unUserDb -DryRun:$DryRun
     }
 
     # 0a) Boot entries first: a Startup entry left behind would try to start
@@ -2465,6 +2879,11 @@ function Invoke-ExakitUninstallRun {
     # Tells an add-on hook that the kit home goes next, so it does not promise
     # to keep something step 5 is about to delete (dash-server's instance).
     $script:ExakitUninstallFull = $true
+    # A database the user let the kit use stays whole (step 0): each add-on's
+    # removal leaves it alone (runtime.uninstall_keeps_database). Never left
+    # set from anywhere else.
+    if ($unUserDb) { $env:EXAKIT_UNINSTALL_KEEP_DATABASE = "1" }
+    else { Remove-Item -LiteralPath Env:EXAKIT_UNINSTALL_KEEP_DATABASE -ErrorAction SilentlyContinue }
     # Which add-on skill folders are the kit's, decided before the add-ons go
     # (their uninstall drops the receipt the decision reads); step 3 removes them.
     if (-not $DryRun) {
@@ -2476,24 +2895,61 @@ function Invoke-ExakitUninstallRun {
         if ($addonEntry -and $addonEntry.PSObject.Properties["UninstallFn"] -and
             (Get-Command $addonEntry.UninstallFn -ErrorAction SilentlyContinue)) {
             try { [void](& $addonEntry.UninstallFn -DryRun:$DryRun); $addonsGone += $addonId }
-            catch { Warn2 "Removing the $addonId add-on reported issues (continuing uninstall)" }
+            catch {
+                # THE ADD-ON'S OWN REASON GOES ON THE WARNING. The logs leave
+                # with the kit home in this same run, so a bare "reported
+                # issues" left nothing anywhere that said why (W1-01). The
+                # hook's error is the module's last line ("<id>: <reason>").
+                # Twin of _un_why in exakit_uninstall_run.
+                $unWhy = @(("" + $_.Exception.Message) -split "`r?`n" | Where-Object { "$_".Trim() } | Select-Object -First 1)
+                $unWhy = if ($unWhy.Count) { "$($unWhy[0])".Trim() } else { "" }
+                if ($unWhy.StartsWith("${addonId}: ")) { $unWhy = $unWhy.Substring($addonId.Length + 2) }
+                if ($unWhy.Length -gt 300) { $unWhy = $unWhy.Substring(0, 300) }
+                if ($unWhy) { Warn2 "Removing the $addonId add-on reported issues (continuing uninstall): $unWhy" }
+                else { Warn2 "Removing the $addonId add-on reported issues (continuing uninstall)" }
+            }
         }
     }
     $script:ExakitUninstallFull = $false
+    Remove-Item -LiteralPath Env:EXAKIT_UNINSTALL_KEEP_DATABASE -ErrorAction SilentlyContinue
     if ($addonsGone.Count -gt 0) { RecordRemoved "Add-ons removed: $($addonsGone -join ', ')" }
 
-    UninstallPhase "Removing the database"
+    if (-not $unUserDb) { UninstallPhase "Removing the database" }
     # 1) Database + all data.
     $type = Get-RuntimeType
     # Only a run that found a deployment may remove the engine's images (step
     # 1c): a sandboxed home (the test suites) must never reach the real ones.
+    if (Get-Command Update-PersonalDeployDir -ErrorAction SilentlyContinue) { Update-PersonalDeployDir }
     $unHadDeploy = [bool]($script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir))
     # The images the deployment runs from, read now: the teardown removes its
     # containers, and step 1c removes only these.
     $unKitImages = $null
     if ($unHadDeploy -and $type -eq "personal" -and (Test-ExakitComponentManaged "database")) { $unKitImages = Get-ExakitUninstallKitImageIds }
+    # The kit's own deployment gone, and one that is not provably the kit's
+    # in the launcher's folder: that one is the user's, and nothing below
+    # removes it or anything in it. Twin of _un_kit_gone.
+    $unKitGone = ""
+    if ($type -eq "personal" -and (Get-Command Get-ExakitPersonalKitMissing -ErrorAction SilentlyContinue)) {
+        try { $unKitGone = "" + (Get-ExakitPersonalKitMissing) } catch { $unKitGone = "" }
+    }
+    # The deployments beside the kit's that use the kit's own launcher (D4),
+    # read now, before anything is destroyed (Get-ExakitUninstallLauncherUsers).
+    $unOtherUsers = @()
+    if ($type -eq "personal" -and $protectedBinNames -notcontains 'exasol') { $unOtherUsers = @(Get-ExakitUninstallLauncherUsers) }
+    # The deployment this run keeps (a database the kit does not own): it uses
+    # the launcher too.
+    $unDbKept = ""
     if ($type -and -not (Test-ExakitComponentManaged "database")) {
-        Write-ExakitPreservedComponent "database"
+        # A database the user let the kit use was kept, and said, at step 0.
+        if (-not $unUserDb) { Write-ExakitPreservedComponent "database" }
+        if ($unKitGone) {
+            $unKitParts = $unKitGone -split '\|', 2
+            Info "The kit's own database was not found at $($unKitParts[0])."
+            Info "The Exasol Personal deployment at $($unKitParts[1]) is not the kit's, so it is not removed."
+        }
+        if ($script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir -PathType Container)) {
+            $unDbKept = Split-Path -Leaf $script:PersonalDeployDir
+        }
         # A database the kit does not own keeps the images it runs from.
         $unHadDeploy = $false
     } elseif ($type) {
@@ -2509,7 +2965,14 @@ function Invoke-ExakitUninstallRun {
                     $script:PersonalTeardownLeftovers = @()
                     $script:PersonalTeardownRemedy = ""
                     $script:PersonalTeardownWarnings = @()
-                    try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" }
+                    try { Remove-Personal } catch {
+                        Warn2 "Database removal reported errors (continuing uninstall)"
+                        # CHECKED ALL THE SAME. A Remove-Personal that threw
+                        # before its own end-state check left the leftovers
+                        # empty, and "Database removed" was printed over a
+                        # deployment nobody had looked at.
+                        try { Find-PersonalTeardownLeftovers -Id ("" + (Get-ExakitManifestValue "runtime.deployment_id")) } catch { }
+                    }
                     if (@($script:PersonalTeardownLeftovers).Count -gt 0) { $script:ExakitUninstallDbLeft = $true }
                 }
                 default { Warn2 "Unknown runtime type '$type'; skipping database removal" }
@@ -2537,6 +3000,16 @@ function Invoke-ExakitUninstallRun {
                     try {
                         Remove-Item -LiteralPath $launcherLeft.Cache -Recurse -Force -ErrorAction Stop
                         RecordRemoved "Launcher download cache removed: $(Get-ExakitTilde $launcherLeft.Cache) ($($launcherLeft.CacheSize))"
+                        # 2.5.0's cache is <cache root>\exasol\launcher\resources: its
+                        # two parents stayed behind empty (U-01). Each goes only while
+                        # empty, never recursively. Twin of the same lines in
+                        # exakit_uninstall_run.
+                        if ($launcherLeft.Cache -match '[\\/]exasol[\\/]launcher[\\/]resources$') {
+                            $cacheParent = Split-Path -Parent $launcherLeft.Cache
+                            foreach ($emptyParent in @($cacheParent, (Split-Path -Parent $cacheParent))) {
+                                try { [System.IO.Directory]::Delete($emptyParent, $false) } catch { break }
+                            }
+                        }
                     } catch { Warn2 "Could not remove the launcher download cache $($launcherLeft.Cache) (continuing uninstall)" }
                 }
             }
@@ -2566,6 +3039,30 @@ function Invoke-ExakitUninstallRun {
         if ($otherDeploys.Count -eq 0) { UninstallPhase "Removing container images"; Invoke-ExakitUninstallKitImages -DryRun:$DryRun -Record $unKitImages }
     }
 
+    # 1d) The kit's own launcher stays while another deployment uses it (D4):
+    #     one beside the kit's (read before the destroy, above), or the
+    #     database this run keeps. Said once, here; step 6 leaves it in place.
+    #     A launcher that is not the kit's is kept by step 6 as before. Twin of
+    #     step 1d in exakit_uninstall_run.
+    $launcherUsers = @()
+    $kitLauncher = "" + $ownedCoreBinPaths['exasol.exe']
+    if (-not $kitLauncher) { $kitLauncher = Join-Path $script:BinDir 'exasol.exe' }
+    # The kit's launcher in the kit's folder next to a launcher of the user's
+    # own that can open them (2.5 or newer): their deployments run with
+    # theirs, so the kit's goes. Next to a 2.4 of theirs (mode S) it stays.
+    $kitSeparate = ""
+    if (Get-Command Get-PersonalSeparateBinPath -ErrorAction SilentlyContinue) { $kitSeparate = "" + (Get-PersonalSeparateBinPath) }
+    if (-not $kitSeparate) { $kitSeparate = ("" + (Get-Variable -Name PersonalSeparateBinPath -Scope Script -ValueOnly -ErrorAction SilentlyContinue)) }
+    if ($protectedBinNames -notcontains 'exasol' -and (Test-Path -LiteralPath $kitLauncher)) {
+        $launcherUsers = @($unOtherUsers)
+        if ($unDbKept -and $launcherUsers -notcontains $unDbKept) { $launcherUsers += $unDbKept }
+        if ($launcherUsers.Count -gt 0 -and $kitSeparate -and $kitLauncher -eq $kitSeparate -and
+            (Test-ExakitUninstallUserLauncher $kitLauncher)) { $launcherUsers = @() }
+    }
+    if ($launcherUsers.Count -gt 0) {
+        InfoStep (Get-ExakitLauncherKeptLine -Names $launcherUsers)
+    }
+
     UninstallPhase "Removing AI client settings"
     # 2) Managed MCP configuration in the AI clients. Best-effort.
     if (Get-Command Invoke-McpOperation -ErrorAction SilentlyContinue) {
@@ -2591,7 +3088,25 @@ function Invoke-ExakitUninstallRun {
         }
         RecordRemoved "MCP entry removed from the AI clients: $mcpClientList"
     }
-    if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar -DryRun:$DryRun }
+    if (-not $unKitGone -and (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue)) { Remove-McpSidecar -DryRun:$DryRun }
+    # THE MOVE OF A KEPT LAUNCHER (1d), ONLY NOW: the MCP server above is
+    # removed with the kit's launcher, at its path (OWN-05). The kit's folder
+    # goes: a launcher kept for their deployments moves to
+    # %USERPROFILE%\.local\bin\exasol.exe when nothing is there (Krishna,
+    # 24 Nov). With a file there, it stays in the kit's folder, which the
+    # sweep below then leaves.
+    if ($launcherUsers.Count -gt 0 -and $kitSeparate -and $kitLauncher -eq $kitSeparate) {
+        $keptAt = Join-Path $script:BinDir 'exasol.exe'
+        $moved = $false
+        if (-not $DryRun -and -not (Test-Path -LiteralPath $keptAt)) {
+            try {
+                New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
+                Move-Item -LiteralPath $kitLauncher -Destination $keptAt -ErrorAction Stop
+                $moved = $true
+            } catch { Write-ExakitLog "WARN" "uninstall: the kept launcher stays at ${kitLauncher}: $($_.Exception.Message)" }
+        }
+        if (-not $moved -and -not $DryRun) { $preservedComponentPaths += $kitLauncher }
+    }
     # 2b) MCP servers an open AI client still runs are NOT stopped here.
     #     Windows does not expose another process's environment, so the bash
     #     side's EXA_USER/EXA_DSN proof of ownership is unavailable, and a
@@ -2722,6 +3237,8 @@ function Invoke-ExakitUninstallRun {
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
         if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { if (Test-Path -LiteralPath $p) { Info "Keeping $(Get-ExakitTilde $p) (not installed by this kit)." }; continue }
+        # Kept while another deployment uses it (D4, said at step 1d).
+        if ($bin -eq 'exasol.exe' -and $launcherUsers.Count -gt 0) { continue }
         if ($ownedCoreBinPaths.ContainsKey($bin) -and $ownedCoreBinPaths[$bin]) { $p = $ownedCoreBinPaths[$bin] }
         if (Test-Path $p) {
             # An add-on's own dry run (step 0b) already listed its launcher:
@@ -2745,6 +3262,7 @@ function Invoke-ExakitUninstallRun {
     } finally {
         Stop-ExakitSpinner
         $script:ExakitQuietDetail = $unPrevQuiet
+        Remove-Item -LiteralPath Env:EXAKIT_UNINSTALL_KEEP_DATABASE -ErrorAction SilentlyContinue
     }
     Write-ExakitUninstallClosingHints -DryRun:$DryRun
     # The one step that is not best-effort for the answer: a database left on
@@ -2964,8 +3482,16 @@ function Invoke-CmdUninstall {
 
     if ($AssumeYes) {
         Write-Host ""
-        Warn2 "Removes the full kit, including all database data."
-        Info "Your tables are not exported. To see every item first: exakit uninstall -DryRun"
+        # The warning names the data only when the run removes it (W-01): a
+        # database that is not the kit's, or no runtime recorded at all, is
+        # left in place. Twin of the same arm in cmd_uninstall.
+        if ((Get-RuntimeType) -and (Test-ExakitComponentManaged "database")) {
+            Warn2 "Removes the full kit, including all database data."
+            Info "Your tables are not exported. To see every item first: exakit uninstall -DryRun"
+        } else {
+            Warn2 "Removes the starter kit. Your own Exasol database and its data stay."
+            Info "To see every item first: exakit uninstall -DryRun"
+        }
         Invoke-ExakitUninstallRun
         Write-Host ""
         if ($script:ExakitUninstallDbLeft) {
@@ -3129,6 +3655,11 @@ function Invoke-ExakitUninstallComponent {
     }
     switch ($Key) {
         "database" {
+            # THE OWNER RULE, in this arm too, not only at the top of this
+            # function: only the kit's own database is ever destroyed. One the
+            # user let the kit use (owner user), or one with no receipt, stays.
+            # Twin of the same check in _exakit_uninstall_component.
+            if (-not (Test-ExakitComponentManaged "database")) { Write-ExakitPreservedComponent "database"; return }
             # NO shared-engine warning here any more: by this line the user has
             # typed UNINSTALL and the removal is under way. The hazard is stated
             # before the gate instead (Show-ExakitSharedEngineDbWarning, called
@@ -3350,7 +3881,9 @@ function Invoke-CmdVersion {
             # version in versions.json is not a rollback lever, and a user who
             # upgraded a component themselves keeps what they chose.
             #
-            # The row says only "none". Not "yours is newer than tested", which
+            # The row says "ahead (manifest <date>)", the twin of "current (manifest <date>)" (the raw status stays
+            # "none", which the JSON reports as "ahead"); a bare "none" read as a missing value (#46), and
+            # "nothing to do" did not say why. Not "yours is newer than tested", which
             # apologised for the install and made the tested set sound abandoned;
             # not the tagged number either, which invites the reader to go looking
             # for a way back to it. There is nothing to do, so the row says so and
@@ -3395,7 +3928,7 @@ function Invoke-CmdVersion {
         $rows.Add(@{
             C = $actual
             V = $installed
-            S = (Get-ExakitStatusCell -Status $status -Severity $severity)
+            S = $(if ($status -eq "none") { if ($checkedAgainst) { "ahead (manifest $checkedAgainst)" } else { "ahead" } } else { Get-ExakitStatusCell -Status $status -Severity $severity })
             N = $rowNote
             M = "$(Get-ExakitComponentNote $actual)"
             A = $available
@@ -3995,6 +4528,8 @@ function Get-ExakitRuntimeUpdatePreanswer {
 function Write-ExakitRuntimeUpdateExplanation {
     param([string]$Actual, [string]$Installed, [string]$Advertised)
     Warn2 "$Actual $Installed -> $Advertised needs the database stopped."
+    # Said: the updater that stops it (Update-Personal) does not say it again.
+    $script:ExakitRuntimeUpdateSaid = $true
     switch ($Actual) {
         "personal" {
             Info "The launcher is replaced; the database is checked afterwards and started again if it ends up down - usually under a minute."
@@ -4011,6 +4546,8 @@ function Write-ExakitRuntimeUpdateExplanation {
 # owns the sequence itself, and it is called here exactly as
 # `exakit update runtime` calls it. What this adds is the one thing the prompt
 # promises: a database that was up before this command is up after it.
+# An update that did not happen ($script:PersonalUpdateResult "undone": said,
+# and put back) is never reported as updated.
 # Twin of exakit_apply_runtime_update in setup/lib/common.sh.
 function Invoke-ExakitRuntimeUpdateApply {
     param([Parameter(Mandatory)][string]$Component, [string]$Advertised)
@@ -4018,9 +4555,18 @@ function Invoke-ExakitRuntimeUpdateApply {
     # The offer above IS the confirmation the runtime updater asks for. Asking one
     # question twice is not a safety feature, so the answer is passed down.
     $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "1"
+    # An updater that stops the database itself starts it again itself, once
+    # (Update-Personal: the one restart of the update to 2.5), and says so in
+    # $script:PersonalUpdateRestarted: it is never started a second time here.
+    $script:PersonalUpdateResult = ""
+    $script:PersonalUpdateRestarted = $false
     Invoke-ExakitRuntimeComponentUpdate -Component $Component -Advertised $Advertised
+    $script:ExakitRuntimeUpdateSaid = $false
+    # NOT UPDATED is never reported as updated: the updater said why and put
+    # back what it had changed, and the next update tries again.
+    if ($script:PersonalUpdateResult -eq "undone") { return }
     $status = Get-ExakitRuntimeStatus
-    if ($wasRunning -and $status -and $status -ne "running" -and $status -ne "starting") {
+    if ($wasRunning -and -not $script:PersonalUpdateRestarted -and $status -and $status -ne "running" -and $status -ne "starting") {
         Info "Bringing the database back up"
         Start-ExakitRuntime
         $status = Get-ExakitRuntimeStatus
@@ -4037,9 +4583,11 @@ function Invoke-ExakitRuntimeUpdateApply {
 }
 
 # Invoke-ExakitRuntimeUpdateOffer - the heavy part of a routine `exakit update`,
-# decided here instead of being handed to the user as homework. Returns $true when
-# it was applied, $false when it was deferred (and then prints the exact command
-# that applies it later).
+# done here instead of being handed to the user as homework, with no question.
+# Returns $true when it was applied, $false when it was deferred (a major
+# upgrade, or EXAKIT_CONFIRM_RUNTIME_UPDATE=0, and then prints the command),
+# "undone" when it did not happen and what it had changed was put back (said
+# by the updater: the next `exakit update` tries again).
 #
 # On backups: the kit has no data-export facility, and a minor launcher update
 # needs none - it replaces the launcher and leaves the deployment's data alone.
@@ -4059,32 +4607,148 @@ function Invoke-ExakitRuntimeUpdateOffer {
         Warn2 "$Actual $Installed -> $Advertised is a major upgrade: it needs a backup and a data migration, so a routine update does not start it."
         return $false
     }
-    $preanswer = Get-ExakitRuntimeUpdatePreanswer -AssumeYes $AssumeYes
-    if ($preanswer -eq "no") {
+    # The runtime update is the point of the update, so it asks nothing: with
+    # or without a console or -Yes, the database is stopped, updated and
+    # started again, and the run says so first. Only a deliberate
+    # EXAKIT_CONFIRM_RUNTIME_UPDATE=0 keeps the database as it is.
+    if ((Get-ExakitRuntimeUpdatePreanswer -AssumeYes $AssumeYes) -eq "no") {
         Warn2 "$Actual $Installed -> $Advertised was left alone: the database update is answered 'no' (EXAKIT_CONFIRM_RUNTIME_UPDATE)."
-        Info "Apply it when convenient:  exakit update"
+        Info "Apply it when convenient:  exakit update --yes"
         return $false
     }
-    if ($preanswer -eq "yes") {
-        Write-ExakitRuntimeUpdateExplanation -Actual $Actual -Installed $Installed -Advertised $Advertised
-    } else {
-        # No console, no answer: a prompt nobody can answer must never turn into a
-        # stopped database, so a redirected run, a CI job and a scheduled task all
-        # get exactly today's safe deferral.
-        if (-not (Test-ExakitInteractive)) {
-            Warn2 "$Actual $Installed -> $Advertised needs the database stopped, so it is not part of a routine update."
-            Info "Apply it when convenient:  exakit update"
-            Info "Unattended runs can opt in:  exakit update -Yes  (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1)"
-            return $false
-        }
-        Write-ExakitRuntimeUpdateExplanation -Actual $Actual -Installed $Installed -Advertised $Advertised
-        if (-not (Confirm-ExakitPrompt "Stop the database and update the runtime now?" $false)) {
-            Info "Nothing was stopped. Apply it when convenient:  exakit update"
-            return $false
+    Write-ExakitRuntimeUpdateExplanation -Actual $Actual -Installed $Installed -Advertised $Advertised
+    Invoke-ExakitRuntimeUpdateApply -Component $Component -Advertised $Advertised
+    if ($script:PersonalUpdateResult -eq "undone") { return "undone" }
+    return $true
+}
+
+# Invoke-ExakitUpdateSessionLimit - the 20-session limit a 2.4 launcher set
+# on the kit's database, removed by an update whose launcher is already
+# current (U1-alt). Update-Personal lifts it after a launcher swap, and only
+# then: a 2.4-made deployment already driven by launcher 2.5.0 kept the limit
+# through every `exakit update`. Test-PersonalSessionLimitPending holds every
+# guard (the kit's own database, or one the user let the kit use, never in
+# kit_database_missing), so a second update does nothing at all. Removing the
+# limit is the point of the update to 2.5, so it asks nothing: a running
+# database restarts once, with or without a console or -Yes. Only
+# EXAKIT_CONFIRM_RUNTIME_UPDATE=0 holds it back (`exakit update --json` without
+# -Yes sets it), and then the remedy is `exakit update --yes`. A 0.3.0 database
+# still named `default` under such a launcher is renamed to starter-kit-local
+# in that same restart (Update-PersonalCurrent). "lifted" (or nothing to do)
+# or "failed" (the rename or the lift failed or was held back, said;
+# $script:ExakitUpdateLimitRemedy is then the command that applies it). Twin of exakit_update_session_limit.
+function Invoke-ExakitUpdateSessionLimit {
+    $script:ExakitUpdateLimitRemedy = "exakit update"
+    if (-not (Get-Command Test-PersonalSessionLimitPending -ErrorAction SilentlyContinue)) { return "lifted" }
+    # A 0.3.0 kit's database still named `default`, under a launcher that is
+    # current: renamed to starter-kit-local and its limit lifted, in the one
+    # restart of the update to 2.5 (Update-PersonalCurrent).
+    if ((Get-Command Update-PersonalCurrent -ErrorAction SilentlyContinue) -and ("" + (Get-PersonalUpdateRenameSource))) {
+        if (@(Update-PersonalCurrent)[-1] -ne $true) {
+            # Held back by a deliberate no: the row names the command that applies it.
+            if ($script:PersonalUpdateKept) { $script:ExakitUpdateLimitRemedy = "exakit update --yes" }
+            return "failed"
         }
     }
-    Invoke-ExakitRuntimeUpdateApply -Component $Component -Advertised $Advertised
-    return $true
+    # [-1]: the verdict is the last thing it returns; a launcher call inside
+    # can put objects of its own on the pipeline.
+    if ((Test-PersonalSessionLimitPending) -and (@(Remove-PersonalSessionLimit)[-1] -ne $true)) {
+        if ($script:PersonalUpdateKept) { $script:ExakitUpdateLimitRemedy = "exakit update --yes" }
+        return "failed"
+    }
+    # What an update cut short left to do: the kit's old launcher it retires,
+    # and the start at its end (Q8).
+    if (-not (Get-Command Complete-PersonalUpdateStart -ErrorAction SilentlyContinue)) { return "lifted" }
+    $null = Complete-PersonalRetire
+    if (@(Complete-PersonalUpdateStart)[-1] -eq $true) { return "lifted" }
+    if ($script:PersonalUpdateKept) { $script:ExakitUpdateLimitRemedy = "exakit update --yes" }
+    else { $script:ExakitUpdateLimitRemedy = "exakit start" }
+    return "failed"
+}
+
+# Invoke-ExakitUpdateForeignPersonal <target> <installed> <advertised> - the
+# personal row of `exakit update` when the launcher is not the kit's (its
+# bytes no longer match the receipt: a 2.4 launcher the user replaced by hand
+# with 2.5.0 at the kit's own path). The launcher is left exactly as it is
+# (#41), but the database it drives can still be the kit's, with the
+# 20-session limit on it (U1-alt follow-up): the foreign arm ran before the
+# "current" arms, so the lift never did. Invoke-ExakitUpdateSessionLimit
+# decides, with every guard of the lift, and renames a 0.3.0 database still
+# named `default` when that launcher is 2.5.0 or later. "" when there is no
+# limit to remove and nothing to rename: the caller then runs
+# Update-ExakitForeignComponent as before.
+# Otherwise it writes the row and returns "deferred" (the lift failed: remedy
+# exakit update, as the "current" arms) or "current" (lifted, the launcher at the advertised version). A
+# launcher at another version, lifted, returns "" and keeps the row
+# Update-ExakitForeignComponent writes. Twin of
+# _exakit_update_foreign_personal.
+function Invoke-ExakitUpdateForeignPersonal {
+    param([string]$Target = "all", [string]$Installed = "", [string]$Advertised = "", [bool]$AssumeYes = $false)
+    if (-not (Get-Command Test-PersonalSessionLimitPending -ErrorAction SilentlyContinue)) { return "" }
+    # The limit to remove, or a 0.3.0 database still named `default` to rename
+    # (Invoke-ExakitUpdateSessionLimit does both, in one restart).
+    if (-not (Test-PersonalSessionLimitPending)) {
+        if (-not (Get-Command Get-PersonalUpdateRenameSource -ErrorAction SilentlyContinue)) { return "" }
+        if (-not ("" + (Get-PersonalUpdateRenameSource))) { return "" }
+    }
+    if (@(Invoke-ExakitUpdateSessionLimit)[-1] -ne "lifted") {
+        Write-ExakitPreservedComponent "personal"
+        Add-ExakitUpdateNote -Component "personal" -Outcome "deferred" -From $Installed -To $Advertised -Remedy $script:ExakitUpdateLimitRemedy
+        return "deferred"
+    }
+    if (-not $Advertised -or -not (Test-ExakitVersionSame $Installed $Advertised)) { return "" }
+    Write-ExakitPreservedComponent "personal"
+    Add-ExakitUpdateNote -Component "personal" -Outcome "current" -From $Installed -To $Advertised
+    return "current"
+}
+
+# Invoke-ExakitUpdateUserPersonal <installed> <advertised> - the personal row
+# of `exakit update` for a database the user let the 0.3.0 kit use
+# (runtime.ownership user), run by THEIR launcher, behind the pin: the update
+# to 2.5 with that permission (Update-PersonalUser). Their launcher is never
+# touched: the kit's own goes into its folder, and the database is renamed to
+# starter-kit-local and its limit lifted, in one restart. "" when that is not
+# this row: the caller goes on as before (the limit alone,
+# Invoke-ExakitUpdateForeignPersonal, else Update-ExakitForeignComponent).
+# Otherwise it writes the row and returns "updated", "deferred" (it did not
+# happen: said and put back, remedy exakit update, the reason in the row
+# under --json; or EXAKIT_CONFIRM_RUNTIME_UPDATE=0, remedy exakit update
+# --yes) or "failed" (a Fail under --json). Twin of
+# _exakit_update_user_personal.
+function Invoke-ExakitUpdateUserPersonal {
+    param([string]$Installed = "", [string]$Advertised = "")
+    if (-not (Get-Command Update-PersonalUser -ErrorAction SilentlyContinue)) { return "" }
+    # The kit's own database on the user's launcher too (Q15): the same update.
+    if (@("user", "kit") -notcontains ("" + (Get-ExakitManifestValue "runtime.ownership"))) { return "" }
+    $script:PersonalUpdateResult = ""
+    $script:PersonalUpdateWhy = ""
+    try {
+        $null = Update-PersonalUser -Installed $Installed -Advertised $Advertised
+    } catch {
+        if (-not $script:ExakitUpdateJson) { throw }
+        $userError = "" + $_.Exception.Message
+        if (-not $userError) { $userError = "the update did not finish (see exakit logs)" }
+        $userFix = Get-ExakitUpdateFailureRemedy -Component "personal" -Reason $userError
+        Add-ExakitUpdateNote -Component "personal" -Outcome "failed" -From $Installed -To $Advertised `
+            -Remedy $userFix.Remedy -ErrorText $userError -Hint $userFix.Hint
+        return "failed"
+    }
+    switch ("" + $script:PersonalUpdateResult) {
+        "updated" {
+            Add-ExakitUpdateNote -Component "personal" -Outcome "updated" -From $Installed -To $Advertised
+            return "updated"
+        }
+        "undone" {
+            Add-ExakitUpdateNote -Component "personal" -Outcome "deferred" -From $Installed -To $Advertised -Remedy "exakit update" `
+                -ErrorText $script:PersonalUpdateWhy -Hint "Run exakit update again once that is solved."
+            return "deferred"
+        }
+        "kept" {
+            Add-ExakitUpdateNote -Component "personal" -Outcome "deferred" -From $Installed -To $Advertised -Remedy "exakit update --yes"
+            return "deferred"
+        }
+    }
+    return ""
 }
 
 # Invoke-CmdUpdate - apply the advertised versions. Prints its work plan, not the
@@ -4199,10 +4863,12 @@ function Write-ExakitUpdateJsonReport {
         if ($failed[0].PSObject.Properties["remedy_hint"]) { $hint = $failed[0].remedy_hint }
     } elseif ($deferred.Count -gt 0) {
         $status = "deferred"; $remedy = $(if ($deferred[0].remedy) { $deferred[0].remedy } else { "exakit update --yes" })
-        # New kit setup that waits for a STOPPED database is deferred too, and
-        # its remedy says so: no hint. Twin of the same condition in
-        # _exakit_update_json_report.
-        if ($deferred[0].component -eq "core-setup") {
+        # A row that says why it waits says it best. New kit setup that waits
+        # for a STOPPED database is deferred too, and its remedy says so: no
+        # hint. Twin of the same conditions in _exakit_update_json_report.
+        if ($deferred[0].PSObject.Properties["remedy_hint"] -and $deferred[0].remedy_hint) {
+            $hint = $deferred[0].remedy_hint
+        } elseif ($deferred[0].component -eq "core-setup") {
             $hint = $null
         } elseif ($remedy -eq "exakit update") {
             $hint = "the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit"
@@ -4242,6 +4908,17 @@ function Invoke-CmdUpdate {
     # and Abouts are looked up (the other is the install's offer).
     if (Get-Command Update-ExakitMarketplaceAboutCache -ErrorAction SilentlyContinue) {
         try { Update-ExakitMarketplaceAboutCache -All } catch { }
+    }
+    # AN EMPTY ID IS BAD INPUT, NEVER "EVERYTHING": `exakit update dash-server
+    # $extra` with an empty $extra, or a leading "", was read as no id and so
+    # as the whole kit. Each id is named by its position among the words left
+    # once the options are taken out. Twin of the same check in exakit_update.
+    $idList = @($More)
+    if ($PSBoundParameters.ContainsKey("Target")) { $idList = @($Target) + $idList }
+    for ($idPos = 0; $idPos -lt $idList.Count; $idPos++) {
+        if ("" -eq "$($idList[$idPos])") {
+            Deny-ExakitInput "Component id $($idPos + 1) of 'exakit update' is empty. Name each component to update, or run 'exakit update' alone to update everything."
+        }
     }
     if (-not $Target) { $Target = "all" }
     # An unknown target is bad input: refused before anything runs, exit 2,
@@ -4505,6 +5182,10 @@ function Invoke-ExakitUpdateRun {
     $acted = 0
     $doneList = @()
     $refreshedList = @()
+    $missingList = @()
+    # Explicit updates of the database that did not happen and were put back
+    # (exakit update personal): failed, as on macOS and Linux.
+    $putBackFailed = 0
     $script:ExakitKitSwapped = $false
     # Several ids (exakit update exapump dbt-exasol) arrive already resolved in
     # -Components, and $Target holds them joined by spaces for the handover and
@@ -4531,11 +5212,35 @@ function Invoke-ExakitUpdateRun {
             Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update"
             continue
         }
+        # A database that ran on the user's own launcher, already at the
+        # advertised version: the kit's own launcher goes into the kit's folder
+        # (Install-PersonalKitCopy), and the row goes on as the kit's own.
+        # Theirs is not touched. Twin of the same step in _exakit_update_run.
+        if ($actual -eq "personal" -and $current -and $available -and (Get-Command Install-PersonalKitCopy -ErrorAction SilentlyContinue)) {
+            $null = Install-PersonalKitCopy -Version $available
+        }
         # A component the kit did not install (ownership receipt) is never
         # written by the kit: behind the advertised version it is updated
         # through the tool that owns it, or kept with the command to run (see
         # Update-ExakitForeignComponent). Twin of the same arm in _exakit_update_run.
         if ($current -and $current -ne "not installed" -and -not (Test-ExakitComponentManaged $actual)) {
+            # A database the user let the 0.3.0 kit use, run by their own
+            # launcher behind the pin: the kit gets its own launcher, and theirs
+            # is not touched (Invoke-ExakitUpdateUserPersonal).
+            # A launcher the kit did not install can still drive the kit's own
+            # database with the 20-session limit on it: the launcher stays as
+            # it is, the limit is removed (Invoke-ExakitUpdateForeignPersonal).
+            if ($actual -eq "personal") {
+                $userRow = "" + @(Invoke-ExakitUpdateUserPersonal -Installed $current -Advertised $available)[-1]
+                if ($userRow) {
+                    if ($userRow -eq "updated") { $acted += 1; $doneList += $actual }
+                    elseif ($userRow -eq "deferred") { $deferred += 1 }
+                    continue
+                }
+                $foreignLimit = "" + @(Invoke-ExakitUpdateForeignPersonal -Target $Target -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
+                if ($foreignLimit -eq "deferred") { $deferred += 1 }
+                if ($foreignLimit) { continue }
+            }
             $foreign = @(Update-ExakitForeignComponent -Id $actual -Installed $current -Advertised $available)[-1]
             if ($foreign -eq "updated") {
                 $acted += 1
@@ -4550,6 +5255,23 @@ function Invoke-ExakitUpdateRun {
             Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To $available
             if ($Target -eq "all") { continue }
             Fail "$actual has no build for this platform, so there is nothing to update."
+        }
+        # A NAMED ADD-ON THAT WAS NEVER INSTALLED. Only an explicit id reaches
+        # here (all lists installed add-ons only). Its module refused with "not
+        # kit-owned; its owner manages updates" and the row's remedy was this
+        # same command, so an agent obeying remedy looped on it. With no kit
+        # receipt and nothing of the user's on the machine, the answer is the
+        # install. Twin of the same arm in _exakit_update_run.
+        if (-not $current -and (Get-ExakitMarketplaceAddon $actual) -and
+                -not (Get-ExakitManifestValue (Get-ExakitOwnershipKey $actual)) -and
+                -not (Test-ExakitAddonSystemPresent $actual)) {
+            Warn2 "$actual is not installed, so there is nothing to update. Install it with: exakit marketplace $actual"
+            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From "" -To $available `
+                -Remedy "exakit marketplace $actual" -ErrorText "$actual is not installed, so there is nothing to update." `
+                -Hint "Install it with: exakit marketplace $actual"
+            $missingList += $actual
+            $acted += 1
+            continue
         }
         # Nothing advertised for this component (unreadable manifest, or a
         # component this kit knows nothing about): a routine update says so and
@@ -4604,10 +5326,22 @@ function Invoke-ExakitUpdateRun {
                     $acted += 1
                     $doneList += $actual
                     Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
+                } elseif ("$applied" -eq "undone") {
+                    # It did not happen and was put back, the reason said: the
+                    # row waits for the next update. Twin of the offer's 11.
+                    $deferred += 1
+                    Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update" `
+                        -ErrorText $script:PersonalUpdateWhy -Hint "Run exakit update again once that is solved."
                 } else {
                     $deferred += 1
                     Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update --yes"
                 }
+            } elseif ($actual -eq "personal" -and (@(Invoke-ExakitUpdateSessionLimit)[-1] -ne "lifted")) {
+                # The launcher is current and removing the 20-session limit
+                # failed (said): the row waits for the next update, as in
+                # _exakit_update_run.
+                $deferred += 1
+                Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy $script:ExakitUpdateLimitRemedy
             } else {
                 Add-ExakitUpdateNote -Component $actual -Outcome "current" -From $current -To $available
             }
@@ -4622,12 +5356,25 @@ function Invoke-ExakitUpdateRun {
         # The skill set at the advertised version, but missing from a skill
         # folder this kit reads (Test-ExakitSkillsUnplaced): placed again.
         # A marketplace add-on named EXPLICITLY (exakit update json-tables) runs
-        # its update step even at the same version: that step is also its repair
-        # path. Only `update all` skips a current one; its row still says
-        # current. Twin of the same arm in _exakit_update_run.
+        # its update step even at the same version, and the module decides what
+        # that run does. Some repair there (a launcher an earlier kit wrote).
+        # dash-server moves to a changed EXAKIT_DASH_SERVER_PORT and otherwise
+        # changes nothing: it does not restart a running server, which is
+        # `exakit stop dash-server`, then `exakit start dash-server`. Only
+        # `update all` skips a current one; its row still says current. Twin of
+        # the same arm in _exakit_update_run.
         $atVersion = (Test-ExakitVersionSame $current $available) -and -not (Test-ExakitAddonNeedsUpdate $actual) -and
             -not ($actual -eq "skills" -and (Test-ExakitSkillsUnplaced))
         if ($atVersion -and ($Target -eq "all" -or -not (Get-ExakitMarketplaceAddon $component))) {
+            # A current launcher can still leave the 20-session limit on the
+            # kit's database: `exakit update personal` removes it, as it does
+            # after a launcher swap (Invoke-ExakitUpdateSessionLimit).
+            if ($actual -eq "personal" -and (@(Invoke-ExakitUpdateSessionLimit)[-1] -ne "lifted") -and
+                $script:ExakitUpdateLimitRemedy -eq "exakit update --yes") {
+                $deferred += 1
+                Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy $script:ExakitUpdateLimitRemedy
+                continue
+            }
             Add-ExakitUpdateNote -Component $actual -Outcome "current" -From $current -To $available
             continue
         }
@@ -4648,6 +5395,8 @@ function Invoke-ExakitUpdateRun {
         # Under --json each updater's Fail is caught here, recorded as failed,
         # and the rest still run; on the screen it stops the run as before.
         $componentFailed = $false
+        $script:PersonalUpdateResult = ""
+        $script:PersonalUpdateInUse = $false
         try {
         switch ($component) {
             "exakit" {
@@ -4730,7 +5479,37 @@ function Invoke-ExakitUpdateRun {
             Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
                 -Remedy $componentFix.Remedy -ErrorText $componentError -Hint $componentFix.Hint
         }
-        if (-not $componentFailed -and $component -eq "skills" -and $script:ExakitSkillsKept) {
+        # An update of the database that did not happen (said, and what it had
+        # changed put back) waits for the next update, with its reason: it is
+        # never called updated.
+        $putBack = (-not $componentFailed -and @("runtime", "personal") -contains $component -and $script:PersonalUpdateResult -eq "undone")
+        if ($putBack -and $script:PersonalUpdateInUse) {
+            # WINDOWS ONLY: another program runs the launcher, and Windows does
+            # not replace a program file while it runs. The update itself is
+            # sound: the row waits for the next `exakit update`, once that
+            # program is closed, as the update said.
+            $deferred += 1
+            Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update" `
+                -ErrorText $script:PersonalUpdateWhy -Hint "Run exakit update again once that is solved."
+        } elseif (-not $componentFailed -and @("runtime", "personal") -contains $component -and $script:PersonalUpdateResult -eq "kept") {
+            # Held back by a deliberate no (Update-Personal said it).
+            $deferred += 1
+            Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update --yes"
+        } elseif ($putBack) {
+            # ANY OTHER PUT-BACK OF AN EXPLICIT TARGET FAILED, for the same
+            # event the same row and exit code as on macOS and Linux: the
+            # updater said why and what it put back, the row is failed with
+            # that reason, and the run ends with exit 1. A routine `exakit
+            # update` defers it instead (the heavy arm above), on both. Twin of
+            # the "did not update" arm in _exakit_update_run.
+            $putBackFailed += 1
+            if (-not $script:ExakitUpdateJson) { Warn2 "$actual did not update. Details: exakit logs" }
+            $putBackError = "" + $script:PersonalUpdateWhy
+            if (-not $putBackError) { $putBackError = "the update did not finish (see exakit logs)" }
+            $putBackFix = Get-ExakitUpdateFailureRemedy -Component $component -Reason $putBackError
+            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
+                -Remedy $putBackFix.Remedy -ErrorText $putBackError -Hint $putBackFix.Hint
+        } elseif (-not $componentFailed -and $component -eq "skills" -and $script:ExakitSkillsKept) {
             # The installed skills were kept over an older download
             # (Update-ExakitSkills): not a failure, and not an update either.
             # Twin of the return-3 arm in _exakit_update_run.
@@ -4838,10 +5617,16 @@ function Invoke-ExakitUpdateRun {
     # Twin of the closing line in _exakit_update_run.
     if (-not $script:ExakitUpdateJson) {
         $doneText = ($doneList -join ", ")
-        if ($coreOk -ne $true) {
+        if ($coreOk -ne $true -or $putBackFailed -gt 0) {
             $suffix = ""
             if ($doneText) { $suffix = " (updated: $doneText)" }
             Warn2 "Update finished with problems$suffix. Retry with: exakit update"
+        } elseif ($missingList.Count -gt 0) {
+            # Only add-ons that are not installed went wrong: running the
+            # update again cannot help, installing them does.
+            $suffix = ""
+            if ($doneText) { $suffix = " (updated: $doneText)" }
+            Warn2 "Update finished with problems$suffix. Install what is missing with: exakit marketplace $($missingList -join ' ')"
         } elseif ($doneText) {
             $refreshedText = ""
             if ($refreshedList.Count -gt 0) { $refreshedText = "; refreshed at the same version: " + ($refreshedList -join ", ") }
@@ -4853,6 +5638,8 @@ function Invoke-ExakitUpdateRun {
     # The warning above already named what is left and the retry; the exit
     # code is what a script reads. Under --json the failed row does both.
     if ($coreOk -ne $true -and -not $script:ExakitUpdateJson) { exit 1 }
+    if ($putBackFailed -gt 0 -and -not $script:ExakitUpdateJson) { exit 1 }
+    if ($missingList.Count -gt 0 -and -not $script:ExakitUpdateJson) { exit 1 }
     if ($preprocOk -ne $true -and -not $script:ExakitUpdateJson) { exit 1 }
     if ($checkError -and -not $script:ExakitUpdateJson) { exit 1 }
 }
@@ -4902,8 +5689,14 @@ function Invoke-CmdWhatsNew {
 # in their registry entry, so a new one is viewable with no wiring here.
 function Get-ExakitLogTargets {
     $targets = @()
-    $setup = Get-ChildItem -Path $script:LogDir -Filter "install-*.log" -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    # The newest run that WROTE something: every exakit command opens a log,
+    # this `exakit logs` too, so the newest file was nearly always the empty
+    # one just created (L-02). Only when every file is empty is the newest one
+    # shown. Twin of exakit_log_targets.
+    $setupLogs = @(Get-ChildItem -Path $script:LogDir -Filter "install-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending)
+    $setup = $setupLogs | Where-Object { $_.Length -gt 0 } | Select-Object -First 1
+    if (-not $setup) { $setup = $setupLogs | Select-Object -First 1 }
     if ($setup) {
         $targets += [pscustomobject]@{ Id = "setup"; Label = "Installer and setup runs"; Kind = "file"; Source = $setup.FullName }
     }
@@ -4978,10 +5771,16 @@ function Show-ExakitLogsOverview {
     Write-Host ""
     Write-Host "  Component logs"
     Write-Host "  --------------"
-    Write-Host ("{0,-22} {1,-26} {2,-8} {3}" -f "Target", "What", "Size", "Updated")
+    # The Target column is as wide as its longest name (at least 22), so a
+    # name such as autostart-exasol-scheduler never pushes its row out of line.
+    # Twin of exakit_logs_overview.
+    $w = 22
+    foreach ($target in $targets) { if (("" + $target.Id).Length -gt $w) { $w = ("" + $target.Id).Length } }
+    $row = "{0,-" + $w + "} {1,-26} {2,-8} {3}"
+    Write-Host ($row -f "Target", "What", "Size", "Updated")
     foreach ($target in $targets) {
         if ($target.Kind -eq "cmd") {
-            Write-Host ("{0,-22} {1,-26} {2,-8} {3}" -f $target.Id, $target.Label, "live", "kept by the engine")
+            Write-Host ($row -f $target.Id, $target.Label, "live", "kept by the engine")
             continue
         }
         $size = "-"; $updated = "-"
@@ -4992,7 +5791,7 @@ function Show-ExakitLogsOverview {
                     else { "$($item.Length)B" }
             $updated = $item.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
         }
-        Write-Host ("{0,-22} {1,-26} {2,-8} {3}" -f $target.Id, $target.Label, $size, $updated)
+        Write-Host ($row -f $target.Id, $target.Label, $size, $updated)
     }
     Write-Host ""
     Info "View one:  exakit logs <target>        (add -f to follow it live)"
@@ -5017,9 +5816,19 @@ function Show-ExakitLog {
     if (-not (Test-Path $entry.Source)) {
         Fail "The $Target log has not been written yet ($($entry.Source))."
     }
+    # COLOUR CODES ONLY WHERE THE KIT DRAWS COLOUR. An engine writes its log
+    # lines with ANSI colour (exasol-scheduler's do), so a piped
+    # `exakit logs exasol-scheduler` printed raw escapes. Off a colour console
+    # (redirected, NO_COLOR, no VT: $script:UiFancy) the SGR codes are dropped
+    # from what is printed; the file keeps them. Twin of exakit_logs_show.
+    $plain = -not $script:UiFancy
+    $sgr = ([string][char]27) + '\[[0-9;]*m'   # ESC [ digits and semicolons m
     if ($Follow) {
         Info "Following $($entry.Source) - Ctrl-C to stop"
-        Get-Content -Path $entry.Source -Tail $Lines -Wait
+        if ($plain) { Get-Content -Path $entry.Source -Tail $Lines -Wait | ForEach-Object { $_ -replace $sgr, '' } }
+        else { Get-Content -Path $entry.Source -Tail $Lines -Wait }
+    } elseif ($plain) {
+        Get-Content -Path $entry.Source -Tail $Lines | ForEach-Object { $_ -replace $sgr, '' }
     } else {
         Get-Content -Path $entry.Source -Tail $Lines
     }
@@ -5128,6 +5937,7 @@ function Invoke-CmdDataLoad {
         (Test-ExakitRuntimeAnswersQuick)) {
         $script:ExakitRuntimeCheckDeferred = $true
     } else {
+        if (-not (Test-ExakitKitDatabaseGuard)) { exit 3 }
         Confirm-ExakitRuntimeRunning -Deploy
     }
     if ($ForceFlag) {
@@ -5286,6 +6096,13 @@ function Invoke-CmdInfoJson {
     # .status the way it was told hit a KeyError on exactly the state worth
     # branching on. Twin of cmd_info_json.
     $running = ((Get-ExakitRuntimeStatus) -eq "running")
+    # The kit's own database gone, another deployment in its place: not the
+    # kit's database, whether that one runs or not (Get-ExakitPersonalDbState).
+    $kitDbState = ""
+    if ((Get-RuntimeType) -eq "personal") {
+        try { $kitDbState = "" + (Get-ExakitPersonalDbState) } catch { $kitDbState = "" }
+    }
+    if ($kitDbState) { $running = $false }
     try {
         $doc = $raw | ConvertFrom-Json
         # A one-element list was written by PowerShell 5.1 as a bare string
@@ -5298,7 +6115,32 @@ function Invoke-CmdInfoJson {
         $remedyText = "exakit start"
         $remedyHint = $null
         $notDeployed = $false
-        if ($running) { $statusText = "running"; $remedyText = $null }
+        # runtime.ownership is the COMPUTED owner (AGT-05): the raw receipt
+        # said "kit" for a folder that now holds the user's deployment. The
+        # receipt as written stays under runtime.ownership_recorded. Twin of
+        # the same step in cmd_info_json.
+        if ((Get-RuntimeType) -eq "personal" -and $doc.PSObject.Properties["runtime"] -and $doc.runtime) {
+            $computedOwner = ""
+            try { $computedOwner = "" + (Get-ExakitComponentOwnership "database") } catch { $computedOwner = "" }
+            if ($computedOwner) {
+                $recordedOwner = $null
+                if ($doc.runtime.PSObject.Properties["ownership"]) { $recordedOwner = $doc.runtime.ownership }
+                $doc.runtime | Add-Member -NotePropertyName "ownership_recorded" -NotePropertyValue $recordedOwner -Force
+                $doc.runtime | Add-Member -NotePropertyName "ownership" -NotePropertyValue $computedOwner -Force
+            }
+        }
+        if ($kitDbState) {
+            $kitDbParts = @(($kitDbState + "||").Split("|"))
+            $statusText = "no database"
+            $notDeployed = $true
+            $remedyText = (Get-ExakitInstallCommand)
+            $remedyHint = "the kit's own database was not found at $($kitDbParts[1]), and the deployment at $($kitDbParts[2]) is not the kit's, so no kit command acts on it. The installer asks which database to use"
+            if ($doc.PSObject.Properties["runtime"] -and $doc.runtime) {
+                $doc.runtime | Add-Member -NotePropertyName "state" -NotePropertyValue $kitDbParts[0] -Force
+                $doc.runtime | Add-Member -NotePropertyName "found" -NotePropertyValue $kitDbParts[2] -Force
+            }
+        }
+        elseif ($running) { $statusText = "running"; $remedyText = $null }
         elseif (-not (Get-RuntimeType)) {
             # No runtime recorded means no database exists yet, so "exakit
             # start" is the one command that cannot help. `status --json`
@@ -5326,7 +6168,7 @@ function Invoke-CmdInfoJson {
         # run underneath a live installer.
         $installStep = "$(Get-ExakitManifestValue 'install.current_step')"
         $installing = ($installStep -ne "" -and (Test-ExakitInstallRunning))
-        if ($installing) {
+        if ($installing -and -not $kitDbState) {
             $statusText = "installing"
             # A RUNNABLE command; the sentence moves to remedy_hint.
             $remedyText = "exakit status --json"
@@ -5434,6 +6276,7 @@ function Invoke-CmdConnect {
     $pwGiven = ($pwStdin -or [bool]$pwFile)
     $script:ExakitVsStorageFile = $storageFile
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
+    Assert-ExakitVsKitDatabase -Json $json
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
     # Read before anything runs or asks: nothing else can take it off stdin,
@@ -5607,7 +6450,7 @@ function Invoke-CmdConnect {
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
     # The combination's own secrets (engine inputs): a lakehouse source can
     # have two, the second on --storage-secret-file or asked hidden.
-    $labels = Get-ExakitVsSecretLabels -Connector $connector -Sets $sets
+    $labels = Get-ExakitVsSecretLabels -Connector $connector -Sets $sets -Name $name
     if ($labels.Credential) { $secretSpec = [pscustomobject]@{ label = $labels.Credential; kind = "secret" } }
     if (-not $labels.Storage -and $storageFile) {
         Deny-ExakitVsInput "--storage-secret-file is for a lakehouse source with a catalog login and storage keys; this one has one secret." "--storage-secret-file was given, but this source has one secret" "leave --storage-secret-file out and give the credential with --password-file or --password-stdin"
@@ -5702,6 +6545,7 @@ function Invoke-CmdSource {
         if ($pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
+    if ($action -in @("describe", "check", "reauth", "refresh", "disconnect", "remove")) { Assert-ExakitVsKitDatabase -Json $json }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
     # `exakit source <name>`: --json is show's answer, a pipe the card, a person
@@ -6137,10 +6981,13 @@ function Show-ExakitUsage {
 # can honour --json and not only the paths that succeed. `sql` is excluded for
 # the same reason it is excluded from the help hook below: its argument is
 # arbitrary SQL, and a statement containing --json is a query.
-$script:ExakitRefusalJson = ($Command -ne "sql") -and
+# `exasol` too: what follows it is the launcher's.
+$script:ExakitRefusalJson = ($Command -ne "sql") -and ($Command -ne "exasol") -and
     ((@($RestArgs) -contains "--json") -or (@($RestArgs) -contains "-j"))
 
-# `sql` is excluded on purpose: its argument is arbitrary SQL text.
+# `sql` is excluded on purpose: its argument is arbitrary SQL text. So is
+# `exasol`: its --help and -h are the launcher's (`exakit help exasol` is the
+# kit's page).
 #
 # So is help itself. The -File binder pushes a leading `--help` into $RestArgs
 # and leaves $Command at its "help" default, so `exakit --help --json` arrived
@@ -6151,7 +6998,7 @@ $script:ExakitRefusalJson = ($Command -ne "sql") -and
 # Keep the complete command path and use the same registry for human and JSON
 # help. Child action help must be intercepted before anything executes.
 $_helpSelf = @("help", "--help", "-h", "-?") -contains "$Command"
-if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
+if ($Command -and $Command -ne "sql" -and $Command -ne "exasol" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
     $helpWords = @($Command)
     foreach ($word in $RestArgs) {
         if ("$word" -like '-*') { break }
@@ -6296,7 +7143,14 @@ try {
             $updateArgs = @($RestArgs | Where-Object { $_ -notin @("-Yes", "--yes", "-y", "--json", "-j") })
             # Every id, not the first (#47): `exakit update exapump dbt-exasol` updates both, as
             # `exakit marketplace` installs several. Twin of exakit_update.
-            Invoke-CmdUpdate -Target ($updateArgs | Select-Object -First 1) -More @($updateArgs | Select-Object -Skip 1) -AssumeYes $updateYes -Json $updateJson
+            # No id at all is "everything" (the default target). An empty one is
+            # handed on as it is, so Invoke-CmdUpdate refuses it rather than
+            # reading it as everything.
+            if ($updateArgs.Count -eq 0) {
+                Invoke-CmdUpdate -AssumeYes $updateYes -Json $updateJson
+            } else {
+                Invoke-CmdUpdate -Target ("" + $updateArgs[0]) -More @($updateArgs | Select-Object -Skip 1) -AssumeYes $updateYes -Json $updateJson
+            }
         }
         "info"         {
             Assert-ExakitKnownOptions -CommandName "info" -Allowed @("--json", "-j") -Arguments $RestArgs
@@ -6398,6 +7252,7 @@ try {
                 -Yes:([bool]($RestArgs -contains "--yes" -or $RestArgs -contains "-y" -or $RestArgs -contains "-Yes")) `
                 -Json:([bool]($RestArgs -contains "--json" -or $RestArgs -contains "-j"))
         }
+        "exasol"       { Invoke-CmdExasol -Arguments @($RestArgs) }
         "autostart"    { Invoke-CmdAutostart -Action (($RestArgs | Select-Object -First 1)) }
         "data-load"    { Invoke-CmdDataLoad -Arguments @($RestArgs) }
         "mcp-setup"    {
@@ -6450,6 +7305,25 @@ try {
                 } else {
                     Warn2 "No runtime is recorded in the manifest yet, so there is no database to diagnose against."
                     Info "Finish the install first: $(Get-ExakitInstallCommand)"
+                }
+                exit 3
+            }
+            # The kit's own database gone, another deployment in its place
+            # (Get-ExakitPersonalDbState): nothing to diagnose, nothing
+            # repaired on it. Twin of the same arm in cmd_mcp_doctor.
+            $doctorKitDb = ""
+            try { $doctorKitDb = "" + (Get-ExakitPersonalDbState) } catch { $doctorKitDb = "" }
+            if ($doctorKitDb) {
+                $doctorKitParts = @(($doctorKitDb + "||").Split("|"))
+                if ($doctorJson) {
+                    [ordered]@{
+                        installed = $true; status = "no database"; database = "not installed"
+                        remedy = (Get-ExakitInstallCommand)
+                        remedy_hint = "the kit's own database was not found at $($doctorKitParts[1]), and the deployment at $($doctorKitParts[2]) is not the kit's, so no kit command acts on it. The installer asks which database to use"
+                        runtime = [ordered]@{ state = "kit_database_missing"; found = $doctorKitParts[2] }
+                    } | ConvertTo-Json
+                } else {
+                    [void](Test-ExakitKitDatabaseGuard)
                 }
                 exit 3
             }

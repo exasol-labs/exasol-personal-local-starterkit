@@ -1420,6 +1420,20 @@ function Get-ExakitMarketplaceInstalledAddons { return @() }
 $script:LogDir = Join-Path $home2 "logs"
 $target = @(Get-ExakitLogTargets) | Where-Object { $_.Id -eq "virtual-schemas" } | Select-Object -First 1
 Check "exakit logs lists it: target virtual-schemas, the newest day file" $vsLogPath ("" + $target.Source)
+# The setup target is the newest install log that is not empty: every command
+# opens one, this `exakit logs` too, so the newest was nearly always empty (L-02).
+$setupWith = Join-Path $script:LogDir "install-20260810-090000.log"
+$setupEmpty = Join-Path $script:LogDir "install-20260810-100000.log"
+Set-Content -LiteralPath $setupWith -Value "installer line" -Encoding ASCII
+New-Item -ItemType File -Force -Path $setupEmpty | Out-Null
+(Get-Item -LiteralPath $setupWith).LastWriteTime = (Get-Date).AddMinutes(-60)
+(Get-Item -LiteralPath $setupEmpty).LastWriteTime = (Get-Date)
+$target = @(Get-ExakitLogTargets) | Where-Object { $_.Id -eq "setup" } | Select-Object -First 1
+Check "exakit logs: the setup target is the newest log that is not empty" $setupWith ("" + $target.Source)
+Remove-Item -LiteralPath $setupWith -Force
+$target = @(Get-ExakitLogTargets) | Where-Object { $_.Id -eq "setup" } | Select-Object -First 1
+Check "...and when every one is empty, the newest" $setupEmpty ("" + $target.Source)
+Remove-Item -LiteralPath $setupEmpty -Force
 $script:LogDir = $null
 
 Write-Host ""
@@ -1524,7 +1538,11 @@ Remove-Item Env:\FAKE_STDERR
 function Ok([string]$M) { Write-Host "OK $M" }
 function Get-PersonalCli { return "exasol" }
 function Get-PersonalAutoApproveFlag { return "" }
-function Invoke-ExakitLogged { return 0 }
+# The kit's deployment folder, which every launcher call names (from
+# runtime-personal.ps1 in the kit); the slc install is checked to carry it.
+function Get-PersonalDeployDirArgs { return @("--deployment-dir", "kit-deployment") }
+$script:slcCalls = @()
+function Invoke-ExakitLogged { if ($args.Count -gt 1 -and "$($args[1])" -eq "slc") { $script:slcCalls += (@($args | Select-Object -Skip 1) -join " ") }; return 0 }
 function Initialize-PersonalSlcDns { param([switch]$Pull) }
 function Repair-PersonalSlcDns { $script:PersonalSlcDnsNeedsStart = $script:stubNeedsStart; return (-not $script:stubNeedsStart) }
 $script:stubNeedsStart = $false
@@ -1538,6 +1556,7 @@ Check "Install-ExakitVsJava, the start fails: False, and it says so" "False True
 $env:FAKE_START_RC = "0"
 $said = @(Install-ExakitVsJava 6>&1)
 Check "...the start succeeds: True, installed" "True True stop|start" ("$($said[-1]) " + ((@($said) | ForEach-Object { "$_" }) -join "|").Contains("Database configured for your sources") + " " + (Calls))
+Check "...the launcher's slc install names the kit's deployment folder" $true ((@($script:slcCalls) -join "|").Contains("slc install java --no-restart --deployment-dir kit-deployment"))
 # Docker, an older installed kit: the second restart is checked too.
 $script:stubNeedsStart = $true
 $env:FAKE_START_RC = "1"
@@ -1584,9 +1603,12 @@ Check "a connect at a console, Java missing: installed with no question, one res
 Check "...one line says what it does and why" $true ((Shown).Contains("OK Database configured for your sources|OK Database restarted"))
 Check "...the screen names no language: no Java, no size" $false ((Shown) -match "Java language container|250 MiB")
 Set-Prep $true $true $false $true
+$script:ExakitVsConnector = "postgresql"
 $script:said = @(Install-ExakitVsJava 6>&1)
+$script:ExakitVsConnector = ""
 Check "--json at the same console: the contract - nothing installed, nothing asked" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
-Check "...and the remedy said" $true ((Shown).Contains("Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"))
+Check "...and the remedy said, as the kit's own command for that connector" $true ((Shown).Contains("Install it later with: exakit connect postgresql --yes. It installs the Java language container and restarts the database once."))
+Check "...never a bare launcher command (WSL-04)" $false ((Shown).Contains("exasol slc install"))
 Set-Prep $false $false $false $false
 $script:said = @(Install-ExakitVsJava 6>&1)
 Check "no console, no --yes: nothing installed, nothing asked (exit 21 follows)" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))

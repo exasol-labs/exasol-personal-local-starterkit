@@ -118,7 +118,7 @@ exakit source check <name> --json                                   # later: a f
   connector has the input). `require` only encrypts; `disable` sends credentials in
   clear. Lower it only when the user says so, and say the cost.
 - **PostgreSQL, MySQL, SQL Server and Oracle always need a CA PEM with `tls=verify`**
-  on Exasol Personal 2.4, even for a public CA (Let's Encrypt, DigiCert): the
+  on Exasol Personal 2.4 and later, even for a public CA (Let's Encrypt, DigiCert): the
   database's JDBC loader has an empty Java trust store. Without one the connect
   fails with "the trustAnchors parameter must be non-empty" (PostgreSQL, SQL Server,
   Oracle) or "Could not load trustJKS keystore from null" (MySQL). Give
@@ -213,7 +213,7 @@ does not guarantee the source does little work: keep remote queries selective.
 | `nohost` (1) | no such host name | check the spelling (a private name may need a VPN) |
 | `denied` (1) | a cloud API refused the request (an address filter answers the same) | grant what the message names; if the source filters by address, allow the IP the fix names |
 | `privilege` (1) | a database took the credential, then refused a statement for a missing grant | grant the connector's minimum rights, which the fix names; then `exakit source check <name>` |
-| `missing_or_denied` (1) | Oracle, Snowflake: the object does not exist for this account | the name as the source spells it (dropped or renamed since: `exakit source refresh <name>`), or grant the rights the fix names |
+| `missing_or_denied` (1) | Oracle, Snowflake, SQL Server, BigQuery: the object does not exist for this account (BigQuery: a dataset that shows no tables - missing, not granted, or empty) | the name as the source spells it (dropped or renamed since: `exakit source refresh <name>`), or grant the rights the fix names |
 | `internal` (1) | a fault in the kit | `exakit logs`; report it with that |
 
 The other kinds (`region`, `nobucket`, `clock`, `schema_missing`, `external`, `managed`,

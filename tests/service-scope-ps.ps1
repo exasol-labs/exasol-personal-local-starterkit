@@ -30,7 +30,7 @@ function Lacks($label, $needle, $haystack) {
 
 # --- the functions under test, lifted out of exakit.ps1 ----------------------
 $wanted = @("Resolve-ExakitServiceScope", "Get-ExakitServiceIds", "Get-ExakitServiceStatus",
-            "Start-ExakitService", "Start-ExakitServiceReported", "Stop-ExakitService", "Stop-ExakitDatabaseScoped",
+            "Start-ExakitService", "Start-ExakitServiceReported", "Stop-ExakitService", "Stop-ExakitServiceReported", "Stop-ExakitDatabaseScoped",
             "Invoke-CmdStart", "Invoke-CmdStop")
 # The service set itself lives in lib/exakit-common.ps1 (an add-on module stops
 # and starts services around a restart); the scoped commands stay in the CLI.
@@ -50,6 +50,9 @@ function Note([string]$Text) { [void]$script:log.Add($Text) }
 function Assert-ExakitInstalled { param([switch]$Json) Note "require-install" }
 function Initialize-ExakitLogging { }
 function Confirm-ExakitTlsPinned { }   # the TLS pin (SEC-14) has its own suite: tls-pin-ps.ps1
+# The kit's own database is the one in use; the guard against acting on another
+# one has its own suite: personal-deploy-dir-ps.ps1
+function Test-ExakitKitDatabaseGuard { param([switch]$Json) return $true }
 function Write-ExakitLog { param($Kind, $Text) }
 function Get-RuntimeType { return "personal" }
 function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "runtime.type") { return "personal" }; return $null }
@@ -102,9 +105,18 @@ Has   "bare stop stops the add-on"                 "STOP zzfake"   $bare
 Has   "...and then the database"                   "STOP database" $bare
 Check "...add-ons first"                           "yes" (Order $bare "STOP zzfake" "STOP database")
 
+# W3-05: stop names the services it stopped, the way start names the ones it
+# started.
+Has   "...and says so"                             "OK zzfake stopped" $bare
+$env:ZZ_STATUS = "stopped"
+$bss = Run { Invoke-CmdStop -Scope @() }
+Remove-Item Env:ZZ_STATUS
+Has   "a stopped add-on is named as already stopped" "OK zzfake is already stopped" $bss
+
 $one = Run { Invoke-CmdStop -Scope @("zzfake") }
 Has   "stop <addon> stops that add-on"             "STOP zzfake"   $one
 Lacks "...and leaves the database alone"           "STOP database" $one
+Has   "...and says so"                             "OK zzfake stopped" $one
 
 $env:EXAKIT_STOP_ADDONS = "0"
 $dbNo = Run { Invoke-CmdStop -Scope @("database") }

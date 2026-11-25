@@ -243,7 +243,7 @@ $startText = $startText.Substring(0, $startText.IndexOf("function Get-PersonalSl
 $initAt = $startText.IndexOf("try { Initialize-PersonalSlcDns }")
 $launchAt = $startText.IndexOf('if ((Invoke-ExakitLogged (Get-PersonalCli) @startArgs) -ne 0) {')
 Check "Start-Personal links the images before the launcher's start" "True" (($initAt -gt 0) -and ($initAt -lt $launchAt))
-Check "...and restarts once when the repair after it needs a start" "True" ($startText.Contains('if ($script:PersonalSlcDnsNeedsStart) {') -and $startText.Contains('(Invoke-ExakitLogged (Get-PersonalCli) stop) -ne 0 -or (Invoke-ExakitLogged (Get-PersonalCli) @startArgs) -ne 0'))
+Check "...and restarts once when the repair after it needs a start" "True" ($startText.Contains('if ($script:PersonalSlcDnsNeedsStart) {') -and $startText.Contains('(Invoke-ExakitLogged (Get-PersonalCli) stop --deployment-dir $script:PersonalDeployDir) -ne 0 -or (Invoke-ExakitLogged (Get-PersonalCli) @startArgs) -ne 0'))
 $vsText = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/lib/virtual-schemas.ps1")
 $javaText = $vsText.Substring($vsText.IndexOf("function Install-ExakitVsJava"))
 $javaText = $javaText.Substring(0, $javaText.IndexOf("function Restart-ExakitVsDatabase"))

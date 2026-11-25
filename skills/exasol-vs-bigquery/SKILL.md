@@ -127,6 +127,7 @@ exakit sql --file q.sql
 | "the credential must be the service-account key file (JSON) Google Cloud created" | `--password-file` must name the key JSON |
 | "the key file is not a service-account key", "has no usable client_email", "has no private key" | not the file `gcloud iam service-accounts keys create` wrote |
 | "Required Connection Key(s)" | a configuration fault, not the network: `exakit logs` |
+| "BigQuery shows this service account no tables in dataset ..." (`missing_or_denied` on a first connect, nothing kept. A reconnect reports `status` `empty`.) | BigQuery lists a dataset the account may not read as empty, so the kit cannot tell the three apart: check the dataset name, grant Data Viewer on it (section 4), or connect once it has tables |
 | "PERMISSION_DENIED: Access Denied: ... User does not have permission" (`denied`) | Job User on the project, Data Viewer on the dataset (section 4); behind a VPC Service Controls perimeter, also the public IP the fix names |
 
 ## 10. Keep it working

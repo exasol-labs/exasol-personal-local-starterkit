@@ -87,6 +87,10 @@ exapump_expected_sha256() {
 # against when the release API cannot supply a digest for the requested version.
 exapump_pinned_sha256() {
     case "$1" in
+        exapump-0.14.1-linux-aarch64)  echo "633beaa235a0ddc52d3a57686f4c8483e416e9b76b4f0417061a3ec99204eba7" ;;
+        exapump-0.14.1-linux-x86_64)   echo "4f45f93c4e28fed0e5caec0cf1cb2cdf27eff9f023444e6cfeac8be7a9a0d79c" ;;
+        exapump-0.14.1-macos-aarch64)  echo "347e021a8b925c845e21404eb6b8defe33d1c8f6fedb033ea169aa5550ab2cbd" ;;
+        exapump-0.14.1-macos-x86_64)   echo "aa8ddd8744507e842e3909901d155f5d3625ba13693e70c4771eb0d8b8e9b96c" ;;
         exapump-0.14.0-linux-aarch64)  echo "f0c72d2defd4820843e2f9ef3da70c294d4cbd31604457687ef74f0cdadaa7d1" ;;
         exapump-0.14.0-linux-x86_64)   echo "56644fed9ab18631cf3163257c6f207deb03c5df76d7dc376ad8df3a6489e08b" ;;
         exapump-0.14.0-macos-aarch64)  echo "36e9cfd328bf39b02d16226c1a277b97d41d90cc4367ec023758441e58018e40" ;;
@@ -1043,7 +1047,7 @@ exapump_upload() {
             if [ -n "$_upl_lf" ] && \
                run_python "$(dirname "${BASH_SOURCE[0]}")/csv_guard.py" lf "$1" "$_upl_lf/$(basename "$1")" "$_upl_delim" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
                 _upl_src="$_upl_lf/$(basename "$1")"
-                EXAKIT_CSV_FLAGS="$(printf ',%s,' "$EXAKIT_CSV_FLAGS" | sed 's/,crlf,/,/; s/^,*//; s/,*$//')"
+                EXAKIT_CSV_FLAGS="$(printf ',%s,' "$EXAKIT_CSV_FLAGS" | sed 's/,crlf,/,/; s/,mixed-eol,/,/; s/^,*//; s/,*$//')"
                 _exakit_log_file "INFO  $(basename "$1"): Windows line endings made LF in a temporary copy for the load"
             else
                 [ -n "$_upl_lf" ] && rm -rf "$_upl_lf"
@@ -1903,6 +1907,16 @@ exakit_csv_inspect() {
     _ci_flags=""
     case "$_ci_head" in "$_ci_bom"*) _ci_flags="bom"; _ci_head="${_ci_head#"$_ci_bom"}" ;; esac
     case "$_ci_head" in *"$_ci_cr") _ci_flags="${_ci_flags:+$_ci_flags,}crlf"; _ci_head="${_ci_head%"$_ci_cr"}" ;; esac
+    # MIXED LINE ENDINGS: PowerShell's `"a`nb`nc" | Set-Content` ends the rows
+    # in LF and the last line in CRLF, and the first line alone said "LF" - so
+    # no LF copy was made and the load failed on "value='9.25<CR>'". Any CRLF
+    # in the file counts (grep stops at the first; nothing is read into
+    # memory). "mixed-eol" says the first line was LF. Twin of
+    # Get-ExakitCsvInspection.
+    case ",$_ci_flags," in
+        *,crlf,*) ;;
+        *) LC_ALL=C grep -q "$_ci_cr\$" "$_ci_src" 2>/dev/null && _ci_flags="${_ci_flags:+$_ci_flags,}crlf,mixed-eol" ;;
+    esac
     # A header with nothing under it: there is no table in this file.
     [ -n "$(sed -n '2p' "$_ci_src" 2>/dev/null)" ] || return 1
     # The delimiter is the one that splits the header AND the first records
@@ -5064,7 +5078,7 @@ exakit_data_load_menu() {
     # The check the menu did not wait for (exakit data-load): before any load.
     if [ "${EXAKIT_RUNTIME_CHECK_DEFERRED:-0}" = 1 ]; then
         EXAKIT_RUNTIME_CHECK_DEFERRED=0
-        exakit_ensure_runtime_running deploy
+        exakit_ensure_runtime_running deploy || exit $?
     fi
     # The same table the selection was made in now becomes the progress display:
     # the rows do not move, so nobody has to map one screen onto another. It

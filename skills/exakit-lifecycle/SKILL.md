@@ -70,9 +70,12 @@ executable, or on Windows when the kit swap is staged for the moment the command
 exits, is the rest reported `deferred` with `remedy: "exakit update"`.
 
 The quick components apply in seconds. A **database** change is different: it
-stops the database, so it is applied only for an answer the run was actually
-given — on a terminal you are asked, and an unattended run defers it and prints
-the exact command to apply it later. Data is kept either way.
+stops the database, so the run says so first, then stops it, updates it and
+starts it again, with no question, on a terminal or not. Only
+`EXAKIT_CONFIRM_RUNTIME_UPDATE=0` keeps it back, and `exakit update --json`
+without `--yes` (or `=1`), which reports the row as `deferred`. Data is kept either way. From
+kit 0.3.0, that change also renames the database to `starter-kit-local`, with
+one restart and the same data, port and sources, so the AI clients need no change.
 
 A newer **skill set** published by the maintainers arrives through
 `exakit update` as well; no kit release is involved. `exakit skills` reports
@@ -200,7 +203,13 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 
 `exakit uninstall` is the one destructive command here. A full uninstall removes
 kit-owned components, including a database the kit created **and its data**,
-managed AI-client configs and skills. It keeps the user's work in
+managed AI-client configs and skills. A database of the user's that the kit used
+(`runtime.ownership: user`) is never deleted: it stays `starter-kit-local`, and
+only the kit's logins inside it are dropped, with each connection listed beside
+its `DROP CONNECTION` statement. The kit's own launcher stays while another
+deployment uses it and no launcher of the user's on 2.5 or newer can open it: as
+`~/.local/bin/exasol` (Windows `%USERPROFILE%\.local\bin\exasol.exe`) when nothing is
+there, else in the kit folder. The uninstall names that deployment. It keeps the user's work in
 `~/.exasol-starter-kit/`: the Dash dashboards (`dash-server/instance`); a
 reinstall picks them up. `EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too. Reused user-installed binaries and
 databases, shared exapump profiles and unknown shared installations are kept.

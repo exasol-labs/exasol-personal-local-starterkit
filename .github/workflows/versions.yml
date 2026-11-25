@@ -996,6 +996,13 @@ jobs:
       # resolves to nothing.
       - run: bash tests/ps-undefined-functions.sh
         if: matrix.group == 'suites-7'
+      # No suite may reach the machine's own login entries (W4-01: a suite
+      # deleted the real Startup entries of the kit on the Windows test box).
+      - run: bash tests/autostart-sandbox-guard.sh
+        if: matrix.group == 'suites-7'
+      # A PowerShell suite never takes the Store alias (python3 on Windows) for Python.
+      - run: bash tests/ps-python-pick-guard.sh
+        if: matrix.group == 'suites-7'
       - run: bash tests/versions-manifest.sh
         if: matrix.group == 'versions-manifest'
       # The exapump wrapper for glibc < 2.38, rendered: no CI runner is old enough to generate it.
@@ -1010,6 +1017,15 @@ jobs:
         if: matrix.group == 'suites-13'
       - run: bash tests/personal-s3.sh
         if: matrix.group == 'suites-14'
+      # Launcher 2.5.0 moves the deployment folder: the kit follows it.
+      - run: bash tests/personal-deploy-dir.sh
+        if: matrix.group == 'suites-14'
+      # The kit's database is starter-kit-local: modes, port, the one question.
+      - run: bash tests/personal-named-deploy.sh
+        if: matrix.group == 'suites-13'
+      # The update from a 0.3.0 kit: the rename to starter-kit-local, in one restart.
+      - run: bash tests/personal-update-rename.sh
+        if: matrix.group == 'suites-10'
       - run: bash tests/dry-run-matrix.sh
         if: matrix.group == 'suites-11'
       - run: bash tests/noninteractive-answers.sh
@@ -1035,6 +1051,11 @@ jobs:
       # A full uninstall never reports success while the deployment is still
       # on the machine (directory, runner, container): exit 1 and the remedy.
       - run: bash tests/uninstall-leftovers.sh
+        if: matrix.group == 'suites-8'
+      # A database the user let the kit use is never destroyed and keeps its
+      # name; only the kit's logins inside it go (SEC-01). The kit's launcher
+      # stays while another deployment uses it (D4).
+      - run: bash tests/uninstall-owner-user.sh
         if: matrix.group == 'suites-8'
       # An installation made by an older kit has a database this kit cannot
       # drive, and the crossing is the only code that touches one. What it
@@ -1142,6 +1163,9 @@ jobs:
       # How the source engine reads a database's error: never from the connection string it quotes.
       - run: python3 tests/test_vs_error_class.py
         if: matrix.group == 'suites-13'
+      # The sources lock keeps a second exakit connect out for as long as the first holds it, on Windows too (AGT-04).
+      - run: python3 tests/test_vs_sources_lock.py
+        if: matrix.group == 'suites-13'
       # What CI runs when a version or a Federation pin changes, and the report a bump branch carries.
       - run: python3 tests/test_bump_checks.py
         if: matrix.group == 'suites-13'
@@ -1216,6 +1240,19 @@ jobs:
       # destroy retried only when no launcher runs; the launcher's words quoted.
       - run: bash tests/personal-destroy-lock.sh
         if: matrix.group == 'suites-14'
+      # Next to an Exasol Personal the user installed by themselves: every
+      # launcher call names the kit's own folder, and the deploy's undo removes
+      # only a folder this run created.
+      - run: bash tests/personal-scenario-x.sh
+        if: matrix.group == 'suites-14'
+      # A database step that did not finish ends the installer with exit 7,
+      # not 0: the database step and the closing lines run as written.
+      - run: bash tests/install-no-database.sh
+        if: matrix.group == 'suites-14'
+      # The launcher's own text in the kit's failure box: its `start` is
+      # `exakit start`, and no sentence tells a kit user to destroy.
+      - run: bash tests/launcher-words.sh
+        if: matrix.group == 'suites-14'
       # Docker when usable, else Podman, and an existing deployment keeps the
       # engine its record names: the 2.4 engine choice against stub engines.
       - run: bash tests/personal-engine.sh
@@ -1258,6 +1295,10 @@ jobs:
       # spinner never starts in a captured pipeline and the collision this
       # guards against cannot be reproduced by running the command normally.
       - run: bash tests/spinner-line-safety.sh
+        if: matrix.group == 'suites-13'
+      # A question is never asked under a live spinner or step bar: the bar's
+      # next frame painted over the exapump password question (MX-05).
+      - run: bash tests/prompt-spinner-safety.sh
         if: matrix.group == 'suites-13'
       # The table component's PowerShell twin is asserted STATICALLY -- there is
       # no pwsh on the machine this kit is developed on, so CI is the only thing
@@ -1322,6 +1363,8 @@ jobs:
             pwsh -NoProfile -File tests/shim-update-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
+            pwsh -NoProfile -File tests/personal-deploy-dir-ps.ps1
+            pwsh -NoProfile -File tests/personal-update-rename-ps.ps1
             pwsh -NoProfile -File tests/tls-pin-ps.ps1
             pwsh -NoProfile -File tests/addon-help-ps.ps1
             pwsh -NoProfile -File tests/sql-quoting-ps.ps1
@@ -1342,9 +1385,14 @@ jobs:
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/component-ownership-ps.ps1
             pwsh -NoProfile -File tests/uninstall-leftovers-ps.ps1
+            pwsh -NoProfile -File tests/uninstall-owner-user-ps.ps1
             pwsh -NoProfile -File tests/mcp-sidecar-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
+            pwsh -NoProfile -File tests/personal-scenario-x-ps.ps1
+            pwsh -NoProfile -File tests/install-no-database-ps.ps1
+            pwsh -NoProfile -File tests/launcher-words-ps.ps1
+            pwsh -NoProfile -File tests/prompt-spinner-safety-ps.ps1
             pwsh -NoProfile -File tests/addon-activity-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/env-file-ps.ps1

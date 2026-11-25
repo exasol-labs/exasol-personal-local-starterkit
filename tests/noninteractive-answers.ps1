@@ -41,7 +41,7 @@ try {
     # `exakit update` applies the runtime (which stops the database) only for an
     # answer it was actually given. Twin of the same block in the bash test; the
     # helpers live in the CLI, loaded with a harmless command.
-    . (Join-Path $PSScriptRoot "..\setup\exakit.ps1") -Command "help" *> $null
+    . (Join-Path $PSScriptRoot "..\setup\exakit.ps1") "help" *> $null
     Remove-Item Env:EXAKIT_CONFIRM_RUNTIME_UPDATE -ErrorAction SilentlyContinue
     $unanswered = Get-ExakitRuntimeUpdatePreanswer
     if (-not $unanswered) { $unanswered = "" }
@@ -185,6 +185,50 @@ try {
     function Get-ExakitPendingDatasets { return @("orders_demo", "payments_demo") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_; Description = "" } } }
     $out = Seq @{ EXAKIT_PERSONA_ACTIVE = "1"; EXAKIT_DATASETS_PRESELECT = "orders_demo,payments_demo"; EXAKIT_DATA_FILE = $mine }
     Check "a persona's datasets and a file: the file is announced when it loads" "LOAD orders_demo | LOAD payments_demo | INFO Loading a local file (EXAKIT_DATA_FILE). | FILE~" $out
+
+    Write-Host ""
+    Write-Host "a random source that gives short fails the password, never hands on a short one (SEC-02):"
+    # Twin of the bash block: there head refuses /dev/urandom, here the buffer
+    # the random source fills comes back shorter than asked (5 bytes).
+    # The generator printed "A" and CREATE USER ... IDENTIFIED BY A followed.
+    $short = {
+        function New-Object {
+            if ($args.Count -ge 1 -and "$($args[0])" -eq "byte[]") { return ,(Microsoft.PowerShell.Utility\New-Object byte[] 5) }
+            Microsoft.PowerShell.Utility\New-Object @args
+        }
+    }
+    $got = & { . $short; New-ExakitSqlPasswordToken }
+    Check "the SQL password token is nothing" "" "$got"
+    $got = & { . $short; New-ExakitPassword }
+    Check "New-ExakitPassword is nothing" "" "$got"
+    Check "a full token still comes out, and passes the kit's own check" "True" (Test-ExakitSqlPasswordToken (New-ExakitSqlPasswordToken))
+    Check "the token check refuses A and a cut-short token" "False,False" @((Test-ExakitSqlPasswordToken "A"), (Test-ExakitSqlPasswordToken "A1234567890ABCDEFGHIJKL"))
+    # The MCP step itself: no stored password, the generator gives nothing, so it
+    # stops before any statement - no CREATE USER with a password it never got.
+    $script:Sec02 = New-Object System.Collections.ArrayList
+    $adminPw = Join-Path $tmp "sec02.adminpw"
+    Set-Content -Path $adminPw -Value "admin-secret" -NoNewline
+    $threw = & {
+        . $short
+        function Test-ExakitStdoutIsTerminal { return $false }
+        function Get-ExakitExapumpBin { return (Join-Path $tmp "exapump.exe") }
+        function Ensure-ExakitOnPath { }
+        function Get-ExakitManifestValue([string]$Key) {
+            if ($Key -eq "runtime.user") { return "sys" }
+            if ($Key -eq "runtime.password_file") { return $adminPw }
+            return ""
+        }
+        function Get-RuntimeHost { return "localhost" }
+        function Get-RuntimePort { return "8563" }
+        function Get-ExakitCredential { return "" }
+        function Set-ExakitCredential { [void]$script:Sec02.Add("STORED $($args[0])=$($args[1])") }
+        function Invoke-ExapumpAdminSql { param($ConfigPath, $Profile, $Sql) [void]$script:Sec02.Add("SQL $Sql"); throw "stop at $Sql" }
+        function Test-ExapumpSqlHasToken { return $false }
+        function Fail([string]$Msg) { [void]$script:Sec02.Add("FAIL $Msg"); throw $Msg }
+        try { Set-McpReadonlyAccess *> $null; "" } catch { "THREW" }
+    }
+    Check "the MCP step stops" "THREW" "$threw"
+    Check "...naming the random source, before any statement or stored password" "FAIL Could not generate a password for the MCP read-only database user, because the system random source could not be read." ($script:Sec02 -join " | ")
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

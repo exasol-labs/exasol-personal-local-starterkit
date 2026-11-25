@@ -20,6 +20,28 @@
 # A sandboxed kit home; no database: the "database port" is a local TLS server
 # (tests/lib/tls_server.py, needs python3 and openssl). The password file
 # holds a dummy value and is never printed.
+# No console, always (W4-04). These checks pin what the kit does WITHOUT a
+# console, the way CI runs them. Started from a real console, the kit's
+# console checks (Test-ExakitInteractive, [Console]::IsInputRedirected) saw
+# one: Import-ExakitLocalFile asked its questions and the run hung, and the
+# tls-pin driver children inherited the console. So a run that has a console
+# runs itself once more with stdin from an empty file, and exits with that
+# run's code. EXAKIT_TEST_NO_CONSOLE stops a second hop.
+if (-not [Console]::IsInputRedirected -and -not $env:EXAKIT_TEST_NO_CONSOLE) {
+    $env:EXAKIT_TEST_NO_CONSOLE = "1"
+    $noInput = [System.IO.Path]::GetTempFileName()
+    $code = 1
+    try {
+        $self = Start-Process -FilePath (Get-Process -Id $PID).Path -NoNewWindow -Wait -PassThru `
+            -RedirectStandardInput $noInput `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+        if ($null -ne $self.ExitCode) { $code = $self.ExitCode }
+    } finally {
+        Remove-Item -Force $noInput -ErrorAction SilentlyContinue
+    }
+    exit $code
+}
+
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0
@@ -37,8 +59,9 @@ function Lacks($label, $needle, $haystack) {
     else { $script:FAIL++; Write-Host "  FAIL $($label): did not expect <$needle> in <$haystack>" }
 }
 
-$py = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+# Not the Microsoft Store alias under \WindowsApps\ (python3 on a normal Windows
+# box): it only prints "Python was not found". As in mcp-sidecar-ps.ps1.
+$py = @(Get-Command python3, python -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object { "$($_.Source)" -notlike "*\WindowsApps\*" }) | Select-Object -First 1
 if (-not $py -or -not (Get-Command openssl -ErrorAction SilentlyContinue)) {
     Write-Host "SKIP tls-pin-ps.ps1: needs python3 and openssl"
     exit 0
@@ -59,10 +82,35 @@ function Start-TlsServer([string]$Name) {
     for ($i = 0; $i -lt 50 -and -not (Test-Path $portFile); $i++) { Start-Sleep -Milliseconds 100 }
     return [int](Get-Content $portFile -Raw)
 }
-$port1 = Start-TlsServer "one"
-$port2 = Start-TlsServer "two"
-$probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
-$probe.Start(); $closed = $probe.LocalEndpoint.Port; $probe.Stop()
+# Stop-TlsServers - stop every server this run started, and their child
+# processes: on Windows a venv's python.exe is a redirector that starts the
+# real interpreter as its child, so stopping the started PID alone left both
+# servers running (W4-05). Children come from CIM on Windows, pgrep -P
+# elsewhere. Answers the PIDs still alive afterwards.
+function Stop-TlsServers {
+    # Local to this function: under "Stop", 5.1 turns pgrep's redirected
+    # stderr into a terminating error, and a cleanup must not throw.
+    $ErrorActionPreference = "Continue"
+    $ids = @()
+    foreach ($p in $script:procs) {
+        $ids += $p.Id
+        if ($env:OS -eq "Windows_NT") {
+            $ids += @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" -ErrorAction SilentlyContinue |
+                ForEach-Object { [int]$_.ProcessId })
+        } elseif (Get-Command pgrep -CommandType Application -ErrorAction SilentlyContinue) {
+            $ids += @(& pgrep -P $p.Id 2>$null | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]"$_" })
+        }
+    }
+    foreach ($id in $ids) { try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch { } }
+    foreach ($p in $script:procs) { try { [void]$p.WaitForExit(5000) } catch { } }
+    $left = @()
+    for ($i = 0; $i -lt 50; $i++) {
+        $left = @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($left.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    return $left
+}
 
 $env:EXAKIT_HOME = Join-Path $work "kit"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
@@ -70,7 +118,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $env:EXAKIT_HOME "credentia
 $pwFile = Join-Path $env:EXAKIT_HOME "credentials/personal_sys_password"
 Set-Content -Path $pwFile -Value "dummy-test-value" -NoNewline
 
+$serversLeft = @()
 try {
+    # Inside the try, so a server that fails to start still has the first
+    # one stopped by the finally below.
+    $port1 = Start-TlsServer "one"
+    $port2 = Start-TlsServer "two"
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start(); $closed = $probe.LocalEndpoint.Port; $probe.Stop()
+
     . (Join-Path $repo "setup/lib/exakit-common.ps1")
     . (Join-Path $repo "setup/lib/exapump.ps1")
     $script:LogFile = $null
@@ -187,6 +243,11 @@ function Test-ExakitSystemPython { return $true }
 function python { & $Py @args }
 function Get-PersonalStatus { return "running" }
 function Get-PersonalLauncherState { return "running" }
+# The folder the deployment is in and the launcher version the kit pins
+# (runtime-personal.ps1, they ask the launcher) have their own suite:
+# personal-deploy-dir-ps.ps1
+function Update-PersonalDeployDir { }
+function Get-PersonalTargetVersion { return "" }
 function Test-ExakitInstallRunning { return $false }
 function Get-ExakitLoadedDatasets { return @() }
 function Get-ExakitServiceIds { return @() }
@@ -327,9 +388,10 @@ exit $script:PendingExitCode
     Invoke-Driver "tls-pin" | Out-Null
     Check "tls-pin with nothing answering TLS exits 3" 3 $script:CODE
 } finally {
-    foreach ($p in $procs) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { } }
+    $serversLeft = @(Stop-TlsServers)
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
+Check "the TLS servers this run started are all stopped" "" ($serversLeft -join " ")
 
 Write-Host ""
 Write-Host "$($script:PASS) passed, $($script:FAIL) failed"

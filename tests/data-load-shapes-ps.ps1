@@ -15,6 +15,28 @@
 #   pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-load-shapes-ps.ps1
 
+# No console, always (W4-04). These checks pin what the kit does WITHOUT a
+# console, the way CI runs them. Started from a real console, the kit's
+# console checks (Test-ExakitInteractive, [Console]::IsInputRedirected) saw
+# one: Import-ExakitLocalFile asked its questions and the run hung, and the
+# tls-pin driver children inherited the console. So a run that has a console
+# runs itself once more with stdin from an empty file, and exits with that
+# run's code. EXAKIT_TEST_NO_CONSOLE stops a second hop.
+if (-not [Console]::IsInputRedirected -and -not $env:EXAKIT_TEST_NO_CONSOLE) {
+    $env:EXAKIT_TEST_NO_CONSOLE = "1"
+    $noInput = [System.IO.Path]::GetTempFileName()
+    $code = 1
+    try {
+        $self = Start-Process -FilePath (Get-Process -Id $PID).Path -NoNewWindow -Wait -PassThru `
+            -RedirectStandardInput $noInput `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+        if ($null -ne $self.ExitCode) { $code = $self.ExitCode }
+    } finally {
+        Remove-Item -Force $noInput -ErrorAction SilentlyContinue
+    }
+    exit $code
+}
+
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0
@@ -145,6 +167,36 @@ $lfBytes = [byte[]](0xEF, 0xBB, 0xBF) + $utf8.GetBytes("datum,gesamt`n2026.01.01
 Check "...whose records end in LF, the BOM kept" ([Convert]::ToBase64String($lfBytes)) ([Convert]::ToBase64String($received))
 Check "...and the user's file is byte-for-byte what it was" ([Convert]::ToBase64String($before)) ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $shapes "windows.csv"))))
 Check "...and the copy is gone afterwards" 0 @(Get-ChildItem ([System.IO.Path]::GetTempPath()) -Filter "exakit-lf-*" -ErrorAction SilentlyContinue).Count
+# W3-01: MIXED LINE ENDINGS. PowerShell's `"a`nb`nc" | Set-Content` ends its
+# rows in LF and its last line in CRLF: only the first terminator was read, so
+# the file went over as it was and failed on "value='9.25<CR>'" (seen live on
+# Windows 11). Any CRLF anywhere flags it, and the LF copy goes over. Twin of
+# the same checks in bulk-folder-load.sh.
+Put "mixed-last.csv" ($utf8.GetBytes("id,amount`n1,7`n2,9.25`r`n"))
+$look = Get-ExakitCsvInspection -Path (Join-Path $shapes "mixed-last.csv")
+Check "a file whose last line alone ends in CRLF is flagged" ",|crlf,mixed-eol" ("{0}|{1}" -f $look.Delimiter, $look.Flags)
+Set-Content -Path (Join-Path $got "argv") -Value "" -NoNewline
+$saidMixed = & { Invoke-ExapumpUpload -Path (Join-Path $shapes "mixed-last.csv") -Target "T.MIXED" } 6>&1
+Lacks "...and is not handed over as it is" ("upload " + (Join-Path $shapes "mixed-last.csv")) (Get-Content (Join-Path $got "argv") -Raw)
+Check "...but as an LF copy" ([Convert]::ToBase64String($utf8.GetBytes("id,amount`n1,7`n2,9.25`n"))) ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $got "received"))))
+Lacks "...with no carriage-return warning" "carriage return" ($saidMixed -join "`n")
+# A last record ended by a CR alone, no LF after it: flagged as on macOS and
+# Linux (review 0.3.1, item 2, the twins agree), and the copy ends it in LF.
+Put "eof-cr.csv" ($utf8.GetBytes("a,b`n1,2`r"))
+$look = Get-ExakitCsvInspection -Path (Join-Path $shapes "eof-cr.csv")
+Check "a file that ends in a lone CR is flagged" ",|crlf,mixed-eol" ("{0}|{1}" -f $look.Delimiter, $look.Flags)
+$rc = Invoke-ExapumpUpload -Path (Join-Path $shapes "eof-cr.csv") -Target "T.EOFCR" 6>$null
+Check "...and goes over as an LF copy" ([Convert]::ToBase64String($utf8.GetBytes("a,b`n1,2`n"))) ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $got "received"))))
+Put "mixed-first.csv" ($utf8.GetBytes("id,amount`r`n1,7`n2,9.25`n"))
+$look = Get-ExakitCsvInspection -Path (Join-Path $shapes "mixed-first.csv")
+Check "a CRLF header over LF rows is flagged CRLF" ",|crlf" ("{0}|{1}" -f $look.Delimiter, $look.Flags)
+$rc = Invoke-ExapumpUpload -Path (Join-Path $shapes "mixed-first.csv") -Target "T.MIXED" 6>$null
+Check "...and goes over as an LF copy" ([Convert]::ToBase64String($utf8.GetBytes("id,amount`n1,7`n2,9.25`n"))) ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $got "received"))))
+# A CRLF past the first read buffer is still found.
+Put "mixed-far.csv" ($utf8.GetBytes("id,amount`n" + ("1,7`n" * 300000) + "2,9.25`r`n"))
+Check "a CRLF far past the first megabyte is still found" "crlf,mixed-eol" (Get-ExakitCsvInspection -Path (Join-Path $shapes "mixed-far.csv")).Flags
+$look = Get-ExakitCsvInspection -Path (Join-Path $shapes "plain.csv")
+Check "an LF file is still not flagged" "" $look.Flags
 Put "quoted.csv" ($utf8.GetBytes("id,note,amount`r`n1,`"two`r`nlines`",10.5`r`n2,`"say `"`"hi`"`"`",7`r`n"))
 $rc = Invoke-ExapumpUpload -Path (Join-Path $shapes "quoted.csv") -Target "T.QUOTED" 6>$null
 Check "a CRLF inside quotes is kept, the record ends are made LF" `

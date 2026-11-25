@@ -20,7 +20,8 @@ function Ok([string]$M) { [Console]::Write("      " + $script:UiOk + $script:UiT
 function Warn2([string]$M) { [Console]::Write("      " + $script:UiWarn + "!" + $script:UiReset + " " + $M + "`r`n") }
 function Test-ExakitInteractive { return $true }
 function Get-ExakitVsDefs { return $env:TUI_DEFS }
-function Get-PyexasolVenvPython { return (Get-Command python3).Source }
+# Not the Microsoft Store alias under \WindowsApps\, as in mcp-sidecar-ps.ps1.
+function Get-PyexasolVenvPython { return (@(Get-Command python3, python -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object { "$($_.Source)" -notlike "*\WindowsApps\*" }) | Select-Object -First 1).Source }
 function Get-ExakitManifestValue { param([string]$Path)
     switch ($Path) { "runtime.deployment_dir" { return $env:TUI_DEPLOY } "runtime.dsn" { return "127.0.0.1:8563" }
                      "runtime.user" { return "sys" } default { return "" } } }

@@ -17,6 +17,19 @@
 # (Test-ExakitVsInteractive). A script (--json, or no console) keeps its
 # contract: --yes, else the exit code and its remedy.
 
+# The one rule of Get-ExakitPersonalDbState (exakit-common.ps1). A caller
+# that loaded this file without exakit-common.ps1 (a test of one function)
+# gets a guard that lets everything through, as before the rule;
+# exakit-common.ps1, loaded first or later, defines the real one.
+# Assigned, not declared: a suite that loads this file's function
+# definitions one by one must never take these for the real ones.
+if (-not (Get-Command Test-ExakitKitDatabaseGuard -ErrorAction SilentlyContinue)) {
+    ${function:Test-ExakitKitDatabaseGuard} = { param([switch]$Json) return $true }
+}
+if (-not (Get-Command Get-ExakitPersonalDbState -ErrorAction SilentlyContinue)) {
+    ${function:Get-ExakitPersonalDbState} = { return "" }
+}
+
 function Get-ExakitVsDefs {
     $root = Get-ExakitRepoRoot
     if ($root) {
@@ -385,6 +398,12 @@ function Invoke-ExakitVsEngine {
     foreach ($pair in @(@("--deployment-dir", "runtime.deployment_dir"), @("--dsn", "runtime.dsn"),
                         @("--user", "runtime.user"), @("--password-file", "runtime.password_file"))) {
         $value = "" + (Get-ExakitManifestValue $pair[1])
+        # Followed to where launcher 2.5.0 moved it: the bucket files are in there.
+        # Guarded as mcp.ps1 guards Update-PersonalDeployDir: the resolver lives in
+        # exakit-common.ps1, which a caller that loads this file alone has not loaded.
+        if ($value -and $pair[0] -eq "--deployment-dir" -and (Get-Command Resolve-PersonalDeployDir -ErrorAction SilentlyContinue)) {
+            $value = (Resolve-PersonalDeployDir -Path $value -Recorded).Dir
+        }
         if ($value) { $argv += @($pair[0], $value) }
     }
     # Two secrets (a lakehouse catalog login and storage keys): one pipe,
@@ -549,6 +568,28 @@ function Deny-ExakitVsInput {
         exit 2
     }
     Deny-ExakitInput $Message
+}
+
+# Assert-ExakitVsKitDatabase -Json:<bool> - a source is made, checked or
+# changed only in the kit's own database. With the kit's own gone and the
+# user's deployment in its place (Get-ExakitPersonalDbState), refused before
+# anything runs: exit 22 and kind unreachable_db, the remedy naming the
+# installer. Twin of _exakit_vs_kit_database.
+function Assert-ExakitVsKitDatabase {
+    param([bool]$Json = $false)
+    $state = ""
+    try { $state = "" + (Get-ExakitPersonalDbState) } catch { $state = "" }
+    if (-not $state) { return }
+    if ($Json) {
+        $parts = @($state.Split("|"))
+        if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REJECT" "the kit's own database was not found at $($parts[1])" }
+        Write-Output (New-ExakitVsFailureJson -Kind "unreachable_db" `
+            -Problem "the kit's own database was not found at $($parts[1]), and the deployment at $($parts[2]) is not the kit's" `
+            -Remedy "re-run the installer, which asks which database to use: $(Get-ExakitInstallCommand)")
+        exit 22
+    }
+    [void](Test-ExakitKitDatabaseGuard)
+    exit 22
 }
 
 # Deny-ExakitVsCredentialArgument - a credential given as an option on the
@@ -779,13 +820,16 @@ function Read-ExakitVsStorageSecret {
     return (Read-ExakitVsSecret -Label $Label)
 }
 
-# Get-ExakitVsSecretLabels <connector> <sets> - @{ Credential; Storage }: the
-# labels of the secrets of the combination the --set pairs so far choose
-# (engine inputs); Storage "" with one secret. Twin of _exakit_vs_secret_labels.
+# Get-ExakitVsSecretLabels <connector> <sets> [<name>] - @{ Credential; Storage }:
+# the labels of the secrets of the combination the --set pairs so far choose
+# (engine inputs), the settings source <name> was connected with standing
+# where no --set gives them; Storage "" with one secret. Twin of _exakit_vs_secret_labels.
 function Get-ExakitVsSecretLabels {
-    param([string]$Connector, [string[]]$Sets = @())
+    param([string]$Connector, [string[]]$Sets = @(), [string]$Name = "")
     $out = @{ Credential = ""; Storage = "" }
-    $run = Invoke-ExakitVsEngine -Arguments (@("inputs", $Connector) + @($Sets))
+    $named = @()
+    if ($Name) { $named = @("--name=$Name") }
+    $run = Invoke-ExakitVsEngine -Arguments (@("inputs", $Connector) + $named + @($Sets))
     if ($run.Code -ne 0) { return $out }
     $line = @($run.Lines) | Where-Object { "$_" -like "RESULT *" } | Select-Object -First 1
     if (-not $line) { return $out }
@@ -976,6 +1020,7 @@ function Install-ExakitVsRust {
 # next start. Twin of _exakit_vs_rust_add.
 function Add-ExakitVsRust {
     param($Pin)
+    if (-not (Test-ExakitKitDatabaseGuard)) { return $false }
     $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-rust-" + [guid]::NewGuid().ToString("N"))
     $file = Join-Path $dir $Pin.asset
     try {
@@ -992,6 +1037,7 @@ function Add-ExakitVsRust {
         $slcArgs = @("slc", "custom", "install", "--source", $file, "--alias", "RUST", "--language", "rust", "--no-restart")
         $flag = Get-PersonalAutoApproveFlag "slc"
         if ($flag) { $slcArgs += $flag }
+        $slcArgs += Get-PersonalDeployDirArgs
         if ((Invoke-ExakitLogged (Get-PersonalCli) @slcArgs) -ne 0) {
             Write-Host ("  {0} The Rust language container did not install. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red
             return $false
@@ -1050,7 +1096,12 @@ function Install-ExakitVsJava {
         if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "INFO" "The Java language container is not installed; installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)." }
         Info "This source needs connector support set up in the database first (one time; the database restarts once)."
         if (-not (Confirm-ExakitVs "Set up connector support now?")) {
-            Write-ExakitVsInfoCmds "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
+            # The kit's own command, never a bare launcher one: `exasol slc
+            # install` acts on the launcher's default deployment, which can be
+            # the user's (WSL-04). Twin of the same line in _exakit_vs_install_java.
+            $javaFor = "<connector>"
+            if ($script:ExakitVsConnector) { $javaFor = $script:ExakitVsConnector }
+            Write-ExakitVsInfoCmds "Install it later with: exakit connect $javaFor --yes. It installs the Java language container and restarts the database once."
             return $false
         }
     }
@@ -1065,9 +1116,11 @@ function Install-ExakitVsJava {
 # made now, and the image linked to the deployment's DNS before the start
 # mounts it read-only - so that start is the only one (Initialize-PersonalSlcDns).
 function Add-ExakitVsJava {
+    if (-not (Test-ExakitKitDatabaseGuard)) { return $false }
     $slcArgs = @("slc", "install", "java", "--no-restart")
     $flag = Get-PersonalAutoApproveFlag "slc"
     if ($flag) { $slcArgs += $flag }
+    $slcArgs += Get-PersonalDeployDirArgs
     if ((Invoke-ExakitLogged (Get-PersonalCli) @slcArgs) -ne 0) {
         Write-Host ("  {0} The Java language container did not install. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red
         return $false
@@ -1166,6 +1219,13 @@ function Invoke-ExakitVsRun {
     param([string[]]$Arguments, [string]$Secret = "", [string]$StorageSecret = "")
     $script:ExakitVsResult = $null
     $script:ExakitVsLastLines = @()
+    # The connector a `connect` names, for the Java line's own command.
+    # Twin of _EXAKIT_VS_CONNECTOR in _exakit_vs_run.
+    $script:ExakitVsConnector = ""
+    $vsArgs = @($Arguments)
+    for ($i = 0; $i -lt $vsArgs.Count - 1; $i++) {
+        if ($vsArgs[$i] -eq "connect" -and -not ("" + $vsArgs[$i + 1]).StartsWith("-")) { $script:ExakitVsConnector = "" + $vsArgs[$i + 1]; break }
+    }
     # Once: a caller that built its arguments with --json already has it.
     if ($script:ExakitVsJson -and (@($Arguments) -notcontains "--json")) { $Arguments = @("--json") + @($Arguments) }
     for ($try = 1; $try -le 2; $try++) {

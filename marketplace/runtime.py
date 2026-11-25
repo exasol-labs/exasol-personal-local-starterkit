@@ -64,6 +64,18 @@ class AddonFailure(RuntimeError):
     pass
 
 
+# A full `exakit uninstall` over a database the user let the kit use (owner user) keeps everything inside it: the
+# shells set this while the add-ons are removed (exakit_uninstall_run, Invoke-ExakitUninstallRun), and each add-on's
+# removal then takes only its files, services and settings on this computer. The one change made inside that
+# database is the kit's own logins and roles going (marketplace/kit_logins.py, run before the add-ons).
+KEEP_DATABASE = "EXAKIT_UNINSTALL_KEEP_DATABASE"
+
+
+def uninstall_keeps_database() -> bool:
+    """An add-on's removal leaves the database alone: a full uninstall keeps it (one the user let the kit use)."""
+    return os.environ.get(KEEP_DATABASE) == "1"
+
+
 class SameHostAuthRedirect(urllib.request.HTTPRedirectHandler):
     """Follow a redirect, but never hand the Authorization header to another host.
 
@@ -204,6 +216,207 @@ def glibc_floor_reason(document: dict, component: str, platform_key: str) -> str
     if have < (int(match.group(1)), int(match.group(2))):
         return f"needs glibc {floor} or newer (this system has {have[0]}.{have[1]})"
     return ""
+
+
+# The kit's database is this named deployment: the folder <root>/deployments/starter-kit-local in the launcher's
+# home. Never `default`, which is the user's. Twin of EXAKIT_PERSONAL_DEPLOYMENT (runtime-personal.sh) and
+# $script:PersonalDeploymentName (PowerShell).
+KIT_DEPLOYMENT = "starter-kit-local"
+
+
+def personal_launcher_home(environ: Mapping[str, str] | None = None, launcher_home: object = None) -> str:
+    """The home the kit's Exasol Personal launcher runs with (macOS and Linux).
+
+    The recorded one (runtime.launcher_home) when given, else EXAKIT_PERSONAL_LAUNCHER_HOME, else the kit's private
+    home when its own launcher's binary is in $EXAKIT_HOME/personal/libexec (mode P: next to an Exasol Personal of the
+    user's that the kit never touches), else HOME. $EXAKIT_HOME/personal/bin/exasol is no marker: every mode has a
+    launcher there. The launcher has no flag for its root, only HOME,
+    so every folder of it is derived from this. Twin of detect_personal_deploy_roots (detect.sh).
+    """
+    env = os.environ if environ is None else environ
+    if launcher_home:
+        return str(launcher_home)
+    if env.get("EXAKIT_PERSONAL_LAUNCHER_HOME"):
+        return str(env["EXAKIT_PERSONAL_LAUNCHER_HOME"])
+    home = env.get("HOME") or str(Path.home())
+    kit_home = env.get("EXAKIT_HOME") or str(Path(home, ".exasol-starter-kit"))
+    binary = Path(kit_home, "personal", "libexec", "exasol")
+    if os.name != "nt" and binary.is_file() and os.access(binary, os.X_OK):
+        return str(Path(kit_home, "personal", "home"))
+    return home
+
+
+def personal_deploy_roots(environ: Mapping[str, str] | None = None,
+                          launcher_home: object = None) -> tuple[Path | None, Path]:
+    """The Exasol Personal launcher's two deployment roots: (2.5.0+, before 2.5.0).
+
+    2.5.0 keeps its deployments in ~/.exasol/launcher/deployments (%LOCALAPPDATA%\\exasol\\launcher\\... on Windows,
+    None there without LOCALAPPDATA, where the launcher cannot run either) and moves the ones earlier launchers left
+    in ~/.exasol/personal/deployments (%USERPROFILE% on Windows) there by itself. ~ is the launcher's home
+    (personal_launcher_home).
+    """
+    env = os.environ if environ is None else environ
+    if os.name == "nt":
+        local = env.get("LOCALAPPDATA")
+        profile = env.get("USERPROFILE") or str(Path.home())
+        return (Path(local, "exasol", "launcher", "deployments") if local else None,
+                Path(profile, ".exasol", "personal", "deployments"))
+    home = personal_launcher_home(env, launcher_home)
+    return Path(home, ".exasol", "launcher", "deployments"), Path(home, ".exasol", "personal", "deployments")
+
+
+def personal_deploy_defaults(environ: Mapping[str, str] | None = None,
+                             launcher_home: object = None) -> tuple[Path | None, Path]:
+    """The kit's own deployment, starter-kit-local, in the launcher's two roots: (2.5.0+, before 2.5.0).
+
+    Twin of detect_personal_deploy_resolve (detect.sh) and Resolve-PersonalDeployDir (exakit-common.ps1).
+    """
+    new_root, legacy_root = personal_deploy_roots(environ, launcher_home)
+    return (new_root / KIT_DEPLOYMENT if new_root is not None else None), legacy_root / KIT_DEPLOYMENT
+
+
+def _personal_folder_deployment_id(folder: Path) -> str:
+    """The launcher's deploymentId for the deployment in ``folder``, or "".
+
+    The launcher's own state first (.exasolLauncherState.json): deployment.json can be older than it, or say
+    "local", what the launcher writes there when it cannot read its state. Read as JSON, the top-level key only;
+    empty, blank and "local" are no id. Twin of detect_personal_deployment_id (detect.sh) and
+    Read-PersonalDeploymentId (exakit-common.ps1).
+    """
+    for name in (".exasolLauncherState.json", "deployment.json"):
+        try:
+            doc = json.loads((folder / name).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        value = doc.get("deploymentId") if isinstance(doc, dict) else None
+        if isinstance(value, str) and value.strip() and value.strip() != "local":
+            return value.strip()
+    return ""
+
+
+def personal_launcher_deployments(environ: Mapping[str, str] | None = None,
+                                  launcher: object = None) -> list[tuple[Path, str]] | None:
+    """The launcher's own deployments as (folder, status), in its order (by name), or None when it gives no answer.
+
+    `exasol deployments list --json` (launcher 2.5.0 and later), bounded by a short timeout
+    (EXAKIT_PERSONAL_LIST_TIMEOUT, 6 s). The launcher is the one the kit recorded (runtime.launcher, the wrapper in
+    mode P, which sets its own home), else the kit's wrapper, else its own (EXAKIT_BIN_DIR/exasol), else the one on
+    PATH, as the shells' personal_cli picks it. None for a launcher without the command (2.4.x), one that fails,
+    hangs or prints anything but that list: the caller then keeps the folders the kit knows
+    (personal_deploy_defaults). No deployment is put first: the kit's own is found by its name or its id, never by
+    its place here. Twin of personal_launcher_deployments (runtime-personal.sh) and
+    Get-PersonalLauncherDeployments (runtime-personal.ps1).
+    """
+    env = os.environ if environ is None else environ
+    home = env.get("USERPROFILE" if os.name == "nt" else "HOME") or str(Path.home())
+    bin_dir = Path(env.get("EXAKIT_BIN_DIR") or str(Path(home, ".local", "bin"))).expanduser()
+    kit_home = env.get("EXAKIT_HOME") or str(Path(home, ".exasol-starter-kit"))
+    candidates = [Path(str(launcher))] if launcher else []
+    if os.name != "nt":
+        candidates.append(Path(kit_home, "personal", "bin", "exasol"))
+    candidates.append(bin_dir / ("exasol.exe" if os.name == "nt" else "exasol"))
+    chosen = next((path for path in candidates if path.is_file()), None)
+    if chosen is None:
+        found = shutil.which("exasol", path=env["PATH"]) if env.get("PATH") else None
+        if not found:
+            return None
+        chosen = Path(found)
+    launcher = chosen
+    try:
+        timeout = int(env.get("EXAKIT_PERSONAL_LIST_TIMEOUT") or 6)
+    except ValueError:
+        timeout = 6
+    try:
+        done = subprocess.run([str(launcher), "deployments", "list", "--json"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=dict(env), check=False)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if done.returncode != 0:
+        return None
+    # A JSON array, from the first line that opens one (a launcher notice may come before it).
+    lines = (done.stdout or "").splitlines()
+    doc = None
+    for at, line in enumerate(lines):
+        if not line.lstrip().startswith("["):
+            continue
+        try:
+            doc = json.JSONDecoder().raw_decode("\n".join(lines[at:]).lstrip())[0]
+            break
+        except ValueError:
+            continue
+    if not isinstance(doc, list):
+        return None
+    rows: list[tuple[Path, str]] = []
+    for item in doc:
+        if not isinstance(item, dict):
+            return None
+        path, status = item.get("path"), item.get("status")
+        if not isinstance(path, str) or not path or not Path(path).is_absolute():
+            continue
+        rows.append((Path(path), status if isinstance(status, str) else ""))
+    return rows
+
+
+def id_text(value: object) -> str:
+    """A recorded deployment id, or "" for one that is not text: a number, or the Infinity an id like 3e082473 became
+    in a record an earlier build wrote, is no id, never another one. The shell's manifest_get answers the same."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def personal_deployment_dir(recorded: object, environ: Mapping[str, str] | None = None,
+                            deployment_id: object = None, ownership: object = None,
+                            launcher_home: object = None, launcher: object = None) -> Path | None:
+    """The folder a recorded runtime.deployment_dir is in now, or None when it is nowhere.
+
+    A recorded folder still on disk, or one the user chose, is itself (the launcher is not asked). One of the
+    launcher's folders that is gone may have been moved by the launcher: launcher 2.5.0 moves the 2.4 one, and a
+    launcher may keep its deployments elsewhere. One of the launcher's folders is any folder in its two roots
+    (personal_deploy_roots, in its home: ``launcher_home``, runtime.launcher_home), whatever its name (a 0.3.0
+    kit's `default`, or starter-kit-local), or one it lists. The candidates are the ones the launcher lists
+    (personal_launcher_deployments, asked of ``launcher``, runtime.launcher), or the kit's own name in the two
+    roots when it gives no answer, and the recorded name in either root. It is followed ONLY to the one whose
+    deployment carries ``deployment_id``, the id the kit recorded (runtime.deployment_id). With no id, or no folder
+    with that id, that deployment is the user's own and the answer is None: the kit never takes it for its own.
+    Twin of detect_personal_deploy_resolve "recorded" and Resolve-PersonalDeployDir -Recorded.
+
+    A recorded folder still on disk that holds a deployment with ANOTHER id than ``deployment_id`` is not the
+    kit's either (its own destroyed, the user's made in the same place: MCU-02), and is None too, unless the user
+    adopted it (``ownership`` "user", the installer's one question). The rule of exakit_personal_db_state.
+    """
+    raw = str(recorded or "")
+    if not raw:
+        return None
+    if Path(raw).exists():
+        if not Path(raw).is_dir():
+            return None
+        want = id_text(deployment_id)
+        if want and str(ownership or "") != "user":
+            has = _personal_folder_deployment_id(Path(raw))
+            if has and has != want:
+                return None
+        return Path(raw)
+    new_root, legacy_root = personal_deploy_roots(environ, launcher_home)
+    new, legacy = personal_deploy_defaults(environ, launcher_home)
+    same = (lambda a, b: a.lower() == b.lower()) if os.name == "nt" else (lambda a, b: a == b)
+    roots = [root for root in (new_root, legacy_root) if root is not None]
+    in_root = any(same(str(Path(raw).parent), str(root)) for root in roots)
+    want = id_text(deployment_id)
+    if not want:
+        return None
+    listed = personal_launcher_deployments(environ, launcher)
+    listed_folders = [path for path, _ in listed] if listed is not None else []
+    if not in_root and not any(same(raw, str(folder)) for folder in listed_folders):
+        return None
+    folders = listed_folders if listed is not None else [home for home in (new, legacy) if home]
+    folders = folders + [root / Path(raw).name for root in roots]
+    seen: list[str] = []
+    for folder in folders:
+        if any(same(str(folder), done) for done in seen):
+            continue
+        seen.append(str(folder))
+        if not same(raw, str(folder)) and folder.is_dir() and _personal_folder_deployment_id(folder) == want:
+            return folder
+    return None
 
 
 def write_private(path: Path, text: str) -> None:
@@ -378,6 +591,26 @@ def _adopt_legacy_receipts(doc: object, home: Path) -> None:
                for field in _LEGACY_OWNED_FIELDS) or \
                 all(isinstance(block.get(field), str) and block[field] for field in _LEGACY_OWNED_SHAPE):
             block["ownership"] = "kit"
+
+
+def made_in_this_database(doc_get, receipt: str) -> bool:
+    """Whether what ``receipt`` says the kit created was created in the database the kit uses now.
+
+    ``<receipt>.made_in`` is the deployment id (runtime.deployment_id) it was created in. Another id, or no id of the
+    database in use to compare it with, is another database: what is there under the same name is not the kit's. No
+    made_in (0.3.0, or a database without an id) is the database the kit recorded: one it changed from since has it
+    written then (personal_stamp_made_in, Set-PersonalMadeIn).
+    """
+    made = doc_get(f"{receipt}.made_in")
+    current = id_text(doc_get("runtime.deployment_id"))
+    if made is not None and not isinstance(made, (str, bool)):
+        # A number an id became (id_text): the id in use now, when it reads as that number, else another database's.
+        try:
+            return json.loads(current) == made
+        except ValueError:
+            return False
+    made = id_text(made)
+    return not made or made == current
 
 
 class Manifest:

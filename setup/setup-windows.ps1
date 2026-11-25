@@ -125,6 +125,15 @@ try {
     # install from one that crashed. Twin of exakit_enable_failure_handling.
     Enter-ExakitInstallLock
 
+    # --- before anything: a launcher newer than the one this kit pins -------
+    # For an install the kit already records: one warning line, and the
+    # install goes on with that launcher, never replaced or downgraded. A new
+    # install decides its launcher at Step 1/4 instead (Get-PersonalLauncherPlan:
+    # the kit's own 2.5 in its folder, or a stop next to a launcher newer than
+    # that line), and says nothing here. Twin of the same line in setup-macos.sh
+    # and setup-linux.sh.
+    Write-PersonalLauncherNewerWarning
+
     # --- step 0: an installation this kit cannot manage ----------------------
     # An older kit could put the database in a container. This asks what to do
     # with it, copies the data out while it is still readable, and stops it so
@@ -160,10 +169,37 @@ try {
         # container's keys (status read "personal (docker)"); this is the run
         # that clears them.
         Clear-PersonalStaleRecord
+        # A 0.3.0 kit's database still named `default` under a launcher at
+        # 2.5.0 or later (the launcher step updated nothing): renamed to
+        # starter-kit-local in one restart, its limit lifted with it, as
+        # `exakit update` does (Update-PersonalCurrent). Twin of setup-macos.sh.
+        try { [void](Update-PersonalCurrent) } catch { Write-ExakitLog "WARN" "rename to starter-kit-local: $_" }
+        # The 20-session limit a launcher before 2.5.0 set on the kit's
+        # database goes (Remove-PersonalSessionLimit: the kit's own, or one the
+        # user let it use, never in kit_database_missing). A stopped database
+        # stays stopped for the start below, which applies it. Twin of
+        # setup-macos.sh.
+        try { [void](Remove-PersonalSessionLimit) } catch { Write-ExakitLog "WARN" "session limit: $_" }
         # The resume arms every setup carries: redeploy what is gone, start what
         # is merely stopped - every later step talks SQL to the database.
         # Twin of setup-macos.sh / setup-linux.sh.
-        if (-not (Test-PersonalDeploymentExists)) {
+        # THE KIT'S OWN DATABASE GONE, another deployment in its place
+        # (Get-ExakitPersonalDbState): never started or used as the kit's. The
+        # deploy step runs again, as on a first install: its one question
+        # lists that deployment with the user's others, and the one picked is
+        # renamed to starter-kit-local and recorded as the user's
+        # (Select-PersonalDatabase).
+        $kitDbState = ""
+        try { $kitDbState = "" + (Get-ExakitPersonalDbState) } catch { $kitDbState = "" }
+        if ($kitDbState) {
+            $script:PersonalNoDatabase = $false
+            Install-PersonalDeployment
+            if ($script:PersonalNoDatabase) {
+                Register-ExakitSoftFailure -Component "runtime" -Repair (Get-ExakitInstallCommand) `
+                    -Reason (Get-ExakitFailureReason) -Label "the local database"
+                Warn2 "The database was not installed - carrying on so the rest of the install completes"
+            }
+        } elseif (-not (Test-PersonalDeploymentExists)) {
             Info "Deployment marked done but not reachable - redeploying"
             $script:PersonalNoDatabase = $false
             Install-PersonalDeployment
@@ -633,6 +669,13 @@ try {
     # output.
     Write-Host ""
     Write-Host ""
+    # No usable database at the end (the database step did not finish): exit
+    # 7, not 0, so a script or an agent does not read this run as a working
+    # install. A step that did not complete beside a working database still
+    # exits 0. Twin of the same exit at the end of setup-macos.sh and
+    # setup-linux.sh. The finally block below still runs.
+    $installExit = Get-ExakitInstallExitCode
+    if ($installExit -ne 0) { exit $installExit }
 } catch [ExakitFailException] {
     # A hard stop (no container runtime, no database) still owes the user the
     # account of what had already been skipped before it.

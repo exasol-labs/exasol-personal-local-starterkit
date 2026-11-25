@@ -8,13 +8,23 @@ deployment with what is saved. The kit edits it for the sidecars it runs:
         Make the named env entries literal values; @<file> reads the value from
         a file (a password stays off every command line). Prints "changed" or
         "unchanged"; exit 2 when the sidecar is not saved there.
-    sidecar_definition.py put <sidecars.yaml> <name> <definition.json>
+    sidecar_definition.py put <sidecars.yaml> <name> <definition.json> [--keep-foreign]
         Save <name> as the definition in the JSON file (container, endpoints,
         enabled). An env entry {"name": N, "valueFile": <path>} becomes a
         literal value read from that file, so the JSON never holds a secret.
-        Prints "changed" or "unchanged".
+        Prints "changed" or "unchanged". With --keep-foreign (the caller has
+        no record of writing <name> there), a <name> already saved with
+        another definition is the user's own: it is kept as it is, "foreign"
+        is printed and the exit code is 3.
     sidecar_definition.py drop <sidecars.yaml> <name>
         Remove <name>. Prints "changed" or "unchanged".
+    sidecar_definition.py is-kits <sidecars.yaml> <name> <login> <host port>
+        Exit 0 when <name> is saved there as the kit writes it: EXA_USER is
+        the literal <login> (the kit's read-only login) and a port of its
+        container is published on <host port>. Exit 1 otherwise (another
+        login, one taken from the deployment's secret, another port, nothing
+        saved, no file). Prints nothing. A kit before 0.3.1 kept no record of
+        the folder it wrote its sidecar in: this is its proof.
 
 Needs PyYAML: the kit runs this as `uv run --no-project --with PyYAML==<pin>`.
 No value is ever printed: a failure is one stderr line naming the error's
@@ -86,13 +96,22 @@ def literal_env(path: Path, name: str, assignments: list[str]) -> bool:
     return changed
 
 
-def put(path: Path, name: str, definition: dict) -> bool:
+class Foreign(Exception):
+    """A sidecar of that name is saved, and the kit did not write it."""
+
+
+def put(path: Path, name: str, definition: dict, keep_foreign: bool = False) -> bool:
     for entry in (definition.get("container") or {}).get("env") or []:
         if isinstance(entry, dict) and "valueFile" in entry:
             entry["value"] = Path(entry.pop("valueFile")).read_text(encoding="utf-8-sig").strip()
     document = _load(path)
     if document["sidecars"].get(name) == definition:
         return False
+    # THE USER'S OWN SIDECAR OF THAT NAME (OWN-04): a deployment the kit
+    # adopted can carry the launcher's own MCP server, set up by its user. It
+    # is never replaced by the kit's.
+    if keep_foreign and name in document["sidecars"]:
+        raise Foreign(name)
     document["sidecars"][name] = definition
     _save(path, document)
     return True
@@ -105,6 +124,25 @@ def drop(path: Path, name: str) -> bool:
     del document["sidecars"][name]
     _save(path, document)
     return True
+
+
+def is_kits(path: Path, name: str, login: str, host_port: str) -> bool:
+    """The saved <name> signs in as <login> (a literal EXA_USER) and publishes
+    a port on <host_port>: the definition the kit writes. A sidecar of the
+    user's own (the launcher's catalog entry signs in with the deployment's
+    own user, from its secret) is not."""
+    if not path.exists():
+        return False
+    sidecar = _load(path)["sidecars"].get(name)
+    container = sidecar.get("container") if isinstance(sidecar, dict) else None
+    if not isinstance(container, dict):
+        return False
+    signs_in = any(isinstance(entry, dict) and entry.get("name") == "EXA_USER" and "valueFrom" not in entry
+                   and isinstance(entry.get("value"), str) and entry["value"] == login
+                   for entry in container.get("env") or [])
+    publishes = any(isinstance(port, dict) and str(port.get("hostPort")) == host_port
+                    for port in container.get("ports") or [])
+    return signs_in and publishes
 
 
 def _describe(error: Exception) -> str:
@@ -126,16 +164,29 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     command, path, name = argv[0], Path(argv[1]), argv[2]
+    if command == "is-kits":
+        if len(argv) != 5:
+            print(__doc__, file=sys.stderr)
+            return 2
+        try:
+            return 0 if is_kits(path, name, argv[3], argv[4]) else 1
+        except Exception as error:  # noqa: BLE001 - one safe line instead of a traceback
+            print(f"sidecar_definition.py {command} failed: {_describe(error)}", file=sys.stderr)
+            return 1
     try:
         if command == "literal-env":
             changed = literal_env(path, name, argv[3:])
-        elif command == "put" and len(argv) == 4:
-            changed = put(path, name, json.loads(Path(argv[3]).read_text(encoding="utf-8-sig")))
+        elif command == "put" and (len(argv) == 4 or (len(argv) == 5 and argv[4] == "--keep-foreign")):
+            changed = put(path, name, json.loads(Path(argv[3]).read_text(encoding="utf-8-sig")),
+                          keep_foreign=len(argv) == 5)
         elif command == "drop":
             changed = drop(path, name)
         else:
             print(__doc__, file=sys.stderr)
             return 2
+    except Foreign:
+        print("foreign")
+        return 3
     except LookupError:
         print(f"sidecar '{name}' is not saved in {path}", file=sys.stderr)
         return 2

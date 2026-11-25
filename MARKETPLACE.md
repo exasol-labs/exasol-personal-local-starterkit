@@ -294,9 +294,9 @@ flowchart TD
     A[Add-on installed] --> B[exakit version]
     B --> C[dash-server row: installed version,<br>and whether a newer one is advertised]
     C --> D{Newer version advertised?}
-    D -->|No| E[current - and exakit update<br>dash-server still repairs the launcher]
+    D -->|No| E[current - exakit update changes nothing.<br>exakit stop dash-server, then<br>exakit start dash-server restarts it]
     D -->|Yes| F[exakit update]
-    F --> G[New version into the venv,<br>revalidated, seconds, no downtime]
+    F --> G[New version into the venv,<br>revalidated, and a running service<br>is stopped and started again on it]
     A2[Add-on NOT installed] --> H[Not in exakit update all - the kit<br>never updates what was never picked]
     H --> I[its exakit version row reads<br>exakit marketplace]
 ```

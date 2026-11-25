@@ -78,15 +78,25 @@ skill; the rest of this page is the database path.
 After setup, every client has an MCP server named **`exasol`**. On Exasol
 Personal 2.4.0 or later it is the **launcher's own MCP server**: a sidecar that
 runs beside the database, starts and stops with it, and answers on
-`http://127.0.0.1:4896/mcp` (loopback only). The clients hold that URL and
-nothing secret; Claude Desktop, which runs only local servers, reaches it through
+`http://127.0.0.1:4896/mcp` (loopback only), or on the next free port when another
+program or deployment has 4896: `components.mcp_server.url` in `exakit info --json`
+names the one in use. The clients hold that URL and nothing secret; Claude
+Desktop, which runs only local servers, reaches it through
 a small bridge (`uvx mcp-proxy`). It is the only MCP server - there is no
 fallback. When it does not serve, `exakit mcp-doctor` (and `exakit mcp-setup`)
 heal it: the read-only user is set up again, a port another program took moves
 the server to a free one, a deployment that needs one restart gets it (the data
 stays), a container that did not start is recreated once. What cannot be healed
 is said with its fix - a launcher before 2.4.0: `exakit update` offers the new one;
-`exasol mcp status` shows the launcher's own account of the server.
+`exakit exasol mcp status -d starter-kit-local` shows the launcher's own account of the
+server (the kit's database is the deployment `starter-kit-local`, and the launcher
+to run is `runtime.launcher` in `exakit info --json`).
+
+A database of the user's that already has an MCP server of its own (a sidecar
+named `mcp`) keeps it: the kit sets up none beside it and says so. Connect the
+client to that server, or, with the user's yes, remove it and set up the kit's:
+`exakit exasol sidecar disable mcp --remove -d starter-kit-local`, then
+`exakit mcp-setup`.
 
 The login is a **dedicated, read-only database user** — for the launcher's
 server too: the kit connects it as that user, not as the administrator the
@@ -167,7 +177,7 @@ result and nothing else on stdout.
 
 The launcher's server runs the official `exasol/mcp-server` image, pinned by
 digest in versions.json (`components.mcp.sidecar_image`, the same version as
-`components.mcp.version`); `exasol mcp status` shows its state. A newer image
+`components.mcp.version`); `exakit exasol mcp status -d starter-kit-local` shows its state. A newer image
 arrives with the kit update that pins it.
 
 Update it like any other component:

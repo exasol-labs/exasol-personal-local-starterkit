@@ -9,7 +9,7 @@
   "url": "http://127.0.0.1:5100 by default. If something else already holds that port the install moves to the next free one and records it - so to see where yours is actually serving, run dash-server: it prints the address, and if a copy is already up it says so and prints that one's address rather than starting a second.",
   "control_plane": "The same address with /mcp on the end. exakit mcp-setup registers it as an MCP server named dash-server, so its tools sit beside the exasol ones once the client restarts - Cursor, Claude Code, Codex, GitHub Copilot, Gemini CLI, OpenCode and Continue. Claude Desktop is the one left out: its config file has no shape for a remote MCP server (the app takes those through its own Connectors settings), so setup prints one note naming the URL and the run is not affected.",
   "installed_by": "exakit marketplace dash-server, or the install itself (it is installed automatically).",
-  "warning": "The control plane at /mcp is unauthenticated and bound to 127.0.0.1. Anything that can reach loopback on this machine - any other session on a shared box, any script, any browser page - can build, deploy and pip-install dependencies for Dash apps as you. That is fine on a personal laptop; on a shared or multi-user machine, stop dash-server when you are not using it (exakit stop). Never put this port on a LAN or behind a public tunnel.",
+  "warning": "The control plane at /mcp is unauthenticated and bound to 127.0.0.1. Anything that can reach loopback on this machine - any other session on a shared box, any script, any browser page - can build, deploy and pip-install dependencies for Dash apps as you. That is fine on a personal laptop; on a shared or multi-user machine, stop dash-server when you are not using it (exakit stop dash-server leaves the database running). Never put this port on a LAN or behind a public tunnel.",
   "db_user": "Reuses the kit's read-only mcp_readonly user - dashboards read, they do not write. Without that user (exakit mcp-setup makes it) Dash Server starts with no database connection; it is never given the administrator's password.",
   "quickstart": [
     {
@@ -52,6 +52,34 @@
         {
           "name": "<service>",
           "description": "Start only this service. Omit it to start the database and enabled add-on services.",
+          "default": "all",
+          "required": false,
+          "choices": [
+            "database",
+            "dash-server",
+            "exasol-scheduler"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit stop",
+      "options": "[<service>]",
+      "summary": "Stops the database and every service. Name dash-server to stop only this one.",
+      "description": "To restart this server alone, run exakit stop dash-server, then exakit start dash-server. Run them as two commands, because Windows PowerShell 5.1 does not accept && between them.",
+      "examples": [
+        "exakit stop dash-server"
+      ],
+      "parameters": [
+        {
+          "name": "<service>",
+          "description": "Stop only this service. Omit it to stop add-on services and the database.",
           "default": "all",
           "required": false,
           "choices": [
@@ -138,15 +166,16 @@
     },
     {
       "command": "exakit update",
-      "options": "[<component>] [--yes] [--json]",
-      "summary": "Update it, and regenerate its launcher.",
+      "options": "[<component>...] [--yes] [--json]",
+      "summary": "Update it to the advertised version. A running server is stopped and started again on it.",
+      "description": "A stopped server stays stopped. At the same version nothing changes, so to restart the current server run exakit stop dash-server, then exakit start dash-server. With EXAKIT_DASH_SERVER_PORT set to a new port, the server moves there, even at the same version, and the AI clients are pointed at it.",
       "examples": [
         "exakit update dash-server"
       ],
       "parameters": [
         {
-          "name": "<component>",
-          "description": "Update a kit-owned component or add-on. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept.",
+          "name": "<component>...",
+          "description": "Update only these kit-owned components or add-ons, each once and in any order. A uv or pyexasol the kit did not install is updated through its own tool, and other user-owned components are kept. An add-on that is not installed is not updated: install it with exakit marketplace <id>.",
           "default": "all",
           "required": false
         },
@@ -243,7 +272,7 @@
   "environment": [
     {
       "name": "EXAKIT_DASH_SERVER_PORT",
-      "effect": "Requested loopback port when writing the kit launcher. Default 5100; a free fallback is recorded when needed. Example: EXAKIT_DASH_SERVER_PORT=5200 exakit update dash-server."
+      "effect": "The loopback port to serve on. Default 5100, and a free one is recorded instead when that is taken at install time. To move an installed server, set it for one update: EXAKIT_DASH_SERVER_PORT=5200 exakit update dash-server. A running server is stopped on its old port and started on the new one, and the AI clients are pointed at it."
     },
     {
       "name": "EXAKIT_DASH_SERVER_VERSION",
@@ -264,6 +293,10 @@
     {
       "symptom": "The control plane answers but the page is blank or 500",
       "remedy": "exakit logs dash-server -f while you reload the page."
+    },
+    {
+      "symptom": "After an update the MCP tools or pages still behave like the old version",
+      "remedy": "Restart just this server: exakit stop dash-server, then exakit start dash-server. Then reload your AI client so it lists the tools again."
     }
   ],
   "see_also": [

@@ -85,7 +85,8 @@ calls() { cat "$TMP/$1/calls" 2>/dev/null | tr '\n' '|'; }
 echo "== a stale lock is released and the destroy retried"
 setup_case stale 1 "$LOCK" 0 "destroyed"
 out="$(run_case stale)"
-check "stale: launcher calls" "destroy --remove --auto-approve|diag unlock --auto-approve|destroy --remove --auto-approve|" "$(calls stale)"
+D="--deployment-dir $TMP/stale/deployment"
+check "stale: launcher calls" "destroy --remove --auto-approve $D|diag unlock --auto-approve $D|destroy --remove --auto-approve $D|" "$(calls stale)"
 check "stale: no warning" "" "$(printf '%s\n' "$out" | grep '^WARN' || true)"
 
 echo "== a running launcher keeps its lock"
@@ -97,7 +98,7 @@ bash -c 'exec -a "$0" sleep 60' "$STUB" &
 CHILDREN="$CHILDREN $!"
 sleep 0.3
 out="$(run_case busy)"
-check "busy: no unlock" "destroy --remove --auto-approve|" "$(calls busy)"
+check "busy: no unlock" "destroy --remove --auto-approve --deployment-dir $TMP/busy/deployment|" "$(calls busy)"
 contains "busy: the launcher's words" "locked by another operation" "$out"
 contains "busy: the folder to check" "$TMP/busy/deployment" "$out"
 kill -9 $CHILDREN 2>/dev/null; wait 2>/dev/null; CHILDREN=""
@@ -105,7 +106,7 @@ kill -9 $CHILDREN 2>/dev/null; wait 2>/dev/null; CHILDREN=""
 echo "== any other failure is quoted, never retried"
 setup_case other 1 "$(printf 'Destroying...\nwarning: slow\nError: disk full')"
 out="$(run_case other)"
-check "other: one destroy" "destroy --remove --auto-approve|" "$(calls other)"
+check "other: one destroy" "destroy --remove --auto-approve --deployment-dir $TMP/other/deployment|" "$(calls other)"
 contains "other: the last error line" "(it said: Error: disk full)" "$out"
 
 echo

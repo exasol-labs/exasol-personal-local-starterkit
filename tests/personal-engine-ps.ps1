@@ -302,6 +302,61 @@ Set-Content -Path (Join-Path $dep "deployment.json") -Value '{"deploymentId":"ex
 $env:STUB_DOCKER_FAIL = "1"; Reset-Caches
 Check "the launcher's state names docker -> docker (LNXR-04)" "docker" (Get-PersonalEngineExisting -Quiet)
 Set-Content -Path (Join-Path $dep "deployment.json") -Value '{"deploymentId":"exa-7f3a","dbPort":8563}'
+
+Write-Host ""
+Write-Host "the deployment's own record (container-engine.json) is the engine, over the kit's (E1, E2)"
+$env:STUB_DOCKER_FAIL = "0"; $env:STUB_DOCKER_PS = ""; Reset-Caches
+$ownRt = [IO.Path]::Combine($dep, "local", "runtime")
+New-Item -ItemType Directory -Force -Path $ownRt | Out-Null
+$ownFile = Join-Path $ownRt "container-engine.json"
+foreach ($pair in @(@("docker", "podman"), @("podman", "docker"))) {
+    Set-Content -Path $ownFile -Value ('{"engine":"' + $pair[0] + '"}')
+    Set-ExakitManifestValue "runtime.engine" $pair[1]
+    Check "its record says $($pair[0]), the kit's $($pair[1]): $($pair[0])" "$($pair[0])|$($pair[0])" "$(Get-PersonalEngineExisting -Quiet)|$(Get-PersonalEngineRecorded)"
+    $script:PersonalEngine = $pair[1]
+    Set-PersonalManifest "healthy" *> $null
+    Check "  recorded at the next record (the pick's, the update's)" $pair[0] ("" + (Get-ExakitManifestValue "runtime.engine"))
+    $script:PersonalEngine = ""
+}
+$script:StubDeployed = "2.3.1"
+Set-Content -Path $ownFile -Value '{"engine":"docker"}'
+Check "  whatever its version reads" "docker" (Get-PersonalEngineExisting -Quiet)
+$script:StubDeployed = "2.4.0"
+foreach ($bad in @("", "{", '{"engine":""}', '{"engine":"lxc"}')) {
+    Set-Content -Path $ownFile -Value $bad
+    Set-ExakitManifestValue "runtime.engine" "podman"
+    Check "a record that cannot be read ('$bad'): unknown, never guessed" "" (Get-PersonalEngineExisting -Quiet)
+}
+Remove-Item -Force $ownFile
+New-Item -ItemType Directory -Force -Path (Join-Path $ownRt "exa") | Out-Null
+Set-ExakitManifestValue "runtime.engine" "docker"
+Check "its data with no record: made on Podman, the launcher's own rule" "podman" (Get-PersonalEngineExisting -Quiet)
+Remove-Item -Recurse -Force (Join-Path $dep "local")
+Set-ExakitManifestValue "runtime.engine" "docker"
+Check "nothing of its own: the kit's record" "docker" (Get-PersonalEngineExisting -Quiet)
+# The rebuild of a database of the user's (exakit repair-runtime) takes nothing
+# on trust: the kit's record of it may be a guess.
+$savedRebuild = (Get-Item "function:Test-PersonalRebuildsUserDatabase").ScriptBlock
+function Test-PersonalRebuildsUserDatabase { return $true }
+$env:STUB_DOCKER_PS = "something-else"
+Check "a rebuild of the user's, nothing that names it, no engine lists it: unknown" "" (Get-PersonalEngineExisting -Quiet)
+$env:STUB_DOCKER_PS = "exa-7f3a-db-1"
+Check "  Docker lists it: docker" "docker" (Get-PersonalEngineExisting -Quiet)
+Set-ExakitManifestValue "runtime.engine" "podman"
+Check "  whatever the kit's record says" "docker" (Get-PersonalEngineExisting -Quiet)
+$script:StubDeployed = "2.3.1"
+Check "  made before 2.4: podman" "podman" (Get-PersonalEngineExisting -Quiet)
+$script:StubDeployed = ""
+Remove-ExakitManifestValue "runtime.deployment_version"
+Check "  its version cannot be read: unknown" "" (Get-PersonalEngineExisting -Quiet)
+$script:StubDeployed = "2.4.0"
+Set-Item function:Test-PersonalRebuildsUserDatabase $savedRebuild
+Remove-ExakitManifestValue "runtime.engine"
+Set-ExakitManifestValue "runtime.rebuild_path" $dep
+Set-PersonalManifest "healthy" *> $null
+Check "a database that answers ends the rebuild it came from" "" ("" + (Get-ExakitManifestValue "runtime.rebuild_path"))
+Remove-ExakitManifestValue "runtime.engine"
+$env:STUB_DOCKER_FAIL = "1"; $env:STUB_DOCKER_PS = "exa-7f3a-db-1"; Reset-Caches
 if (-not $onWindows) {
     $podmanStub = Join-Path $stubDir "podman"
     Set-Content -Path $podmanStub -Value @("#!/bin/sh", "if [ `"`$1`" = ps ]; then printf '%s\n' `"`$STUB_PODMAN_PS`"; fi", "exit 0")
@@ -317,9 +372,12 @@ if (-not $onWindows) {
     $saved = @{}
     foreach ($f in @("Test-PersonalDeploymentExists", "Test-PersonalDeploymentRunning", "Get-PersonalLauncherState",
                      "Test-PersonalLauncherSupports", "Show-PersonalGuestRebuildNote", "Test-PersonalWslPodmanNetworkOk",
-                     "Invoke-ExakitLogged", "Set-PersonalManifest", "Test-ExakitPortInUse")) {
+                     "Invoke-ExakitLogged", "Set-PersonalManifest", "Test-ExakitPortInUse", "Test-ExakitComponentManaged")) {
         $saved[$f] = (Get-Item "function:$f").ScriptBlock
     }
+    # The kit's own database: only the kit's own is ever offered for a
+    # replace (a database of the user's never is, CONTRACT section 4).
+    function Test-ExakitComponentManaged { param([string]$Id) return $true }
     function Test-PersonalDeploymentExists { return $true }
     function Test-PersonalDeploymentRunning { return $false }
     function Get-PersonalLauncherState { return "stopped" }

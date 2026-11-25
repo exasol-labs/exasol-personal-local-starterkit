@@ -12,8 +12,9 @@ function Check($label, $expected, $actual) {
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected <$expected>, got <$actual>" }
 }
 
-$python = (Get-Command python3 -ErrorAction SilentlyContinue)
-if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+# Not the Microsoft Store alias under \WindowsApps\ (python3 on a normal Windows
+# box): it only prints "Python was not found". As in mcp-sidecar-ps.ps1.
+$python = @(Get-Command python3, python -All -CommandType Application -ErrorAction SilentlyContinue | Where-Object { "$($_.Source)" -notlike "*\WindowsApps\*" }) | Select-Object -First 1
 if (-not $python) { Write-Host "SKIP: no Python for the stand-in exapump"; exit 0 }
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-admin-sql-" + [guid]::NewGuid().ToString("N"))

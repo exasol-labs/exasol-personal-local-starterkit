@@ -516,6 +516,48 @@ ui_spin_end_all() {
     _ui_step_stop_spinner
 }
 
+# ui_line_release [<terminal>] — a question is about to be asked on this line:
+# whatever animates it (a spinner, or a grouped step's bar) stops now, and the
+# line is cleared on <terminal> (default: stdout).
+#
+# A QUESTION UNDER A LIVE ANIMATION IS INVISIBLE. The bar repaints its line
+# every 0.2 s, so "? Database password for user sys (input hidden):" asked
+# inside the Data Loader item was gone 0.2 s later, and the screen showed only
+# "1/3  Data Loader (141s)" counting up: an install that looked hung (MX-05).
+# The question is often asked from a $( ) subshell, which ui_spin_end may not
+# stop (it is not the owner), so this ends the animator by its pid and removes
+# the bar's file, which the bar's loop exits on. Nothing is restarted after the
+# question: the item's own tick line follows when it ends.
+# ⇄ twin: the Stop-ExakitSpinnerAll that Confirm-ExakitPrompt and
+# Read-ExakitPrompt call in exakit-common.ps1.
+ui_line_release() {
+    [ -n "${_UI_SPIN_PID:-}" ] || [ -n "${_UI_BAR_FILE:-}" ] || return 0
+    # A live table is not a line: it has its own way of stopping, and its
+    # owner draws the questions it asks.
+    [ -z "${_UI_TABLE_ACTIVE:-}" ] || return 0
+    if [ "${_UI_SPIN_OWNER:-}" = "$$.${BASH_SUBSHELL:-0}" ] && [ -z "${1:-}" ]; then
+        ui_spin_end_all
+        return 0
+    fi
+    [ -z "${_UI_BAR_FILE:-}" ] || rm -f "$_UI_BAR_FILE" 2>/dev/null
+    if [ -n "${_UI_SPIN_PID:-}" ]; then
+        kill "$_UI_SPIN_PID" 2>/dev/null
+        # Not this shell's child, so no `wait`: a frame it was writing as the
+        # signal arrived must land before the line is cleared.
+        _ulr_n=0
+        while kill -0 "$_UI_SPIN_PID" 2>/dev/null && [ "$_ulr_n" -lt 20 ]; do
+            sleep 0.05; _ulr_n=$((_ulr_n + 1))
+        done
+    fi
+    _UI_SPIN_PID=''; _UI_BAR_FILE=''; _UI_SPIN_NESTED=0
+    if [ -n "${1:-}" ]; then
+        printf '\r\033[K\033[?25h' > "$1" 2>/dev/null || true
+    elif [ -t 1 ]; then
+        printf '\r\033[K\033[?25h'
+    fi
+    return 0
+}
+
 # ui_spin_pause / ui_spin_resume — print a line without losing the spinner.
 #
 # A spinner OWNS its line and rewrites it every 80ms, so anything printed while

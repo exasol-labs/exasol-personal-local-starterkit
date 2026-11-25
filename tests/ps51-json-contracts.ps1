@@ -186,6 +186,23 @@ $remedy = @(Get-ExakitDbErrorRemedy -Text "Connection refused") -join " "
 Check "remedy: 'Connection refused' still names exakit start" ($remedy -match "exakit start") $remedy
 $remedy = @(Get-ExakitDbErrorRemedy -Text "syntax error, unexpected FETCH_, expecting UNION_") -join " "
 Check "remedy: FETCH FIRST names LIMIT" ($remedy -match "LIMIT") $remedy
+# M-03: SQL state 42500 names a refused write only for a write.
+$m03dbx = "Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1127: F-UDF-CL-SL-LUA-1003: connection EXAKIT_SRC_DBXM does not exist (Session: 1882294472) (SQL state: 42500)"
+$remedy = @(Get-ExakitDbErrorRemedy -Text $m03dbx -Statement "SELECT COUNT(*) FROM VS_DBXM.FINANCIAL_TRANSACTIONS") -join " "
+Check "remedy: a SELECT answered with 42500 is not called a refused write" ($remedy -notmatch "write was refused") $remedy
+$remedy = @(Get-ExakitDbErrorRemedy -Text "insert failed (SQL state: 42500)" -Statement "INSERT INTO T VALUES (1)") -join " "
+Check "remedy: an INSERT refused with 42500 is still the read-only guardrail" ($remedy -match "write was refused") $remedy
+$remedy = @(Get-ExakitDbErrorRemedy -Text "insufficient privileges for creating table" -Statement "SELECT 1") -join " "
+Check "remedy: an insufficient-privileges text is a refused write" ($remedy -match "write was refused") $remedy
+$remedy = @(Get-ExakitDbErrorRemedy -Text "refused (SQL state: 42500)") -join " "
+Check "remedy: 42500 with no statement known stays a refused write" ($remedy -match "write was refused") $remedy
+# M-06: a disconnected source names its reconnect, from its record.
+New-Item -ItemType Directory -Force -Path (Join-Path (Join-Path $kitHome "sources") "dbxm") | Out-Null
+Set-Content -LiteralPath (Join-Path (Join-Path (Join-Path $kitHome "sources") "dbxm") "config.json") -Value '{"connector": "databricks", "inputs": {}}'
+$remedy = @(Get-ExakitDbErrorRemedy -Text $m03dbx -Statement "SELECT COUNT(*) FROM VS_DBXM.FINANCIAL_TRANSACTIONS") -join " "
+Check "remedy: a disconnected source names its reconnect" ($remedy -eq "VS_DBXM is disconnected, so its tables cannot be read. Reconnect it with its credential: exakit connect databricks --name dbxm --password-file <file>") $remedy
+$remedy = @(Get-ExakitDbErrorRemedy -Text "VM error: F-UDF-CL-RUST-9001: UDF error: could not resolve Exasol CONNECTION 'EXAKIT_SRC_MONGOM'; verify that it exists" -Statement "SELECT 1") -join " "
+Check "remedy: MongoDB's words, no record: the connector left to fill in" ($remedy -match "exakit connect <connector> --name mongom") $remedy
 
 Check "allowlist: a legacy update-check rule is recognised" (Test-ExakitLegacyAllowlistRule 'Bash(exakit update-check:*)') "returned false"
 Check "allowlist: a legacy .cmd mcp-validate rule is recognised" (Test-ExakitLegacyAllowlistRule 'Bash(~/.local/bin/exakit.cmd mcp-validate:*)') "returned false"
@@ -211,6 +228,25 @@ Initialize-ExakitManifest
 Set-ExakitStepDone "launcher"
 $manifestText = Get-Content -Raw -Path $script:ManifestPath
 Check "manifest: the first step tick is an array on disk" ($manifestText -match '"steps_completed":\s*\[') (Head $manifestText 200)
+# THE RECORDED IDS ARE TEXT, whatever they look like: 3e082473 read as a number
+# is 3E+82476, and then another database's id. Through the file and back, the
+# id of a launcher's own state file, and a comparison with it, on both engines.
+$idKeys = @("runtime.deployment_id", "components.mcp_server.connection.made_in", "components.exasol_scheduler.made_in", "components.personal.ownership_sha256")
+$idFolder = Join-Path $kitHome "id-round-trip"
+New-Item -ItemType Directory -Force -Path $idFolder | Out-Null
+foreach ($hexId in @("3e082473", "1e000003", "0e123456", "30824735", "01234567")) {
+    [System.IO.File]::WriteAllText((Join-Path $idFolder ".exasolLauncherState.json"), ('{"deploymentId": "' + $hexId + '"}'))
+    $readId = Read-PersonalDeploymentId -Dir $idFolder
+    foreach ($idKey in $idKeys) { Set-ExakitManifestValue $idKey $readId }
+    # Another write rewrites the whole file from what was read.
+    Set-ExakitManifestValue "runtime.status" "running"
+    $wrong = @($idKeys | Where-Object { $v = Get-ExakitManifestValue $_; ($v -isnot [string]) -or ($v -cne $hexId) -or ($v -cne (Read-PersonalDeploymentId -Dir $idFolder)) })
+    $onDisk = [regex]::Matches([System.IO.File]::ReadAllText($script:ManifestPath), '"' + $hexId + '"').Count
+    Check "manifest: the id $hexId is text, on disk and back" ($wrong.Count -eq 0 -and $onDisk -eq $idKeys.Count) "wrong: $($wrong -join ' '), on disk $onDisk"
+}
+# The manifest as it was, for the cases below.
+[System.IO.File]::WriteAllText($script:ManifestPath, $manifestText)
+Remove-Item -Recurse -Force -LiteralPath $idFolder
 
 $r = Run-Cli @("status", "--json")
 $doc = Parse-Json "status --json (manifest, no runtime)" $r.Out
@@ -222,6 +258,52 @@ if ($doc) {
     Check "status --json: carries platform and wsl_version (AGENTS.md; audit WIN-02)" `
         ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"]) "platform=$($doc.platform)"
 }
+# W3-04: THE PLAIN FORM HAS THE SAME EXIT CODE (AGENTS.md: 0 running, 3
+# stopped). Seen as -1 on Windows 11, where the code exits 3 on every
+# not-running path. Run whole here: Windows PowerShell 5.1 stops a native
+# command whose output a `| Select-Object -First N` cut short, and a stopped
+# process reports -1, so read its exit code without such a pipe.
+$r = Run-Cli @("status")
+Check "status (plain, no runtime) exits 3, as --json does" ($r.Code -eq 3) "exit $($r.Code): $(Head $r.Out 120)"
+if ($env:OS -notlike "*Windows*") {
+    # A deployment the launcher calls stopped, through a stand-in launcher (a
+    # script, so not on Windows, where the kit runs exasol.exe).
+    $manifestBefore = Get-Content -Raw -Path $script:ManifestPath
+    Set-ExakitStepDone "runtime"; Set-ExakitStepDone "exakit_helper"
+    Set-ExakitManifestValue "runtime.type" "personal"
+    $stDeploy = Join-Path $userSandbox "deploy"
+    New-Item -ItemType Directory -Force -Path $stDeploy, $env:EXAKIT_BIN_DIR | Out-Null
+    Set-Content -Path (Join-Path $stDeploy "deployment.json") -Value '{"dbPort": 18563}'
+    $stFake = Join-Path $env:EXAKIT_BIN_DIR "exasol.exe"
+    Set-Content -Path $stFake -Value @("#!/bin/sh", "case `"`$1`" in info) echo 'Deployment: default' ;; status) echo '{`"status`": `"stopped`"}' ;; esac", "exit 0")
+    & chmod +x $stFake
+    $env:EXAKIT_PERSONAL_DEPLOY_DIR = $stDeploy
+    try {
+        $r = Run-Cli @("status")
+        Check "status (plain, database stopped) exits 3" ($r.Code -eq 3) "exit $($r.Code): $(Head $r.Out 120)"
+        $r = Run-Cli @("status", "--json")
+        $doc = Parse-Json "status --json (database stopped)" $r.Out
+        Check "status --json (database stopped) exits 3 with status stopped" ($r.Code -eq 3 -and $doc -and $doc.status -eq "stopped") "exit $($r.Code) status=$($doc.status)"
+    } finally {
+        Remove-Item Env:EXAKIT_PERSONAL_DEPLOY_DIR -ErrorAction SilentlyContinue
+        Remove-Item -Force -LiteralPath $stFake -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force -LiteralPath $stDeploy -ErrorAction SilentlyContinue
+        Set-Content -Path $script:ManifestPath -Value $manifestBefore -NoNewline
+    }
+}
+# W3-07: an engine's log lines carry ANSI colour (exasol-scheduler's do). Off a
+# colour console - redirected, as here - `exakit logs <target>` prints them
+# without the codes; the file keeps them.
+$esc = [string][char]27
+$logDirT = Join-Path $kitHome "logs"
+New-Item -ItemType Directory -Force -Path $logDirT | Out-Null
+$sgrLog = Join-Path $logDirT "virtual-schemas-20261119.log"
+[System.IO.File]::WriteAllText($sgrLog, "$esc[32mINFO$esc[0m scheduler tick`n$esc[1;31mERROR$esc[0m second line`n")
+$r = Run-Cli @("logs", "virtual-schemas")
+Check "logs (redirected) keeps the text" ("$($r.Out)".Contains("INFO scheduler tick") -and "$($r.Out)".Contains("ERROR second line")) (Head $r.Out 160)
+Check "...without the colour codes" (-not "$($r.Out)".Contains($esc)) ((Head $r.Out 160) -replace [char]27, '<ESC>')
+Check "...and the file keeps them" ([System.IO.File]::ReadAllText($sgrLog).Contains("$esc[32mINFO")) "file changed"
+Remove-Item -Force -LiteralPath $sgrLog
 
 Set-ExakitManifestValue "install.current_step" "runtime"
 $r = Run-Cli @("status", "--json")

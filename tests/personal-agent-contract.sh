@@ -641,7 +641,9 @@ check "  remedy_hint: EXAKIT_WSL_CHECKED=1, else wsl --update" "If it shows 2.7 
 _rj="$(rr_json RR_REASON="Port 8563 is held by something that is not an Exasol Personal deployment")"
 check "any other failure: changed true, as before" "True" "$(jq_py "$_rj" 'd["changed"]')"
 check "  and the installer remedy"               "bash install.sh" "$(jq_py "$_rj" 'd["remedy"]')"
-check "PS twin answers changed false on the same refusal" 1 "$(grep -cF 'ok = $false; status = "refused"; changed = $false' "$ROOT/setup/exakit.ps1")"
+# The WSL refusal's own object (reason = $repairWhy): exakit.ps1 has a second
+# refused object, for a database of the user's, which says changed false too.
+check "PS twin answers changed false on the same refusal" 1 "$(grep -A1 -F 'ok = $false; status = "refused"; changed = $false' "$ROOT/setup/exakit.ps1" | grep -cF 'reason = $repairWhy')"
 
 echo "a refused repair-runtime, then status --json on the same home - the real note handling (AGK4-05):"
 _arm="$(sed -n '/^if begin_step runtime/,/^else$/p' "$ROOT/setup/setup-linux.sh")"
@@ -722,6 +724,11 @@ wsl401() { # wsl401 <deploy output line> <entry: heal|start>
         personal_deployment_exists() { return 0; }
         personal_repair_command() { printf 'exakit repair-runtime'; }
         _personal_wait_ready_probe() { return 1; }
+        # No VM runner on the port. The real one asks lsof about port 8563,
+        # and on a machine whose own kit database listens there it found that
+        # runner and took the "VM is running, waiting once more" branch, so
+        # the deploy below never ran and every check after it failed.
+        personal_vm_runner_pid() { return 1; }
         run_logged() {
             case "$2" in
                 deploy) printf '%s\n' "$_w_line" >> "$EXAKIT_LOG_FILE"; return 1 ;;
@@ -865,6 +872,113 @@ check "  ...the inherited remedy is not used" "None" "$(python3 -c 'import json,
 lacks "  ...nor the inherited hint" "inherited hint" "$(cat "$TMP/dj.out")"
 check "mcp-status clears an inherited override too" 1 "$(sed -n '/^cmd_mcp_status()/,/^}/p' "$ROOT/setup/exakit" | grep -c 'unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT')"
 check "personal_deployment_running still never consults the runner" 0 "$(sed -n '/^personal_deployment_running()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '_personal_port_held_by_own_runner')"
+
+# ---------------------------------------------------------------------------
+# The update to Exasol Personal 2.5 from a 0.3.0 kit (the rename to
+# starter-kit-local): what does not happen is put back and waits for the next
+# update, with its reason in the row; a database the user let the 0.3.0 kit
+# use, run by their own launcher, gets its own row.
+# ---------------------------------------------------------------------------
+# shellcheck disable=SC1091
+. "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
+EXAKIT_FAILURE_NOTE="$TMP/last-failure"; export EXAKIT_FAILURE_NOTE
+UI_FANCY=0
+exakit_versions_update_cache() { :; }
+exakit_versions_resolve_doc() { :; }
+exakit_print_versions_source_line() { :; }
+exakit_update_actual_target() { printf '%s\n' "$1"; }
+exakit_component_current() { cat "$STATE/cur.$1" 2>/dev/null || true; }
+exakit_component_available() { cat "$STATE/avail.$1" 2>/dev/null || true; }
+exakit_component_supported() { return 0; }
+exakit_component_is_ahead() { return 1; }
+exakit_component_is_heavy() { [ "$1" = personal ]; }
+exakit_component_min_kit() { :; }
+_exakit_addon_registered() { return 1; }
+exakit_runtime_status() { printf 'stopped\n'; }
+# No launcher is ever asked here: there is none.
+personal_launcher_deployments() { return 1; }
+reset_upd() {
+    rm -f "$STATE"/* "$EXAKIT_FAILURE_NOTE"
+    printf '2.4.0\n' > "$STATE/cur.personal"; printf '2.5.0\n' > "$STATE/avail.personal"
+    printf '{"runtime": {"type": "personal", "ownership": "%s"}}\n' "$1" > "$EXAKIT_MANIFEST"
+}
+echo "the update to 2.5 that did not happen waits, with its reason (the kit's own launcher):"
+exakit_component_is_managed() { return 0; }
+exakit_update_component() {
+    printf '%s\n' "$1" >> "$STATE/calls"
+    exakit_note_failure "The database 'default' was not renamed to 'starter-kit-local', because ~/.exasol/personal/deployments/starter-kit-local already exists"
+    return 2
+}
+reset_upd kit
+_j="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 run_json "personal")"
+check "--json: the update ran the personal updater" personal "$(cat "$STATE/calls" 2>/dev/null)"
+check "--json: deferred, not failed, not updated" "deferred|True" "$(jq_py "$_j" 'd["status"] + "|" + str(d["ok"])')"
+check "--json: the row's remedy is a plain retry" "personal|exakit update" "$(jq_py "$_j" 'd["deferred"][0]["component"] + "|" + d["deferred"][0]["remedy"]')"
+contains "--json: the row says why" "already exists" "$(jq_py "$_j" 'd["deferred"][0].get("error", "")')"
+check "--json: and the top-level hint is the row's" "Run exakit update again once that is solved." "$(jq_py "$_j" 'd["remedy_hint"]')"
+reset_upd kit
+_out="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 _exakit_update_run all "personal" 2>&1)"
+lacks "on the screen: never called updated" "Runtime updated" "$_out"
+contains "on the screen: the deferred change is pointed at" "See everything, including the deferred runtime change" "$_out"
+exakit_update_component() { printf '%s\n' "$1" >> "$STATE/calls"; return 1; }
+reset_upd kit
+_j="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 run_json "personal")"
+check "--json: an updater's other non-zero keeps the old deferral" "deferred|exakit update --yes" "$(jq_py "$_j" 'd["status"] + "|" + d["deferred"][0]["remedy"]')"
+exakit_update_component() { printf '%s\n' "$1" >> "$STATE/calls"; return 0; }
+reset_upd kit
+_j="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 run_json "personal")"
+check "--json: done is updated" "updated|personal" "$(jq_py "$_j" 'd["status"] + "|" + d["updated"][0]["component"]')"
+reset_upd kit
+exakit_note_failure "The database 'default' was not renamed to 'starter-kit-local', because ~/x already exists"
+_j="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 run_json "personal")"
+check "--json: once it goes through, the earlier update's reason is gone" no "$([ -f "$EXAKIT_FAILURE_NOTE" ] && echo yes || echo no)"
+reset_upd kit
+exakit_note_failure "The AI client configuration did not finish"
+_j="$(EXAKIT_CONFIRM_RUNTIME_UPDATE=1 run_json "personal")"
+check "  ...any other reason stays" "The AI client configuration did not finish" "$(head -n 1 "$EXAKIT_FAILURE_NOTE" 2>/dev/null)"
+
+echo "a database the user let the 0.3.0 kit use, run by their own launcher (rows):"
+# Their launcher is not the kit's: the foreign arm, with its own row first.
+exakit_component_is_managed() { [ "$1" != personal ]; }
+exakit_update_component() { printf 'UPDATER %s\n' "$1" >> "$STATE/calls"; return 0; }
+personal_update_user() { printf 'USER %s %s\n' "$1" "$2" >> "$STATE/calls"; return "${STUB_USER_RC:-0}"; }
+reset_upd user
+_j="$(run_json "personal")"
+check "--json: their launcher updated in place is updated" "updated|personal|2.4.0|2.5.0" \
+    "$(jq_py "$_j" 'd["status"] + "|" + d["updated"][0]["component"] + "|" + d["updated"][0]["from"] + "|" + d["updated"][0]["to"]')"
+check "  asked with the installed and the advertised version, never the kit's updater" "USER 2.4.0 2.5.0" "$(cat "$STATE/calls")"
+reset_upd user
+_j="$(STUB_USER_RC=11 run_json "personal")"
+check "--json: not replaced (their launcher not writable) waits, plain retry" "deferred|exakit update" \
+    "$(jq_py "$_j" 'd["status"] + "|" + d["deferred"][0]["remedy"]')"
+reset_upd user
+personal_update_user() {
+    exakit_note_failure "Your Exasol Personal launcher at /usr/local/bin/exasol cannot be replaced, because the kit cannot write it"
+    return 11
+}
+_j="$(run_json "personal")"
+contains "--json: with the reason in the row" "cannot write it" "$(jq_py "$_j" 'd["deferred"][0].get("error", "")')"
+personal_update_user() { return 12; }
+reset_upd user
+_j="$(run_json "personal")"
+check "--json: EXAKIT_CONFIRM_RUNTIME_UPDATE=0 waits for --yes" "deferred|exakit update --yes" \
+    "$(jq_py "$_j" 'd["status"] + "|" + d["deferred"][0]["remedy"]')"
+personal_update_user() { die "Launcher checksum mismatch (Exasol S3)."; }
+reset_upd user
+_j="$(run_json "personal")"
+check "--json: a die in it is this row's failure, with its reason" "failed|personal" \
+    "$(jq_py "$_j" 'd["status"] + "|" + d["failed"][0]["component"]')"
+contains "  ...the reason" "checksum mismatch" "$(jq_py "$_j" 'd["failed"][0].get("error", "")')"
+personal_update_user() { return 10; }
+reset_upd user
+_j="$(run_json "personal")"
+check "--json: not this update (theirs at the pin, or the kit's database): kept as before" "personal" \
+    "$(jq_py "$_j" 'd["skipped"][0]["component"]')"
+reset_upd kit
+personal_update_user() { printf 'USER\n' >> "$STATE/calls"; return 0; }
+_j="$(run_json "personal")"
+check "--json: the kit's own database never takes the user's row" "" "$(grep -c USER "$STATE/calls" 2>/dev/null | sed 's/^0$//')"
+unset -f personal_update_user
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

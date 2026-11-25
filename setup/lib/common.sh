@@ -144,7 +144,29 @@ exakit_component_ownership() {
                 if command -v personal_cli >/dev/null 2>&1; then _eco_live="$(personal_cli)"; fi ;;
             exapump)
                 if command -v exapump_cli >/dev/null 2>&1; then _eco_live="$(exapump_cli)"; fi ;;
-            database|runtime) _eco_live="${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ;;
+            database|runtime)
+                # The folder as it is now, and the receipt followed to where
+                # the launcher moved it (exakit_personal_deploy_dir_now): a
+                # database launcher 2.5.0 moved is still the kit's.
+                command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+                _eco_live="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+                [ -n "$_eco_file" ] && _eco_file="$(exakit_personal_deploy_dir_now "$_eco_file")"
+                # ANOTHER DEPLOYMENT IN THE KIT'S FOLDER (MCU-02): the kit's
+                # own destroyed and the user's made in the same place carries
+                # another id. It is the user's: the folder alone proves nothing.
+                _eco_want="$(manifest_get runtime.deployment_id 2>/dev/null || true)"
+                if [ -n "$_eco_want" ] && [ -n "$_eco_live" ] && command -v detect_personal_deployment_id >/dev/null 2>&1; then
+                    _eco_has="$(detect_personal_deployment_id "$_eco_live")"
+                    [ -n "$_eco_has" ] && [ "$_eco_has" != "$_eco_want" ] && _eco_owner=user
+                fi
+                # THE KIT'S OWN GONE, ANOTHER DEPLOYMENT IN ITS PLACE: the
+                # folder in use stays the kit's (gone), but the launcher
+                # follows a missing legacy folder to its twin, so a kit claim
+                # here would let uninstall destroy the user's deployment.
+                if [ -n "$_eco_live" ] && [ ! -e "$_eco_live" ] && command -v detect_personal_deploy_found >/dev/null 2>&1; then
+                    detect_personal_deploy_found "$_eco_live"
+                    [ -z "${DETECT_PERSONAL_DEPLOY_FOUND:-}" ] || _eco_owner=user
+                fi ;;
         esac
         if [ -n "$_eco_file" ] && [ -n "$_eco_live" ] && [ "$_eco_file" != "$_eco_live" ]; then _eco_owner=user; fi
         # A user can replace a binary at the same path. A filename alone must
@@ -212,8 +234,15 @@ _exakit_legacy_kit_owned() {
         database|runtime)
             [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
             _exakit_legacy_kit_owned personal || return 1
-            _elk="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
-            [ -n "$_elk" ] && { [ -z "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || [ "$_elk" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; } ;;
+            command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+            _elk="$(exakit_personal_deploy_dir_now "$(manifest_get runtime.deployment_dir 2>/dev/null || true)")"
+            [ -n "$_elk" ] && { [ -z "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || [ "$_elk" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; } || return 1
+            # Gone, with another deployment in its place: never claimed (as above).
+            if [ ! -e "$_elk" ] && command -v detect_personal_deploy_found >/dev/null 2>&1; then
+                detect_personal_deploy_found "$_elk"
+                [ -z "${DETECT_PERSONAL_DEPLOY_FOUND:-}" ] || return 1
+            fi
+            return 0 ;;
         mcp)
             [ -n "$(manifest_get components.mcp_server.version 2>/dev/null || true)$(manifest_get components.mcp_server.backend 2>/dev/null || true)" ] ;;
         uv)
@@ -223,6 +252,158 @@ _exakit_legacy_kit_owned() {
             _elk_want="$(exakit_uv_binary_sha256 "uv-$(manifest_get components.uv.version 2>/dev/null || true)-$(exakit_uv_platform 2>/dev/null || true)")"
             [ -n "$_elk_want" ] && [ "$(sha256_of "$_elk" 2>/dev/null || true)" = "$_elk_want" ] ;;
         *) return 1 ;;
+    esac
+}
+
+# exakit_personal_deploy_dir_now <recorded> — a deployment folder the manifest
+# recorded, followed to where the launcher has moved it since: launcher 2.5.0
+# moves ~/.exasol/personal/deployments/default to ~/.exasol/launcher/... by
+# itself (detect_personal_deploy_resolve, "recorded"), and a later launcher may
+# keep its deployments elsewhere (the folders it lists, asked by
+# personal_deploy_dir_refresh). A recorded folder still on disk, or one the
+# user chose, is printed as it is. Empty in, empty out. A folder that is gone
+# follows only a deployment whose id is the one the kit recorded
+# (runtime.deployment_id, read only then): a deployment the user keeps in
+# another of the launcher's folders is never taken for the kit's.
+exakit_personal_deploy_dir_now() {
+    [ -n "${1:-}" ] || return 0
+    if command -v detect_personal_deploy_resolve >/dev/null 2>&1; then
+        _epddn_id=""
+        if [ ! -e "$1" ]; then
+            # Gone: the launcher is asked where its deployments are (once per
+            # process, personal_launcher_deployments).
+            command -v personal_launcher_deployments >/dev/null 2>&1 && { personal_launcher_deployments >/dev/null 2>&1 || true; }
+            _epddn_id="$(manifest_get runtime.deployment_id 2>/dev/null || true)"
+        fi
+        detect_personal_deploy_resolve "$1" recorded "$_epddn_id"
+        printf '%s\n' "$DETECT_PERSONAL_DEPLOY_DIR"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+# exakit_personal_kit_dir - the folder the kit's own Exasol Personal database
+# was recorded in: its ownership receipt when the kit owns it, the recorded
+# deployment folder when no receipt was ever written (kits up to 0.2.4).
+# Nothing for a database recorded as the user's. Twin of
+# Get-ExakitPersonalKitDir.
+exakit_personal_kit_dir() {
+    case "$(manifest_get runtime.ownership 2>/dev/null || true)" in
+        kit) manifest_get runtime.ownership_path 2>/dev/null || true ;;
+        "")  manifest_get runtime.deployment_dir 2>/dev/null || true ;;
+    esac
+}
+
+# exakit_personal_kit_missing - "<kit folder>|<folder found>" when the kit's
+# own deployment is gone from the folder it recorded, and the launcher holds a
+# deployment in its place that is not provably the kit's (another id, or no id
+# recorded): the folder of the same name in its other root (a launcher of the
+# user's moved a 0.3.0 kit's `default` there), else another deployment it
+# lists (detect_personal_deploy_found). Empty otherwise. That deployment is
+# the user's: the record is left as it is, the kit never manages it as its
+# own, and status and uninstall say that the kit's own was not found. The
+# kit's folder in use stays the recorded one (detect_personal_deploy_resolve
+# never falls back to a user's deployment). Twin of Get-ExakitPersonalKitMissing.
+exakit_personal_kit_missing() {
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 0
+    _epkm="$(exakit_personal_kit_dir)"
+    [ -n "$_epkm" ] && [ ! -e "$_epkm" ] || return 0
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    [ "$(exakit_personal_deploy_dir_now "$_epkm")" = "$_epkm" ] || return 0
+    command -v detect_personal_deploy_found >/dev/null 2>&1 || return 0
+    detect_personal_deploy_found "$_epkm"
+    [ -n "${DETECT_PERSONAL_DEPLOY_FOUND:-}" ] || return 0
+    printf '%s|%s\n' "$_epkm" "$DETECT_PERSONAL_DEPLOY_FOUND"
+}
+
+# exakit_personal_db_state - "kit_database_missing|<kit folder>|<folder found>"
+# when the deployment folder in use is not one the kit may act on, empty
+# otherwise. THE ONE RULE for every lifecycle or write action on the database
+# (start, stop, the launcher's deploy, the language containers, the MCP
+# sidecar, update personal, connect): the folder is used only when it is the
+# kit's own (the deployment id the kit recorded) or one the user adopted on
+# purpose (runtime.ownership "user", written when it is picked in the
+# installer's one question, or by a 0.3.0 kit's questions, for that folder).
+# Else:
+#   - the kit's own folder is gone and the launcher's folder holds another
+#     deployment (exakit_personal_kit_missing);
+#   - the kit's own folder holds a deployment with another id (the kit's was
+#     destroyed and the user's made in the same place, MCU-02): found = kit;
+#   - an adopted folder is gone and the launcher's folder holds another one.
+# The deployment found is the user's: no kit command acts on it, and the
+# remedy is the installer, which asks which database to use (its one
+# question lists that deployment). Nothing recorded (a first install) is no
+# state: the installer's own question decides. Twin of Get-ExakitPersonalDbState.
+exakit_personal_db_state() {
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 0
+    _epds="$(exakit_personal_kit_missing 2>/dev/null || true)"
+    if [ -n "$_epds" ]; then
+        printf 'kit_database_missing|%s\n' "$_epds"
+        return 0
+    fi
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    _epds_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+    [ -n "$_epds_dir" ] || return 0
+    case "$(manifest_get runtime.ownership 2>/dev/null || true)" in
+        user)
+            _epds_rec="$(manifest_get runtime.ownership_path 2>/dev/null || true)"
+            [ -n "$_epds_rec" ] || _epds_rec="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
+            [ -n "$_epds_rec" ] && [ ! -e "$_epds_rec" ] || return 0
+            [ "$(exakit_personal_deploy_dir_now "$_epds_rec")" = "$_epds_rec" ] || return 0
+            command -v detect_personal_deploy_found >/dev/null 2>&1 || return 0
+            detect_personal_deploy_found "$_epds_rec"
+            [ -n "${DETECT_PERSONAL_DEPLOY_FOUND:-}" ] || return 0
+            printf 'kit_database_missing|%s|%s\n' "$_epds_rec" "$DETECT_PERSONAL_DEPLOY_FOUND" ;;
+        *)
+            _epds_kit="$(exakit_personal_kit_dir)"
+            [ -n "$_epds_kit" ] && [ "$_epds_kit" = "$_epds_dir" ] && [ -d "$_epds_kit" ] || return 0
+            _epds_want="$(manifest_get runtime.deployment_id 2>/dev/null || true)"
+            [ -n "$_epds_want" ] && command -v detect_personal_deployment_id >/dev/null 2>&1 || return 0
+            _epds_has="$(detect_personal_deployment_id "$_epds_kit")"
+            [ -n "$_epds_has" ] && [ "$_epds_has" != "$_epds_want" ] || return 0
+            printf 'kit_database_missing|%s|%s\n' "$_epds_kit" "$_epds_kit" ;;
+    esac
+}
+
+# exakit_kit_database_guard [json:0|1] - 0 when the kit may act on the
+# database folder in use (exakit_personal_db_state is empty). Otherwise it
+# says so, with no launcher call, and returns 3: on stderr (once per process),
+# or with 1 as one JSON object in the shape `status --json` gives this state.
+# Every lifecycle command calls it before it touches the launcher, and the
+# functions they reach call it again, so no path acts on the user's
+# deployment. Twin of Test-ExakitKitDatabaseGuard.
+exakit_kit_database_guard() {
+    _ekdg="$(exakit_personal_db_state 2>/dev/null || true)"
+    [ -n "$_ekdg" ] || return 0
+    _ekdg="${_ekdg#*|}"
+    _ekdg_kit="${_ekdg%%|*}"
+    _ekdg_found="${_ekdg#*|}"
+    if [ "${1:-0}" = 1 ]; then
+        exakit_json_out '{"ok": false, "installed": true, "status": "no database", "error": "%s", "remedy": "%s", "remedy_hint": "%s", "runtime": {"state": "kit_database_missing", "deployment_dir": "%s", "found": "%s"}}\n' \
+            "$(_exakit_json_string "the kit's own database was not found at $_ekdg_kit, and the deployment at $_ekdg_found is not the kit's")" \
+            "$(_exakit_json_string "$(exakit_install_command)")" \
+            "the installer asks which database to use" \
+            "$(_exakit_json_string "$_ekdg_kit")" "$(_exakit_json_string "$_ekdg_found")"
+        return 3
+    fi
+    if [ -z "${_EXAKIT_KIT_DB_GUARD_SAID:-}" ]; then
+        _EXAKIT_KIT_DB_GUARD_SAID=1
+        error "The kit's own database was not found at $_ekdg_kit."
+        info "The deployment at $_ekdg_found is not the kit's, so the kit does not act on it." >&2
+        info "To use it with the kit, re-run the installer: $(exakit_install_command)" >&2
+    fi
+    return 3
+}
+
+# _exakit_legacy_kit_path <id> - the file _exakit_legacy_kit_owned proves the
+# kit installed, from what the old kit recorded; empty for an id whose proof
+# names no file (the database's proof already pins the deployment folder, and
+# follows it when the launcher moves it). Twin of Get-ExakitLegacyKitPath.
+_exakit_legacy_kit_path() {
+    case "$1" in
+        personal|launcher|exasol) manifest_get runtime.launcher 2>/dev/null || true ;;
+        exapump) manifest_get components.exapump.path 2>/dev/null || true ;;
+        uv) manifest_get components.uv.path 2>/dev/null || true ;;
     esac
 }
 
@@ -249,10 +430,15 @@ exakit_reuse_ownership() {
     # an untracked/user installation into a kit installation.
     _ero_existing="$(exakit_component_ownership "$1")"
     _ero_receipt="$(manifest_get "$(exakit_ownership_key "$1").ownership_path" 2>/dev/null || true)"
-    if [ "$_ero_existing" = kit ] && [ -z "$(manifest_get "$(exakit_ownership_key "$1").ownership" 2>/dev/null || true)" ]; then
+    _ero_legacy="$(_exakit_legacy_kit_path "$1")"
+    if [ "$_ero_existing" = kit ] && [ -z "$(manifest_get "$(exakit_ownership_key "$1").ownership" 2>/dev/null || true)" ] && \
+       { [ -z "${2:-}" ] || [ -z "$_ero_legacy" ] || [ "$_ero_legacy" = "$2" ]; }; then
         # The kit's own install from before receipts (_exakit_legacy_kit_owned):
         # write the receipt it never had. Branding it "user" here made every
         # later update, repair and uninstall leave it alone for good.
+        # Only for the path that proof is about (#40): the copy found first on
+        # PATH can be the user's own, and a kit receipt on it let a repair and
+        # the uninstall delete it. Any other path is the user's, as below.
         exakit_record_ownership "$1" kit "${2:-}"
     elif [ "$_ero_existing" != kit ] || { [ -n "${2:-}" ] && [ "$_ero_receipt" != "$2" ]; }; then
         exakit_record_ownership "$1" user "${2:-}"
@@ -504,16 +690,18 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # 404 mid-install with the launcher half-downloaded. So this constant and
 # components.personal.version in versions.json move together, and they move to
 # a release that still exists - check before pinning, not after.
-# 2.4.0 since 2026-11-04 (2.3.0 FINAL before it), so no candidate is pinned
+# 2.5.0 since 2026-11-18 (2.4.0 before it), so no candidate is pinned
 # here - the two deletions above were both candidates, and a published release
 # is not removed the same way. Verified before pinning, as the note above
-# demands: v2.4.0 on exasol/exasol-personal is published, not a draft, not a
+# demands: v2.5.0 on exasol/exasol-personal is published, not a draft, not a
 # prerelease, and carries every asset this kit fetches - the macOS and Linux
 # arm64/x86_64 tarballs, the Windows x86_64 zip, and
-# exasol-personal_2.4.0_checksums.txt - and every S3 binary pinned in
+# exasol-personal_2.5.0_checksums.txt - and every S3 binary pinned in
 # versions.json is byte-identical to the one inside that checksummed archive.
-EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.4.0}"
-EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.0}"
+# 2.5.0 moves the deployment folder itself; kits before 0.3.1 do not follow
+# it, so its versions.json row carries min_kit_version 0.3.1.
+EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.5.0}"
+EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.1}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.4.0}"
 EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # uv is the Python tool runner: uvx is the process the AI client launches to
@@ -524,7 +712,7 @@ EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # will RUN at all: below it uv's bundled CA store trusts an emSign root whose
 # intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
 # on the machine is used only at or above this floor.
-EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.8}"
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.9}"
 EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
 EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in
@@ -1913,6 +2101,22 @@ exakit_clear_runtime_failure_note() {
     return 0
 }
 
+# exakit_forget_update_failure — the reason an update of the database left in
+# the failure note when it did not happen (personal_update and its kin: a
+# rename or a launcher swap that was put back), dropped once an update of the
+# database has gone through, so status --json never reports it after it
+# stopped being true. Any other note stays.
+exakit_forget_update_failure() {
+    _efuf="$(exakit_failure_note_file)"
+    [ -f "$_efuf" ] || return 0
+    case "$(head -n 1 "$_efuf" 2>/dev/null)" in
+        "The database 'default' was not renamed to"*|"Exasol Personal was not updated"*|\
+        "Your Exasol Personal launcher"*|"The database did not stop, so it was not updated"*)
+            rm -f "$_efuf" 2>/dev/null ;;
+    esac
+    return 0
+}
+
 # reject <message> — refuse BAD INPUT and stop, without recording a failure note.
 #
 # The distinction matters to `exakit status --json`, which surfaces the note as
@@ -2048,17 +2252,40 @@ exakit_db_error_remedy() {
             esac
             ;;
     esac
+    # A virtual schema whose source is disconnected: its CONNECTION is gone,
+    # and each adapter says so in its own words (JDBC, document files, the
+    # lakehouse engine and Databricks: "connection EXAKIT_SRC_<NAME> does not
+    # exist"; MongoDB: "could not resolve Exasol CONNECTION
+    # 'EXAKIT_SRC_<NAME>'"). The fix is the reconnect the source's record
+    # names, never a write path: Databricks answers it with SQL state 42500.
+    _dber_src=""
+    case "$1" in
+        *"connection EXAKIT_SRC_"*" does not exist"*|*"resolve Exasol CONNECTION 'EXAKIT_SRC_"*)
+            _dber_src="$(printf '%s' "$1" | tr '\n' ' ' | sed -n "s/.*[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn] '\{0,1\}EXAKIT_SRC_\([A-Z0-9_]*\).*/\1/p" | head -n 1 | tr 'A-Z' 'a-z')"
+            ;;
+    esac
+    if [ -n "$_dber_src" ]; then
+        _dber_conn="$(sed -n 's/^ *"connector": *"\([a-z0-9-]*\)".*/\1/p' "$EXAKIT_HOME/sources/$_dber_src/config.json" 2>/dev/null | head -n 1)"
+        printf '%s\n' "VS_$(printf '%s' "$_dber_src" | tr 'a-z' 'A-Z') is disconnected, so its tables cannot be read. Reconnect it with its credential: exakit connect ${_dber_conn:-<connector>} --name $_dber_src --password-file <file>"
+        return 0
+    fi
     # A write refused for lack of privilege is the read-only guardrail doing its
     # job, and the tempting next move — re-run it through `exapump -p
     # starter-kit`, which connects as admin — is the one thing that breaks the
     # trust model. Say so where the error appears, not only in the docs.
-    case "$1" in
-        *"insufficient privileges"*|*"42500"*)
-            # Written for BOTH readers of this stream — the person at the
-            # terminal and an agent driving the CLI. "Say so and let the user
-            # decide" addressed only the agent, so the human it was printed to
-            # was handed a message about themselves in the third person with
-            # no action in it.
+    # SQL state 42500 alone is any refused access, a read included: it names a
+    # refused write only for a statement that writes (or when none is known).
+    # Written for BOTH readers of this stream — the person at the terminal and
+    # an agent driving the CLI. "Say so and let the user decide" addressed only
+    # the agent, so the human it was printed to was handed a message about
+    # themselves in the third person with no action in it.
+    _dber_write=0
+    _dber_head="$(printf '%s' "$_dber_stmt" | sed 's/^[[:space:](]*//')"
+    case "$_dber_head" in
+        ""|INSERT*|UPDATE*|DELETE*|MERGE*|CREATE*|DROP*|ALTER*|TRUNCATE*|GRANT*|REVOKE*|RENAME*|COMMENT*|IMPORT*|EXPORT*) _dber_write=2 ;;
+    esac
+    case "$_dber_write:$1" in
+        *"insufficient privileges"*|2:*"42500"*)
             printf '%s\n' "That write was refused by the DATABASE: the connection that ran it is read-only by design — the guardrail working as intended."
             printf '%s\n' "To run a write deliberately, use the admin path: exakit sql --write '<statement>'. Never route it through 'exapump -p starter-kit' by reflex — that profile is the ADMIN user and is not sandboxed."
             ;;
@@ -2152,6 +2379,8 @@ confirm() {
         return
     fi
     if [ "$_default" = "y" ]; then _hint="[Y/n]"; else _hint="[y/N]"; fi
+    # Never under a live spinner or bar (see ui_line_release).
+    command -v ui_line_release >/dev/null 2>&1 && ui_line_release
     printf '    %s?%s %s %s%s%s ' "${UI_ASK:-}" "${UI_RESET:-}" "$_question" "${UI_DIM:-}" "$_hint" "${UI_RESET:-}"
     if [ "$_tty" = "/dev/tty" ]; then read -r _answer < /dev/tty; else read -r _answer; fi
     _answer="${_answer:-$_default}"
@@ -2191,7 +2420,7 @@ confirm_env() {
 exakit_validate_env_answers() {
     _eva_bad=0
     _eva_say() { printf '  %s\n' "$1" >&2; _eva_bad=1; }
-    for _eva_var in EXAKIT_REUSE_DB EXAKIT_REPLACE_DB EXAKIT_PODMAN_SELFHEAL EXAKIT_CONFIRM_RUNTIME_UPDATE \
+    for _eva_var in EXAKIT_REPLACE_DB EXAKIT_PODMAN_SELFHEAL EXAKIT_CONFIRM_RUNTIME_UPDATE \
                     EXAKIT_AUTO_ROLLBACK EXAKIT_SKIP_MCP EXAKIT_LOAD_SAMPLE EXAKIT_WSL_CHECKED; do
         eval "_eva_val=\${$_eva_var:-}"
         case "$_eva_val" in
@@ -2199,6 +2428,15 @@ exakit_validate_env_answers() {
             *) _eva_say "$_eva_var must be 1 or 0, not '$_eva_val'" ;;
         esac
     done
+    # EXAKIT_REUSE_DB names a database (EXAKIT_REUSE_DB=dev), or says a new one
+    # (0, new) or the 0.3.0 yes (1): its own answer, not a yes or no
+    # (personal_reuse_answer). Only its form is checked here, the launcher's
+    # rule for a deployment name; whether the computer has that database is
+    # known only at the database step, which says so then.
+    case "${EXAKIT_REUSE_DB:-}" in
+        ''|*[!A-Za-z0-9_-]*|-*) [ -z "${EXAKIT_REUSE_DB:-}" ] || \
+            _eva_say "EXAKIT_REUSE_DB must be the name of one of your databases, or 0 for a new one, not '$EXAKIT_REUSE_DB'" ;;
+    esac
     case "${EXAKIT_INSTALL_PODMAN:-}" in ''|0|1) ;; *) _eva_say "EXAKIT_INSTALL_PODMAN must be 0 or 1, not '$EXAKIT_INSTALL_PODMAN'" ;; esac
     case "${EXAKIT_ON_EXISTING:-}" in ''|skip|replace|append) ;; *) _eva_say "EXAKIT_ON_EXISTING must be skip, replace or append, not '$EXAKIT_ON_EXISTING'" ;; esac
     case "${EXAKIT_CONTAINER_ENGINE:-}" in ''|docker|podman) ;; *) _eva_say "EXAKIT_CONTAINER_ENGINE must be docker or podman, not '$EXAKIT_CONTAINER_ENGINE'" ;; esac
@@ -2285,6 +2523,8 @@ exakit_drop_key_escapes() {
 exakit_read_hidden() {
     _erh_saved="$(stty -g < /dev/tty 2>/dev/null)"
     stty -echo < /dev/tty 2>/dev/null || return 1
+    # Never under a live spinner or bar: its next frame paints over the prompt.
+    command -v ui_line_release >/dev/null 2>&1 && ui_line_release /dev/tty
     trap 'stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null; printf "\n" > /dev/tty; exit 130' INT TERM
     printf '    %s?%s %s (input hidden): ' "${UI_ASK:-}" "${UI_RESET:-}" "$1" > /dev/tty
     # Unset first: an exported name (even empty) stays exported when assigned.
@@ -2306,6 +2546,9 @@ prompt_text() {
         printf '%s\n' "$_default"
         return 0
     fi
+    # Never under a live spinner or bar (see ui_line_release). The question
+    # goes to stderr, stdout being the answer.
+    command -v ui_line_release >/dev/null 2>&1 && ui_line_release /dev/stderr
     if [ -n "$_default" ]; then
         printf '    %s?%s %s %s[%s]%s ' "${UI_ASK:-}" "${UI_RESET:-}" "$_question" "${UI_DIM:-}" "$_default" "${UI_RESET:-}" >&2
     else
@@ -2523,23 +2766,27 @@ exakit_uv_target() {
 # .sha256 sidecars and re-hashed from the downloaded archives before pinning.
 exakit_uv_pinned_sha256() {
     case "$1" in
-        uv-0.13.8-linux-aarch64)  echo "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585" ;;
-        uv-0.13.8-linux-x86_64)   echo "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91" ;;
-        uv-0.13.8-macos-aarch64)  echo "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558" ;;
-        uv-0.13.8-macos-x86_64)   echo "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3" ;;
-        uv-0.13.8-windows-x86_64) echo "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8" ;;
+        uv-0.13.9-linux-aarch64)  echo "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d" ;;
+        uv-0.13.9-linux-x86_64)   echo "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5" ;;
+        uv-0.13.9-macos-aarch64)  echo "5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca" ;;
+        uv-0.13.9-macos-x86_64)   echo "617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041" ;;
+        uv-0.13.9-windows-x86_64) echo "edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb" ;;
         *) echo "" ;;
     esac
 }
 
 # exakit_uv_binary_sha256 uv-<version>-<platform> — the SHA-256 of the uv
 # binary inside each release archive a kit pinned and verified (0.13.6 in kit
-# 0.2.3, 0.13.7 in 0.2.4 and 0.2.5, 0.13.8 since). How a uv those kits put in
-# EXAKIT_BIN_DIR is told apart from one the user put there: they wrote no
-# ownership receipt for it (_exakit_legacy_kit_owned). Every uv the kit
-# installs from now on gets a receipt (exakit_uv_record_manifest), so this
-# table never has to grow. Taken from the archives after their digests matched
-# versions.json. Twin of Get-ExakitUvBinarySha256 in exakit-common.ps1.
+# 0.2.3, 0.13.7 in 0.2.4 and 0.2.5, 0.13.8 in 0.3.0, 0.13.9 since). How a uv
+# the kit put in EXAKIT_BIN_DIR is told apart from one the user put there when
+# no ownership receipt says so (_exakit_legacy_kit_owned): kits 0.2.3 to 0.2.5
+# wrote none, and a full uninstall keeps uv (a shared tool) but removes the
+# manifest that held its receipt. Without the advertised release here, the
+# next install recorded the kit's own uv as not the kit's and `exakit update`
+# stopped managing it. So THE ADVERTISED VERSION MUST BE LISTED for every
+# platform (tests/component-ownership.sh checks it against versions.json).
+# Taken from the archives after their digests matched versions.json. Twin of
+# Get-ExakitUvBinarySha256 in exakit-common.ps1.
 exakit_uv_binary_sha256() {
     case "$1" in
         uv-0.13.6-linux-aarch64)  printf '%s\n' 7d60258dc76bca41d7b3591cdd829fa9633827fad944970bf5e1fb2a8c01476d ;;
@@ -2557,6 +2804,11 @@ exakit_uv_binary_sha256() {
         uv-0.13.8-macos-aarch64)  printf '%s\n' f98066c132dc37b83a8861f9b538d732b5aad41d3b3a69e47abf27cdaef842a9 ;;
         uv-0.13.8-macos-x86_64)   printf '%s\n' afdbf4b93ab474668f8ad99da2fb7fb6562c020a4bbd860e9b1909181498b1b6 ;;
         uv-0.13.8-windows-x86_64) printf '%s\n' 03fa174894b9d0cbe08762d40d1c2c64d10e875bd56f1a1e334ee1e00d60cdbe ;;
+        uv-0.13.9-linux-aarch64)  printf '%s\n' 6109e47a75f2380d1cc90b00a6ee82b7b5792ddf66588625ec168545ae17512e ;;
+        uv-0.13.9-linux-x86_64)   printf '%s\n' b73acdf73b96c3ac9e56d2fa933427b3ee6a901e3cce6ba1e3ecb3f91ca0d86a ;;
+        uv-0.13.9-macos-aarch64)  printf '%s\n' 0e17c316d23b33b4e840669f516f5cb7f5c1faa816ebd3824052ab50082ecefb ;;
+        uv-0.13.9-macos-x86_64)   printf '%s\n' 9d275208c058354f9b300ea46a499c7a29de3249ae839503cadff2c01c159d69 ;;
+        uv-0.13.9-windows-x86_64) printf '%s\n' 7e6349bc24cfc7249f892c41298e4371826a19008c3cbcfe13eacd08ac398470 ;;
         *) printf '\n' ;;
     esac
 }
@@ -3032,7 +3284,13 @@ _exakit_manifest_log_stderr() {
 }
 
 # manifest_set <dot.path> <value>
-# Value is stored as JSON if it parses as JSON, otherwise as a string.
+# JSON is true, false, null, an object, an array, a quoted string and a plain
+# integer; anything else is text, as given. A NUMBER NEVER COMES OF AN EXPONENT
+# OR A POINT: a deployment id like 3e082473 is a JSON number, and was written as
+# Infinity, after which the kit did not know its own database. An id, a name,
+# a path and a checksum are text whatever they look like (30824735, 01234567).
+# Nothing that is not finite is ever written, inside an object or an array
+# neither. ⇄ the readers below take an id that is not text for none.
 manifest_set() {
     require_python3
     _exakit_manifest_snap_drop
@@ -3095,10 +3353,26 @@ node = doc
 parts = key.split(".")
 for part in parts[:-1]:
     node = node.setdefault(part, {})
-try:
-    node[parts[-1]] = json.loads(value)
-except json.JSONDecodeError:
-    node[parts[-1]] = value
+import re
+last = parts[-1]
+text_only = (last in ("deployment_id", "made_in", "id", "name", "path", "launcher", "launcher_home", "user_launcher",
+                      "password_file", "deployment_name", "tls_fingerprint")
+             or last.startswith("private_move_")
+             or last.endswith(("_id", "_path", "_dir", "_name", "_sha256", "_file", "_launcher")))
+def _finite(number):
+    parsed = float(number)
+    if parsed in (float("inf"), float("-inf")) or parsed != parsed:
+        raise ValueError(number)
+    return parsed
+def _constant(word):
+    raise ValueError(word)
+node[last] = value
+if not text_only and (value in ("true", "false", "null") or value[:1] in ('"', "{", "[")
+                      or re.match(r"(?:0|-?[1-9][0-9]*)\Z", value)):
+    try:
+        node[last] = json.loads(value, parse_float=_finite, parse_constant=_constant)
+    except ValueError:
+        pass
 try:
     _exakit_write(path, doc)
 except OSError:
@@ -3244,6 +3518,8 @@ def walk(prefix, node):
         if not isinstance(key, str) or "\t" in key or "\n" in key or "\r" in key:
             continue
         name = prefix + key
+        if key in ("deployment_id", "made_in", "private_move_id") and not isinstance(value, str):
+            continue
         text = value if isinstance(value, str) else json.dumps(value)
         out.append(name + "\t" + (multi if ("\n" in text or "\r" in text) else text))
         if isinstance(value, dict):
@@ -3296,6 +3572,10 @@ for part in key.split("."):
         node = node[part]
     else:
         sys.exit(1)
+# An id that is not text is none (manifest_set): it is read again from the
+# deployment's own file, never compared as another id.
+if key.split(".")[-1] in ("deployment_id", "made_in", "private_move_id") and not isinstance(node, str):
+    sys.exit(1)
 print(node if isinstance(node, str) else json.dumps(node))
 PY
 }
@@ -3338,6 +3618,8 @@ for key in keys:
         else:
             node = MISSING
             break
+    if key.split(".")[-1] in ("deployment_id", "made_in", "private_move_id") and not isinstance(node, str):
+        node = MISSING
     if node is MISSING:
         print("")
     else:
@@ -8519,7 +8801,7 @@ _exakit_notice_compute() {
         ! exakit_version_same "$_notice_cur" "$_notice_avail" || continue
         # Different is not the same as behind. An install that is PAST the
         # advertised version has nothing pending: the kit never moves a component
-        # backwards, so `exakit version` renders that row as "none" and
+        # backwards, so `exakit version` renders that row as "ahead" and
         # `exakit update` says "keeping yours". Announcing an update here made the
         # three commands contradict each other, and pointed the user at a command
         # that could not do anything. Compared in place rather than through
@@ -8805,7 +9087,10 @@ _exakit_version_row() {
         # neither the "apply them in one go" hint nor the heavy deferral,
         # because no command belongs in this row at all.
         #
-        # The row says only "none". Not "yours is newer than tested", which
+        # The row says "ahead (manifest <date>)", the twin of "current (manifest
+        # <date>)" (the raw status stays "none", which the JSON reports as
+        # "ahead"). Not a bare "none", which read as a missing value (#46), and
+        # not "nothing to do", which did not say why. Not "yours is newer than tested", which
         # apologised for the install and made the tested set sound abandoned;
         # not the tagged number either, which invites the reader to go looking
         # for a way back to it. There is nothing to do, so the row says so and
@@ -8846,7 +9131,7 @@ _exakit_version_row() {
         _status="current (manifest $_uc_against)"
     fi
     printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037\036' \
-        "$_row_component" "$_row_installed" "$(_exakit_status_cell "$_status" "$_row_severity")" "$_row_note" \
+        "$_row_component" "$_row_installed" "$(if [ "$_status" = none ]; then if [ -n "$_uc_against" ]; then printf 'ahead (manifest %s)' "$_uc_against"; else printf 'ahead'; fi; else _exakit_status_cell "$_status" "$_row_severity"; fi)" "$_row_note" \
         "$(exakit_component_note "$_row_component" 2>/dev/null || true)" "$_row_available" "$_status" \
         "${_row_severity:-normal}" "$_pending"
 }
@@ -9680,6 +9965,8 @@ exakit_runtime_update_preanswer() {
 # ⇄ twin: Write-ExakitRuntimeUpdateExplanation in setup/exakit.ps1.
 exakit_runtime_update_explain() {
     warn "$1 $2 -> $3 needs the database stopped."
+    # Said: the updater that stops it (personal_update) does not say it again.
+    EXAKIT_RUNTIME_UPDATE_SAID=1
     case "$1" in
         personal)
             info "The launcher is replaced; the database is checked afterwards and started again if it ends up down — usually under a minute."
@@ -9726,9 +10013,22 @@ exakit_apply_runtime_update() {
     # question twice is not a safety feature, so the answer is passed down.
     EXAKIT_CONFIRM_RUNTIME_UPDATE=1
     export EXAKIT_CONFIRM_RUNTIME_UPDATE
-    exakit_update_component "$1"
+    # An updater that stops the database itself starts it again itself, once
+    # (personal_update: the one restart of the update to 2.5), and says so in
+    # EXAKIT_RUNTIME_UPDATE_RESTARTED: it is never started a second time here.
+    EXAKIT_RUNTIME_UPDATE_RESTARTED=0
+    _aru_rc=0
+    exakit_update_component "$1" || _aru_rc=$?
+    EXAKIT_RUNTIME_UPDATE_SAID=0
+    # NOT UPDATED is never reported as updated. 2: the updater said why and put
+    # back what it had changed, and the next update tries again.
+    if [ "$_aru_rc" != 0 ]; then
+        [ "$_aru_rc" = 2 ] && return 2
+        return 1
+    fi
     _aru_status="$(exakit_runtime_status)"
-    if [ "$_aru_was_running" = "yes" ] && [ -n "$_aru_status" ] && [ "$_aru_status" != "running" ] && [ "$_aru_status" != "starting" ]; then
+    if [ "$_aru_was_running" = "yes" ] && [ "${EXAKIT_RUNTIME_UPDATE_RESTARTED:-0}" != 1 ] && \
+       [ -n "$_aru_status" ] && [ "$_aru_status" != "running" ] && [ "$_aru_status" != "starting" ]; then
         info "Bringing the database back up"
         exakit_runtime_start
         _aru_status="$(exakit_runtime_status)"
@@ -9743,9 +10043,12 @@ exakit_apply_runtime_update() {
 }
 
 # exakit_offer_runtime_update <component> <actual> <installed> <advertised> —
-# the heavy part of a routine `exakit update`, decided here instead of being
-# handed to the user as homework. Returns 0 when it was applied, 1 when it was
-# deferred (and then prints the exact command that applies it later).
+# the heavy part of a routine `exakit update`, done here instead of being
+# handed to the user as homework, with no question. Returns 0 when it was
+# applied, 1 when it was deferred (a major upgrade, or
+# EXAKIT_CONFIRM_RUNTIME_UPDATE=0, and then prints the exact command), 2 when
+# it did not happen and what it had changed was put back (said by the
+# updater: the next `exakit update` tries again).
 #
 # On backups: the kit has no data-export facility, and this path needs none.
 # The runtime update does not touch the database content — it replaces the
@@ -9765,34 +10068,188 @@ exakit_offer_runtime_update() {
         return 1
     fi
 
-    case "$(exakit_runtime_update_preanswer)" in
-        yes)
-            exakit_runtime_update_explain "$_oru_actual" "$_oru_cur" "$_oru_avail"
-            ;;
-        no)
-            warn "$_oru_actual $_oru_cur -> $_oru_avail was left alone: the database update is answered 'no' (EXAKIT_CONFIRM_RUNTIME_UPDATE)."
-            info "Apply it when convenient:  exakit update"
-            return 1
-            ;;
-        *)
-            # No terminal, no answer: a prompt nobody can answer must never turn
-            # into a stopped database, so a pipe, a CI job, a cron entry and a
-            # scripted install all get exactly today's safe deferral.
-            if ! exakit_stdin_is_tty; then
-                warn "$_oru_actual $_oru_cur -> $_oru_avail needs the database stopped, so it is not part of a routine update."
-                info "Apply it when convenient:  exakit update"
-                info "Unattended runs can opt in:  exakit update --yes  (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1)"
-                return 1
-            fi
-            exakit_runtime_update_explain "$_oru_actual" "$_oru_cur" "$_oru_avail"
-            if ! confirm "Stop the database and update the runtime now?" n; then
-                info "Nothing was stopped. Apply it when convenient:  exakit update"
-                return 1
-            fi
-            ;;
-    esac
+    # The runtime update is the point of the update (the launcher to the
+    # pinned Exasol Personal, the 20-session limit gone with it), so it asks
+    # nothing: with or without a terminal or --yes, the database is stopped,
+    # updated and started again, and the run says so first. Only a deliberate
+    # EXAKIT_CONFIRM_RUNTIME_UPDATE=0 keeps the database as it is.
+    if [ "$(exakit_runtime_update_preanswer)" = no ]; then
+        warn "$_oru_actual $_oru_cur -> $_oru_avail was left alone: the database update is answered 'no' (EXAKIT_CONFIRM_RUNTIME_UPDATE)."
+        info "Apply it when convenient:  exakit update --yes"
+        return 1
+    fi
+    exakit_runtime_update_explain "$_oru_actual" "$_oru_cur" "$_oru_avail"
 
     exakit_apply_runtime_update "$_oru_component"
+}
+
+# exakit_update_session_limit — the 20-session limit a 2.4 launcher set on
+# the kit's database, removed by an update whose launcher is already current
+# (U1-alt). personal_update lifts it after a launcher swap, and only then: a
+# 2.4-made deployment already driven by launcher 2.5.0 (updated by hand, or
+# installed by a 0.3.0 kit during a manifest race) kept the limit through
+# every `exakit update`. personal_session_limit_pending holds every guard (the
+# kit's own database, or one the user let the kit use, never in
+# kit_database_missing, launcher 2.5.0 or later, the line still there, not yet
+# lifted), so a second update does nothing at all. Removing the limit is the
+# point of the update to 2.5, so it asks nothing: a running database restarts
+# once, with or without a terminal or --yes. Only EXAKIT_CONFIRM_RUNTIME_UPDATE=0
+# holds it back (`exakit update --json` without --yes sets it), and then the
+# remedy is `exakit update --yes`. A 0.3.0 database still named `default` under
+# such a launcher is renamed to starter-kit-local in that same restart
+# (personal_update_current). Returns 0 when lifted or nothing to do, 2 when the
+# rename or the lift failed or was held back (said).
+# ⇄ twin: Invoke-ExakitUpdateSessionLimit in setup/exakit.ps1.
+exakit_update_session_limit() {
+    EXAKIT_UPDATE_LIMIT_REMEDY="exakit update"
+    command -v personal_session_limit_pending >/dev/null 2>&1 || return 0
+    # A 0.3.0 kit's database still named `default`, under a launcher that is
+    # current: renamed to starter-kit-local and its limit lifted, in the one
+    # restart of the update to 2.5 (personal_update_current).
+    if command -v personal_update_current >/dev/null 2>&1 && \
+       [ -n "$(personal_update_rename_source 2>/dev/null || true)" ]; then
+        _eusl_rc=0
+        personal_update_current || _eusl_rc=$?
+        # Held back by a deliberate no: the row names the command that applies it.
+        [ "$_eusl_rc" != 12 ] || EXAKIT_UPDATE_LIMIT_REMEDY="exakit update --yes"
+        [ "$_eusl_rc" = 0 ] || return 2
+    fi
+    if personal_session_limit_pending; then
+        _eusl_rc=0
+        personal_lift_session_limit || _eusl_rc=$?
+        [ "$_eusl_rc" != 12 ] || EXAKIT_UPDATE_LIMIT_REMEDY="exakit update --yes"
+        [ "$_eusl_rc" = 0 ] || return 2
+    fi
+    # What an update cut short left to do: the kit's old launcher it retires,
+    # and the start at its end (Q8).
+    command -v personal_retire_pending >/dev/null 2>&1 && personal_retire_pending
+    command -v personal_update_finish_start >/dev/null 2>&1 || return 0
+    _eusl_rc=0
+    personal_update_finish_start || _eusl_rc=$?
+    case "$_eusl_rc" in
+        0)  return 0 ;;
+        12) EXAKIT_UPDATE_LIMIT_REMEDY="exakit update --yes" ;;
+        *)  EXAKIT_UPDATE_LIMIT_REMEDY="exakit start" ;;
+    esac
+    return 2
+}
+
+# _exakit_update_foreign_personal <target> <installed> <advertised> — the
+# personal row of `exakit update` when the launcher is not the kit's (its
+# bytes no longer match the receipt: a 2.4 launcher the user replaced by hand
+# with 2.5.0 at the kit's own path). The launcher is left exactly as it is
+# (#41), but the database it drives can still be the kit's, with the
+# 20-session limit on it (U1-alt follow-up): the foreign arm ran before the
+# "current" arms, so the lift never did. exakit_update_session_limit decides,
+# with every guard of the lift, and renames a 0.3.0 database still named
+# `default` when that launcher is 2.5.0 or later. Returns 1 when there is no
+# limit to remove and nothing to rename: the caller then runs
+# exakit_update_foreign as before. Otherwise it writes
+# the row and returns 0, with _eufp_outcome "deferred" (the lift failed:
+# remedy exakit update, as the "current" arms) or "current" (lifted, the launcher at the advertised version). A
+# launcher at another version, lifted, keeps the row exakit_update_foreign
+# writes. ⇄ twin: Invoke-ExakitUpdateForeignPersonal in setup/exakit.ps1.
+_exakit_update_foreign_personal() {
+    _eufp_outcome=""
+    command -v personal_session_limit_pending >/dev/null 2>&1 || return 1
+    # The limit to remove, or a 0.3.0 database still named `default` to rename
+    # (exakit_update_session_limit does both, in one restart).
+    personal_session_limit_pending || \
+        { command -v personal_update_rename_source >/dev/null 2>&1 && \
+          [ -n "$(personal_update_rename_source 2>/dev/null || true)" ]; } || return 1
+    if ! exakit_update_session_limit; then
+        exakit_preserve_component personal
+        _eufp_outcome=deferred
+        _exakit_update_note personal deferred "${2:-}" "${3:-}" "${EXAKIT_UPDATE_LIMIT_REMEDY:-exakit update}"
+        return 0
+    fi
+    [ -n "${3:-}" ] && exakit_version_same "${2:-}" "$3" || return 1
+    exakit_preserve_component personal
+    _eufp_outcome=current
+    _exakit_update_note personal current "$2" "$3"
+    return 0
+}
+
+# _exakit_update_user_personal <target> <installed> <advertised> — the
+# personal row of `exakit update` for a database the user let the 0.3.0 kit
+# use (runtime.ownership user), run by THEIR launcher: the update to 2.5 with
+# that permission (personal_update_user), on the kit's own launcher. Theirs is
+# never replaced, and the database is
+# renamed to starter-kit-local and its limit lifted, in one restart. Returns 1
+# when that is not this row: the caller goes on as before (the limit alone,
+# _exakit_update_foreign_personal, else exakit_update_foreign). Otherwise it
+# writes the row and returns 0, with _euup_outcome "updated", "deferred" (it
+# did not happen: said and put back, remedy exakit update, the reason in the
+# row under --json; or EXAKIT_CONFIRM_RUNTIME_UPDATE=0, remedy exakit update
+# --yes) or "failed" (a die under --json, in its own subshell as every
+# updater there).
+_exakit_update_user_personal() {
+    _euup_outcome=""
+    command -v personal_update_user >/dev/null 2>&1 || return 1
+    # The kit's OWN database on the user's 2.4 (Q15) takes the same row: it
+    # moves into the kit's private home under the kit's own 2.5
+    # (personal_update_private, the same return codes).
+    _euup_fn=personal_update_user
+    if [ "$(manifest_get runtime.ownership 2>/dev/null || true)" != user ]; then
+        command -v personal_update_private >/dev/null 2>&1 || return 1
+        _euup_fn=personal_update_private
+    fi
+    _euup_rc=0
+    _euup_error=""
+    if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
+        _exakit_update_note_begin
+        ( "$_euup_fn" "${2:-}" "${3:-}" ) || _euup_rc=$?
+        _exakit_update_note_end
+        _euup_error="${_upd_note_new:-}"
+    else
+        "$_euup_fn" "${2:-}" "${3:-}" || _euup_rc=$?
+    fi
+    case "$_euup_rc" in
+        10) return 1 ;;
+        0)  _euup_outcome=updated
+            _exakit_update_note personal updated "${2:-}" "${3:-}" ;;
+        11) _euup_outcome=deferred
+            _exakit_update_note personal deferred "${2:-}" "${3:-}" "exakit update" "$_euup_error" \
+                "Run exakit update again once that is solved." ;;
+        12) _euup_outcome=deferred
+            _exakit_update_note personal deferred "${2:-}" "${3:-}" "exakit update --yes" ;;
+        *)  _euup_outcome=failed
+            _exakit_update_failure_remedy personal "$_euup_error"
+            _exakit_update_note personal failed "${2:-}" "${3:-}" "$_ufr_remedy" \
+                "${_euup_error:-the update did not finish (see exakit logs)}" "$_ufr_hint" ;;
+    esac
+    return 0
+}
+
+# _exakit_update_preview_personal <plan|backup> <foreign|current> <installed>
+# <advertised> — the personal row of `exakit update personal --plan` (or
+# --backup) where the launcher is not swapped by personal_update: said, and
+# nothing done. <foreign>: the launcher is not the kit's, so first the update
+# of a database the user let the 0.3.0 kit use with their own launcher
+# (personal_update_user_preview); <current>, and <foreign> when that is not
+# the case: the rename and the 20-session limit the kit's database still
+# waits for, with no launcher to replace (personal_update_preview_database).
+# --backup says only that there is nothing to back up first, as
+# personal_update does for a launcher swap. 0 when it said something, 1 when
+# there is nothing to update (nothing said).
+_exakit_update_preview_personal() {
+    if [ "$2" = foreign ] && command -v personal_update_user_preview >/dev/null 2>&1 && \
+       personal_update_user_preview "$1" "${3:-}" "${4:-}"; then
+        return 0
+    fi
+    if [ "$2" = foreign ] && command -v personal_update_private_preview >/dev/null 2>&1 && \
+       personal_update_private_preview "$1" "${4:-}"; then
+        return 0
+    fi
+    command -v personal_update_preview_database >/dev/null 2>&1 || return 1
+    if [ "$1" = backup ]; then
+        ( personal_update_preview_database current ) >/dev/null 2>&1 || return 1
+        info "This update neither deletes nor migrates the tables in your database, so there is nothing to back up first."
+    else
+        personal_update_preview_database current || return 1
+    fi
+    info "Apply it with: exakit update personal"
+    return 0
 }
 
 # exakit_update_options_hint — the ONE sentence that says which options
@@ -9835,6 +10292,18 @@ exakit_update() {
         EXAKIT_CONFIRM_RUNTIME_UPDATE=1
         export EXAKIT_CONFIRM_RUNTIME_UPDATE
     fi
+    # AN EMPTY ID IS BAD INPUT, NEVER "EVERYTHING". `exakit update dash-server
+    # "$EXTRA"` with EXTRA unset handed "" to exakit_update_targets, whose
+    # ${1:-all} answered the whole kit: the runtime, uv and the kit itself were
+    # updated unattended, and without the blanket run's database offer. A
+    # leading "" became all the same way. Each id is named by its position
+    # among the words left once the options are taken out. ⇄ twin:
+    # Invoke-CmdUpdate.
+    _upd_pos=0
+    for _upd_more in "$@"; do
+        _upd_pos=$((_upd_pos + 1))
+        [ -n "$_upd_more" ] || reject "Component id $_upd_pos of 'exakit update' is empty. Name each component to update, or run 'exakit update' alone to update everything."
+    done
     _target="${1:-all}"
     if [ "$#" -gt 0 ]; then shift; fi
     case "$_target" in
@@ -9847,9 +10316,26 @@ exakit_update() {
     # as an option and refused with a message about options.
     # Bad input is exit 2 and records nothing, like every other refusal: an
     # option behind the wrong target is not a failed update, so not a die.
+    # IN ANY ORDER. personal, runtime, database and db keep the rest of the
+    # line for the staged upgrade's options (exakit update personal --plan),
+    # but only while the rest IS options: `exakit update runtime dash-server`
+    # once said "Everything is already current." with dash-server never looked
+    # at, or died "Unknown option 'dash-server'" - #47 in the other order. A
+    # word that is not an option makes the line a list of ids, read exactly as
+    # after any other first id. ⇄ twin: Invoke-CmdUpdate, which reads every
+    # word after the options as an id.
+    _upd_ids=0
     if [ "$#" -gt 0 ]; then
         case "$_target" in
-            personal|runtime|database|db) ;;
+            personal|runtime|database|db)
+                for _upd_more in "$@"; do
+                    case "$_upd_more" in -*) ;; *) _upd_ids=1 ;; esac
+                done ;;
+            *) _upd_ids=1 ;;
+        esac
+    fi
+    if [ "$_upd_ids" = 1 ]; then
+        case "$_target" in
             all) reject "'exakit update' with no id updates everything; name components instead of 'all' to update only those." ;;
             *)
                 for _upd_more in "$@"; do
@@ -9876,6 +10362,12 @@ $_upd_more_targets" ;;
     # and says so.
     exakit_update_lock_acquire "$_upd_json" || return $?
     exakit_init_logging
+    # A private move an earlier update did not finish, taken back before this
+    # one looks at anything (personal_private_move_recover). Never for a plan.
+    case " $* " in
+        *" --plan "*|*" --backup "*) ;;
+        *)  command -v personal_private_move_recover >/dev/null 2>&1 && personal_private_move_recover ;;
+    esac
     # Showing updates is one of the two moments the add-ons' GitHub names,
     # links and Abouts are looked up (the other is the install's offer).
     command -v _exakit_marketplace_warm_about >/dev/null 2>&1 && _exakit_marketplace_warm_about all
@@ -9914,6 +10406,11 @@ $_upd_more_targets" ;;
         ( _exakit_update_run "$_target" "$_targets" "$@" ) >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
         _upd_rc=$?
         _exakit_update_note_end
+        # The database updated, or current: the reason an earlier update of it
+        # left is history, also when the note end above has just put it back.
+        if grep -qE '^personal[|](updated|current)[|]' "$EXAKIT_UPDATE_RESULTS" 2>/dev/null; then
+            exakit_forget_update_failure
+        fi
         ui_spin_end
         _upd_run_error=""
         _ufr_remedy=""
@@ -10018,6 +10515,9 @@ exakit_update_lock_acquire() {
 # it reads them (EXAKIT_UPDATE_ROW_FIELDS=7, set by exakit_update_handover).
 # Any other run reads its own rows. ⇄ twin: Add-ExakitUpdateNote.
 _exakit_update_note() {
+    # The database updated, or current: an earlier update's reason is history
+    # (under --json it comes back with _exakit_update_note_end, so it goes here).
+    case "$1|$2" in personal\|updated|personal\|current) exakit_forget_update_failure ;; esac
     [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] || return 0
     if [ "${EXAKIT_UPDATE_HANDOVER:-0}" = "1" ] && [ "${EXAKIT_UPDATE_ROW_FIELDS:-5}" != "7" ]; then
         printf '%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" >> "$EXAKIT_UPDATE_RESULTS"
@@ -10153,7 +10653,10 @@ if failed:
     hint = failed[0].get("remedy_hint")
 elif deferred:
     status, remedy = "deferred", deferred[0].get("remedy") or "exakit update --yes"
-    if deferred[0].get("component") == "core-setup":
+    if deferred[0].get("remedy_hint"):
+        # A row that says why it waits says it best.
+        hint = deferred[0]["remedy_hint"]
+    elif deferred[0].get("component") == "core-setup":
         # New kit setup that waits for a STOPPED database is deferred too, and
         # its remedy says so: no hint.
         hint = None
@@ -10254,6 +10757,23 @@ _exakit_update_run() {
     _upd_done=""
     _upd_refreshed=""
     _upd_failed=0
+    _upd_missing=""
+    # --plan AND --backup TELL, THEY NEVER CHANGE ANYTHING (personal_update's
+    # own rule: a flag that reads as "tell me" must never write). Only the
+    # updater of the kit's own launcher read them, so the other arms of the
+    # personal row (the user's own launcher, a launcher that is not the
+    # kit's, one already current) stopped, renamed and restarted the database
+    # under a plan. Read once here, the last one winning as in personal_update;
+    # those arms then say what they would do (_exakit_update_preview_personal)
+    # and the row is deferred, with the command that applies it.
+    _upd_preview=""
+    for _upd_opt in "$@"; do
+        case "$_upd_opt" in
+            --plan)   _upd_preview=plan ;;
+            --backup) _upd_preview=backup ;;
+            --apply)  _upd_preview="" ;;
+        esac
+    done
     for _component in $_targets; do
         # A run handed over by the previous kit's updater: that run already
         # updated the kit itself, and reporting it again here would list the
@@ -10278,11 +10798,60 @@ _exakit_update_run() {
             _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update"
             continue
         fi
+        # A database of the kit's own that ran on the user's own launcher, already at the
+        # advertised version: the kit's own launcher goes into the kit folder
+        # (personal_kit_copy_ensure), and the row goes on as the kit's own.
+        # Theirs is not touched. Never in a plan or a backup.
+        if [ "$_upd_actual" = personal ] && [ -z "$_upd_preview" ] && [ -n "$_cur" ] && [ -n "$_avail" ] && \
+           command -v personal_kit_copy_ensure >/dev/null 2>&1; then
+            # An update cut short between the kit folder's launcher and its
+            # receipt is finished first; what cannot be is not "current".
+            _upd_fin_rc=0
+            personal_kit_launcher_finish "$_avail" || _upd_fin_rc=$?
+            if [ "$_upd_fin_rc" != 0 ]; then
+                _deferred=$((_deferred + 1))
+                _exakit_update_note personal deferred "$_cur" "$_avail" \
+                    "$([ "$_upd_fin_rc" = 12 ] && printf 'exakit update --yes' || printf 'exakit update')"
+                continue
+            fi
+            personal_kit_copy_ensure "$_avail" || true
+        fi
         # A component the kit did not install (ownership receipt) is never
         # written by the kit: behind the advertised version it is updated
         # through the tool that owns it, or kept with the command to run (see
         # exakit_update_foreign).
         if [ -n "$_cur" ] && [ "$_cur" != "not installed" ] && ! exakit_component_is_managed "$_upd_actual"; then
+            # A plan or a backup: what the two arms below would do, said and
+            # not done. With nothing for them to do, the row is the one
+            # exakit_update_foreign writes (it changes nothing for personal).
+            if [ "$_upd_actual" = personal ] && [ -n "$_upd_preview" ]; then
+                if _exakit_update_preview_personal "$_upd_preview" foreign "$_cur" "$_avail"; then
+                    _deferred=$((_deferred + 1))
+                    _exakit_update_note personal deferred "$_cur" "$_avail" "exakit update personal"
+                else
+                    exakit_update_foreign "$_upd_actual" "$_cur" "$_avail"
+                fi
+                continue
+            fi
+            # A database the user let the 0.3.0 kit use, run by their own
+            # launcher: the kit's own launcher takes it over with that
+            # permission, theirs stays (_exakit_update_user_personal, #41).
+            if [ "$_upd_actual" = personal ] && _exakit_update_user_personal "$_target" "$_cur" "$_avail"; then
+                case "$_euup_outcome" in
+                    updated)  _acted=$((_acted + 1))
+                              _upd_done="${_upd_done}${_upd_done:+, }$_upd_actual" ;;
+                    deferred) _deferred=$((_deferred + 1)) ;;
+                    *)        _upd_failed=$((${_upd_failed:-0} + 1)) ;;
+                esac
+                continue
+            fi
+            # A launcher the kit did not install can still drive the kit's own
+            # database with the 20-session limit on it: the launcher stays as
+            # it is, the limit is removed (_exakit_update_foreign_personal).
+            if [ "$_upd_actual" = personal ] && _exakit_update_foreign_personal "$_target" "$_cur" "$_avail"; then
+                [ "$_eufp_outcome" = deferred ] && _deferred=$((_deferred + 1))
+                continue
+            fi
             exakit_update_foreign "$_upd_actual" "$_cur" "$_avail"
             if [ "$_euf_outcome" = updated ]; then
                 _acted=$((_acted + 1))
@@ -10297,6 +10866,24 @@ _exakit_update_run() {
             _exakit_update_note "$_upd_actual" skipped "$_cur" "$_avail"
             [ "$_target" = "all" ] && continue
             die "$_upd_actual has no build for this platform, so there is nothing to update."
+        fi
+        # A NAMED ADD-ON THAT WAS NEVER INSTALLED. Only an explicit id reaches
+        # here (all lists installed add-ons only). Its module refused with "not
+        # kit-owned; its owner manages updates" and the row's remedy was this
+        # same command, so an agent obeying remedy looped on it. With no kit
+        # receipt and nothing of the user's on the machine, the answer is the
+        # install. ⇄ twin: the same arm in Invoke-ExakitUpdateRun.
+        if [ -z "$_cur" ] && _exakit_addon_registered "$_upd_actual" && \
+           ! manifest_get "$(exakit_ownership_key "$_upd_actual")" >/dev/null 2>&1 && \
+           ! _exakit_addon_system_present "$_upd_actual" >/dev/null 2>&1; then
+            warn "$_upd_actual is not installed, so there is nothing to update. Install it with: exakit marketplace $_upd_actual"
+            _exakit_update_note "$_upd_actual" failed "" "$_avail" "exakit marketplace $_upd_actual" \
+                "$_upd_actual is not installed, so there is nothing to update." \
+                "Install it with: exakit marketplace $_upd_actual"
+            _upd_failed=$((${_upd_failed:-0} + 1))
+            _upd_missing="${_upd_missing}${_upd_missing:+ }$_upd_actual"
+            _acted=$((_acted + 1))
+            continue
         fi
         # Nothing advertised for this component (unreadable manifest, or a
         # component this kit knows nothing about): a routine update says so and
@@ -10320,10 +10907,8 @@ _exakit_update_run() {
             _exakit_update_note "$_upd_actual" ahead "$_cur" "$_avail"
             continue
         fi
-        # A blanket update stops the database only for an answer it was given: on a
-        # terminal it asks, with a flag or the env var it was already told, and with
-        # neither it defers exactly as it always did. See
-        # exakit_offer_runtime_update.
+        # A blanket update stops the database, updates the runtime and starts
+        # it again with no question. See exakit_offer_runtime_update.
         if [ "$_target" = "all" ] && exakit_component_is_heavy "$_upd_actual"; then
             if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" != "unknown" ] && ! exakit_version_same "$_cur" "$_avail"; then
                 # Under --json the offer runs in its own subshell, like every
@@ -10333,13 +10918,22 @@ _exakit_update_run() {
                 # remedy, not an anonymous end of run.
                 # 10 is the offer's own "deferred"; anything else non-zero is
                 # a die.
+                # 11: it did not happen and was put back (the offer's 2), the
+                # reason said, and the next update tries again.
                 _upd_offer_rc=0
+                _upd_offer_error=""
                 if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
                     _exakit_update_note_begin
-                    ( exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail" || exit 10 ) || _upd_offer_rc=$?
+                    ( exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail"
+                      _upd_offer_rc=$?
+                      [ "$_upd_offer_rc" = 0 ] && exit 0
+                      [ "$_upd_offer_rc" = 2 ] && exit 11
+                      exit 10 ) || _upd_offer_rc=$?
                     _exakit_update_note_end
+                    _upd_offer_error="${_upd_note_new:-}"
                 else
-                    exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail" || _upd_offer_rc=10
+                    exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail" || _upd_offer_rc=$?
+                    case "$_upd_offer_rc" in 0) ;; 2) _upd_offer_rc=11 ;; *) _upd_offer_rc=10 ;; esac
                 fi
                 if [ "$_upd_offer_rc" = "0" ]; then
                     _acted=$((_acted + 1))
@@ -10348,6 +10942,10 @@ _exakit_update_run() {
                 elif [ "$_upd_offer_rc" = "10" ]; then
                     _deferred=$((_deferred + 1))
                     _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update --yes"
+                elif [ "$_upd_offer_rc" = "11" ]; then
+                    _deferred=$((_deferred + 1))
+                    _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update" "$_upd_offer_error" \
+                        "Run exakit update again once that is solved."
                 else
                     _upd_error="${_upd_note_new:-}"
                     _exakit_update_failure_remedy "$_component" "$_upd_error"
@@ -10355,6 +10953,11 @@ _exakit_update_run() {
                         "${_upd_error:-the update did not finish (see exakit logs)}" "$_ufr_hint"
                     _upd_failed=$((${_upd_failed:-0} + 1))
                 fi
+            elif [ "$_upd_actual" = personal ] && ! exakit_update_session_limit; then
+                # The launcher is current and removing the 20-session limit
+                # failed (said): the row waits for the next update.
+                _deferred=$((_deferred + 1))
+                _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "${EXAKIT_UPDATE_LIMIT_REMEDY:-exakit update}"
             else
                 _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
             fi
@@ -10364,13 +10967,16 @@ _exakit_update_run() {
         # plan, not a status table. `exakit version` is where everything is
         # listed, including what is already current.
         #
-        # A marketplace add-on named EXPLICITLY is the exception: its update hook
-        # is also its repair command (it rewrites the launcher a newer kit
-        # improved, re-registers the boot entry, re-reads a changed DSN), so
-        # `exakit update dash-server` must reach the module even when the version
-        # already matches. `update all` still skips it — a routine update stays a
-        # work plan, not a sweep of every component's repair path — unless the
-        # add-on itself says it needs one (_exakit_addon_needs_update).
+        # A marketplace add-on named EXPLICITLY is the exception: it reaches its
+        # module's update even when the version already matches, and the module
+        # decides what a same-version run does. Some repair there (a launcher an
+        # earlier kit wrote). dash-server moves to a changed
+        # EXAKIT_DASH_SERVER_PORT and otherwise changes nothing: it does not
+        # restart a running server, which is `exakit stop dash-server`, then
+        # `exakit start dash-server`. `update all` still skips a current add-on -
+        # a routine update stays a work plan, not a sweep of every component's
+        # repair path - unless the add-on itself says it needs one
+        # (_exakit_addon_needs_update).
         _upd_needs=0
         if exakit_version_same "$_cur" "$_avail" && \
            _exakit_addon_needs_update "$_upd_actual"; then
@@ -10384,6 +10990,22 @@ _exakit_update_run() {
         fi
         if exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; then
             if [ "$_target" = "all" ] || ! _exakit_addon_registered "$_component"; then
+                # A current launcher can still leave the 20-session limit on
+                # the kit's database: `exakit update personal` removes it, as
+                # it does after a launcher swap (exakit_update_session_limit).
+                # A plan or a backup says it instead.
+                if [ "$_upd_actual" = personal ] && [ -n "$_upd_preview" ]; then
+                    if _exakit_update_preview_personal "$_upd_preview" current "$_cur" "$_avail"; then
+                        _deferred=$((_deferred + 1))
+                        _exakit_update_note personal deferred "$_cur" "$_avail" "exakit update personal"
+                        continue
+                    fi
+                elif [ "$_upd_actual" = personal ] && ! exakit_update_session_limit && \
+                     [ "${EXAKIT_UPDATE_LIMIT_REMEDY:-}" = "exakit update --yes" ]; then
+                    _deferred=$((_deferred + 1))
+                    _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "$EXAKIT_UPDATE_LIMIT_REMEDY"
+                    continue
+                fi
                 _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
                 continue
             fi
@@ -10409,10 +11031,19 @@ _exakit_update_run() {
             # and the installed one kept (exakit_update_skills) - not a failure,
             # and not an update either.
             if ( exakit_update_component "$_component" "$@" ); then _upd_rc=0; else _upd_rc=$?; fi
-            if [ "$_upd_rc" -eq 0 ] || { [ "$_component" = skills ] && [ "$_upd_rc" -eq 3 ]; }; then
+            if [ "$_upd_actual" = personal ] && [ "$_upd_rc" -eq 12 ]; then
+                # Held back by a deliberate no (personal_update).
+                _exakit_update_note_end
+                _deferred=$((_deferred + 1))
+                _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update --yes"
+            elif [ "$_upd_rc" -eq 0 ] || { [ "$_component" = skills ] && [ "$_upd_rc" -eq 3 ]; }; then
                 _exakit_update_note_end
                 if [ "$_upd_rc" -eq 3 ] || { exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; }; then
                     _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
+                elif [ "$_upd_actual" = personal ] && [ -n "$_upd_preview" ]; then
+                    # A plan or a backup: nothing was updated.
+                    _deferred=$((_deferred + 1))
+                    _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update personal"
                 else
                     _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
                 fi
@@ -10436,10 +11067,17 @@ _exakit_update_run() {
                 # The installed skills were kept over an older download: the
                 # updater said so, and the closing line does not call it updated.
                 :
+            elif [ "$_upd_actual" = personal ] && [ "$_upd_rc" -eq 12 ]; then
+                # Held back by a deliberate no (personal_update said it).
+                _deferred=$((_deferred + 1))
+                _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update --yes"
             elif [ "$_upd_rc" -eq 0 ]; then
                 # A named add-on run again at its version (its repair) is said
-                # as that, not as an update.
-                if exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; then
+                # as that, not as an update. A plan or a backup updated nothing.
+                if [ "$_upd_actual" = personal ] && [ -n "$_upd_preview" ]; then
+                    _deferred=$((_deferred + 1))
+                    _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update personal"
+                elif exakit_version_same "$_cur" "$_avail" && [ "$_upd_needs" = 0 ]; then
                     _upd_refreshed="${_upd_refreshed}${_upd_refreshed:+, }$_upd_actual"
                 else
                     _upd_done="${_upd_done}${_upd_done:+, }$_upd_actual"
@@ -10545,7 +11183,13 @@ _exakit_update_run() {
     # prompt back with no word that it was over or how it went. The --json
     # object is that line for an agent.
     if [ "${EXAKIT_UPDATE_JSON:-0}" != "1" ]; then
-        if [ "${_upd_failed:-0}" -gt 0 ]; then
+        # Only add-ons that are not installed went wrong: running the update
+        # again cannot help, installing them does.
+        _upd_missing_n=0
+        for _upd_m in $_upd_missing; do _upd_missing_n=$((_upd_missing_n + 1)); done
+        if [ "${_upd_failed:-0}" -gt 0 ] && [ "$_upd_missing_n" -eq "${_upd_failed:-0}" ]; then
+            warn "Update finished with problems${_upd_done:+ (updated: $_upd_done)}. Install what is missing with: exakit marketplace $_upd_missing"
+        elif [ "${_upd_failed:-0}" -gt 0 ]; then
             warn "Update finished with problems${_upd_done:+ (updated: $_upd_done)}. Retry with: exakit update"
         elif [ -n "$_upd_done" ]; then
             ok "Update finished - updated: $_upd_done${_upd_refreshed:+; refreshed at the same version: $_upd_refreshed}"
@@ -10577,7 +11221,12 @@ PY
 # that is not a path at all (a shell function) fails those tests and counts as
 # no launcher, which only ever means the step runs again.
 _sas_launcher_on_path() {
-    _sas_cli="$(command -v exasol 2>/dev/null || true)"
+    # THE KIT RUNS ONLY ITS OWN LAUNCHER (Krishna, 24 Nov): an `exasol` on PATH
+    # is the user's and never counts. What counts besides the kit folder's
+    # (judged above) is the launcher a 0.3.0 install's receipt names, until
+    # its update puts the kit's own in the kit folder.
+    command -v _personal_receipt_launcher >/dev/null 2>&1 || return 1
+    _sas_cli="$(_personal_receipt_launcher recorded)"
     [ -n "$_sas_cli" ] || return 1
     [ -x "$_sas_cli" ] && [ -s "$_sas_cli" ]
 }
@@ -10621,11 +11270,21 @@ step_artifact_state() {
                 # executable, so THIS file is what the deployment step will run —
                 # even when it is a truncated 0-byte stub, and even when a good
                 # launcher sits on PATH. Only a non-empty one is "present".
-                if [ -s "$EXAKIT_PERSONAL_BIN" ]; then
+                if [ -s "$EXAKIT_PERSONAL_BIN" ] && \
+                   { [ "${EXAKIT_PERSONAL_MODE:-}" != P ] || ! command -v personal_wrapper_runs >/dev/null 2>&1 || personal_wrapper_runs; }; then
                     printf 'present\n'
                 else
                     printf 'missing\n'
                 fi
+            elif [ "${EXAKIT_PERSONAL_MODE:-}" = P ] || [ "${EXAKIT_PERSONAL_MODE:-}" = U ]; then
+                # NEXT TO A LAUNCHER OF THE USER'S THE KIT RUNS ONLY ITS OWN
+                # (personal_cli): one on PATH is never the kit's. A tick left by a
+                # run that used theirs (a 0.3.0 kit answered No, which found
+                # their 2.4 on PATH, or the 2.5 it is now) is not the kit's
+                # launcher, so Step 1 runs and installs the kit's own 2.5. Nothing
+                # is said about it (Q27): that tick was never the kit's launcher.
+                EXAKIT_STEP_RERUN_QUIET=1
+                printf 'missing\n'
             elif _sas_launcher_on_path; then
                 # personal_install_launcher deliberately keeps an existing
                 # launcher on PATH that supports the `local` preset instead of
@@ -10918,6 +11577,7 @@ begin_step() {
     # against the next; step_artifact_state sets it when it has a better
     # explanation than the generic "what it installed is missing".
     EXAKIT_STEP_RERUN_REASON=""
+    EXAKIT_STEP_RERUN_QUIET=""
     if step_done "$1"; then
         # A tick says "installed", not "current". Ask about the version before
         # the artifact: a component that is merely BEHIND is present on disk,
@@ -10960,7 +11620,9 @@ begin_step() {
     else
         exakit_step_heading "$2"
     fi
-    if [ "$_bs_rerun" -eq 1 ]; then
+    if [ "$_bs_rerun" -eq 1 ] && [ -n "${EXAKIT_STEP_RERUN_QUIET:-}" ]; then
+        _exakit_log_file "INFO  $2: the tick was not the kit's own launcher (mode P) - running it"
+    elif [ "$_bs_rerun" -eq 1 ]; then
         info "Recorded as done, but ${EXAKIT_STEP_RERUN_REASON:-what it installed is missing — running it again}"
     fi
     return 0
@@ -12437,7 +13099,7 @@ exakit_tls_live_fingerprint() {
 # certificates/fullchain.pem, the directory the database container mounts as
 # /exa), or nothing and exit 1 when it cannot be read.
 exakit_tls_disk_fingerprint() {
-    _tdf_dir="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
+    _tdf_dir="$(exakit_personal_deploy_dir_now "$(manifest_get runtime.deployment_dir 2>/dev/null || true)")"
     [ -n "$_tdf_dir" ] || return 1
     _tdf_pem="$_tdf_dir/local/runtime/exa/certificates/fullchain.pem"
     [ -f "$_tdf_pem" ] && [ -f "$EXAKIT_TLS_PIN_PY" ] || return 1
@@ -12863,6 +13525,9 @@ _exakit_validate_identifier() {
 }
 
 _exakit_validate_sql_password_token() {
+    # The generator's full shape, A then 23 of A-Z0-9 (as Test-ExakitSqlPasswordToken):
+    # a shorter token is one a broken random source cut short, never a password.
+    [ "${#1}" -eq 24 ] || return 1
     case "$1" in
         ""|[!A-Z]*|*[!A-Z0-9]*)
             return 1
@@ -12871,10 +13536,35 @@ _exakit_validate_sql_password_token() {
     return 0
 }
 
+# _exakit_random_chars <tr-set> <count> — <count> random characters from
+# <tr-set>, with no trailing newline.
+#
+# THE INPUT IS BOUNDED. `tr -dc ... < /dev/urandom | head -c N` relies on
+# SIGPIPE to stop tr once head has its N bytes. A parent that ignores SIGPIPE
+# (a Python harness does, and pty.fork + exec keeps it) passes that on, so tr
+# read /dev/urandom for ever and the install hung in the password step
+# (H-01). Each read is 512 bytes, which ends on its own, and the loop reads
+# again only in the rare case the filtered bytes fell short.
+#
+# Fails (status 1, nothing printed) when the random source gave fewer than
+# <count> characters: a short password is never handed on as a password.
+_exakit_random_chars() {
+    _erc_out=""
+    _erc_try=0
+    while [ "${#_erc_out}" -lt "$2" ] && [ "$_erc_try" -lt 64 ]; do
+        _erc_out="$_erc_out$(head -c 512 /dev/urandom | LC_ALL=C tr -dc "$1")"
+        _erc_try=$((_erc_try + 1))
+    done
+    [ "${#_erc_out}" -ge "$2" ] || return 1
+    printf '%s' "$_erc_out" | head -c "$2"
+}
+
 _exakit_generate_sql_password_token() {
     # Generate alphanumeric password (A-Z, 0-9 only, no underscores) for maximum SQL compatibility
-    # Format: A followed by 23 random uppercase/digits
-    printf 'A%s\n' "$(LC_ALL=C tr -dc 'A-Z0-9' < /dev/urandom | head -c 23)"
+    # Format: A followed by 23 random uppercase/digits. Fails, printing nothing,
+    # when the random source cannot be read.
+    _egspt_rest="$(_exakit_random_chars 'A-Z0-9' 23)" || return 1
+    printf 'A%s\n' "$_egspt_rest"
 }
 
 # _exakit_add_bin_to_shell_rc <bin-directory> — one PATH-persistence policy,
@@ -12983,7 +13673,8 @@ exakit_configure_mcp_readonly_access() {
     _default_schema="$(_exakit_first_schema "$_readonly_schemas")"
     _readonly_password="$(read_credential mcp_readonly_password)"
     if ! _exakit_validate_sql_password_token "$_readonly_password"; then
-        _readonly_password="$(_exakit_generate_sql_password_token)"
+        _readonly_password="$(_exakit_generate_sql_password_token)" \
+            || die "Could not generate a password for the MCP read-only database user, because the system random source could not be read."
         store_credential mcp_readonly_password "$_readonly_password"
     fi
 
@@ -12996,10 +13687,25 @@ exakit_configure_mcp_readonly_access() {
         "$_temp_config" "$_host" "$_port" "$_runtime_user" "$_admin_password" \
         "$_readonly_user" "$_readonly_password" "$_default_schema_uc"
 
+    # WHO MADE THE LOGIN, for the uninstall (marketplace/kit_logins.py drops
+    # only a login the kit created): the kit, when the CREATE below makes it,
+    # or when its own record says so for this same login; a login that was
+    # there already is one the kit takes over (ALTER USER), never dropped. A
+    # record from before this one (0.3.0) gets none: the uninstall then goes
+    # by the kit's own name. ⇄ twin: the same record in mcp.ps1.
+    _cmra_created=false
+    if [ "$(printf '%s' "$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)" | tr '[:lower:]' '[:upper:]')" = "$_identifier_user" ]; then
+        _cmra_created="$(manifest_get components.mcp_server.connection.created 2>/dev/null || true)"
+        # Made in another database (made_in, the deployment id): this one's
+        # login of that name was there already, or is made below.
+        _cmra_in="$(manifest_get components.mcp_server.connection.made_in 2>/dev/null || true)"
+        [ -z "$_cmra_in" ] || [ "$_cmra_in" = "$(manifest_get runtime.deployment_id 2>/dev/null || true)" ] || _cmra_created=false
+    fi
     if ! _exakit_exapump_sql_has_token \
         "$_temp_config" "admin" \
         "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_DBA_USERS WHERE USER_NAME = '$(_exakit_sql_literal "$_identifier_user")') THEN 'EXAKIT_MCP_USER_PRESENT' ELSE 'EXAKIT_MCP_USER_MISSING' END AS STATUS" \
         "EXAKIT_MCP_USER_PRESENT"; then
+        _cmra_created=true
         EXAKIT_ACTIVE_LABEL="Creating the dedicated MCP read-only database user"
         info "Creating the dedicated MCP read-only database user ($_readonly_user)"
         _create_user_output="$(_exakit_run_exapump_sql \
@@ -13071,6 +13777,10 @@ exakit_configure_mcp_readonly_access() {
     _exakit_assert_mcp_readonly_posture "$_temp_config" "$_readonly_user" "$_readonly_schemas"
 
     manifest_set components.mcp_server.connection.user "$_readonly_user"
+    case "$_cmra_created" in
+        true|false) manifest_set components.mcp_server.connection.created "$_cmra_created"
+            manifest_set components.mcp_server.connection.made_in "$(manifest_get runtime.deployment_id 2>/dev/null || true)" ;;
+    esac
     manifest_set components.mcp_server.connection.password_file "$EXAKIT_CREDS_DIR/mcp_readonly_password"
     # Records the connection's default schema (read access is database-wide, not
     # limited to this list); kept as an array for the posture re-check and the
@@ -13860,6 +14570,7 @@ PY
 exakit_runtime_answers_quick() {
     [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
     command -v personal_db_port >/dev/null 2>&1 && command -v personal_tls_answers >/dev/null 2>&1 || return 1
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-/nonexistent}" ] || return 1
     port_in_use "$(personal_db_port)" || return 1
     personal_tls_answers
@@ -13870,6 +14581,9 @@ exakit_ensure_runtime_running() {
     case "$(manifest_get runtime.type 2>/dev/null || true)" in
         personal)
             command -v personal_deployment_running >/dev/null 2>&1 || return 0
+            # Not a start, a deploy or a heal of a deployment that is not the
+            # kit's (exakit_personal_db_state): refused, said, nothing run.
+            exakit_kit_database_guard || return 3
             personal_deployment_running && return 0
             if personal_deployment_exists; then
                 # Asked for (exakit start, _start_database): a start, not a heal.
@@ -14990,9 +15704,10 @@ exakit_print_soft_failures() {
     done
     printf '\n'
     # Not "the database" when the database is what failed: the summary
-    # used to list it as missing and then, one line on, as ready.
+    # used to list it as missing and then, one line on, as ready. And not
+    # "ready" at all then: with no database nothing of the kit is usable.
     case " $EXAKIT_SOFT_FAILED " in
-        *" runtime "*) info "Everything that does not need the database is ready, including the exakit command itself." ;;
+        *" runtime "*) info "No database is usable, so the steps that need one were skipped. The exakit command is installed." ;;
         *) info "Everything else is ready — the database, and the exakit command itself." ;;
     esac
     if [ -n "${EXAKIT_LOG_FILE:-}" ]; then
@@ -15000,6 +15715,25 @@ exakit_print_soft_failures() {
     fi
     info "See where you stand any time with: exakit status"
     return 0
+}
+
+# THE INSTALLER'S EXIT CODE, FROM WHAT IT LEFT. A database step that did not
+# finish (a deploy the launcher refused, a start that failed, no Podman) is a
+# soft failure: the steps that do not need a database still run, and the
+# installer used to end with 0 over a machine with no usable database, so a
+# script or an agent read that run as a working install. 7 says "no database"
+# (documented in AGENTS.md). Any other step that did not complete leaves a
+# working database and still ends with 0, as before.
+# Twin: $script:ExakitExitNoDatabase and Get-ExakitInstallExitCode.
+EXAKIT_EXIT_NO_DATABASE=7
+
+# exakit_install_exit_code — the code setup-macos.sh / setup-linux.sh end with.
+exakit_install_exit_code() {
+    if exakit_soft_failed runtime; then
+        printf '%s\n' "$EXAKIT_EXIT_NO_DATABASE"
+    else
+        printf '0\n'
+    fi
 }
 
 # The component chains, named so exakit_soft_step has something to isolate.
@@ -16045,7 +16779,7 @@ PY
 
 # generate_password — local random password (not logged anywhere).
 generate_password() {
-    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24
+    _exakit_random_chars 'A-Za-z0-9' 24
 }
 
 # store_credential <name> <value> — 0600 file under credentials dir.
@@ -16213,8 +16947,14 @@ _exakit_uninstall_leftover_report() {
     printf '%s\n' "${EXAKIT_TEARDOWN_LEFTOVERS:-the local Exasol Personal deployment}" | while IFS= read -r _ulr_line; do
         [ -n "$_ulr_line" ] && info "  $_ulr_line"
     done
+    # Only a remedy that removes the deployment folder deletes data. A runner
+    # or a container alone is stopped by it and the files stay, and the runner
+    # on the port may be a database this kit did not deploy.
     if [ -n "${EXAKIT_TEARDOWN_REMEDY:-}" ]; then
-        info "Remove it with (this deletes the database and all its data):"
+        case "$EXAKIT_TEARDOWN_REMEDY" in
+            *"rm -rf "*) info "Remove it with (this deletes the database and all its data):" ;;
+            *) info "Stop it with this command, only if it is yours to stop (it deletes no data):" ;;
+        esac
         info "  $EXAKIT_TEARDOWN_REMEDY"
     fi
     return 0
@@ -16253,6 +16993,14 @@ _exakit_uninstall_component() {
     fi
     case "$_uc_key" in
         database)
+            # THE OWNER RULE, in this arm too, not only at the top of this
+            # function: only the kit's own database is ever destroyed. One the
+            # user let the kit use (owner user), or one with no receipt, stays.
+            # ⇄ twin: the same check in Invoke-ExakitUninstallComponent.
+            if ! exakit_component_is_managed database; then
+                exakit_preserve_component database
+                return 0
+            fi
             _uc_type="$(manifest_get runtime.type 2>/dev/null || true)"
             if [ "$_uc_dry" = "1" ]; then
                 info "  will remove: the local Exasol $_uc_type deployment and ALL its data"
@@ -16285,9 +17033,13 @@ _exakit_uninstall_component() {
                 _exakit_warn_lines "${EXAKIT_MCP_LAST_UNTOUCHED:-}"
             fi
             # Nobody is pointed at the launcher's MCP server any more: it goes too.
+            # Only the one the kit wrote (mcp_sidecar_is_kits): a user's own
+            # MCP server on a deployment the kit adopted stays (OWN-04).
             if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
-               command -v personal_cli >/dev/null 2>&1; then
-                run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || true
+               command -v personal_cli >/dev/null 2>&1 && \
+               { ! command -v mcp_sidecar_is_kits >/dev/null 2>&1 || mcp_sidecar_is_kits; }; then
+                command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+                run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || true
                 command -v mcp_sidecar_remove >/dev/null 2>&1 && mcp_sidecar_remove
             fi
             ;;
@@ -16396,7 +17148,20 @@ _exakit_addon_removal_preview() {
 # kind=file → source is a path; kind=cmd → source is a command to run (the
 # container keeps its log itself, there is no file to tail).
 exakit_log_targets() {
-    _lt_setup="$(ls -t "$EXAKIT_LOG_DIR"/install-*.log 2>/dev/null | head -1)"
+    # The newest run that WROTE something. Every exakit command opens a log,
+    # this `exakit logs` too, so the newest file was nearly always the empty
+    # one just created and the table showed "setup ... 0B" (L-02). Only when
+    # every file is empty is the newest one shown. ⇄ twin: Get-ExakitLogTargets.
+    _lt_setup=""
+    _lt_first=""
+    while IFS= read -r _lt_f; do
+        [ -n "$_lt_f" ] || continue
+        [ -n "$_lt_first" ] || _lt_first="$_lt_f"
+        if [ -s "$_lt_f" ]; then _lt_setup="$_lt_f"; break; fi
+    done <<EXAKIT_LT_EOF
+$(ls -t "$EXAKIT_LOG_DIR"/install-*.log 2>/dev/null)
+EXAKIT_LT_EOF
+    [ -n "$_lt_setup" ] || _lt_setup="$_lt_first"
     [ -n "$_lt_setup" ] && printf 'setup|Installer and setup runs|file|%s\n' "$_lt_setup"
 
     # `exakit connect` and `exakit source`: the engine's day log, every SQL
@@ -16510,13 +17275,22 @@ exakit_logs_overview() {
     fi
     printf '\n  Component logs\n'
     printf '  --------------\n'
-    printf '%-22s %-26s %-8s %s\n' "Target" "What" "Size" "Updated"
+    # The Target column is as wide as its longest name (at least 22), so a
+    # name such as autostart-exasol-scheduler never pushes its row out of line.
+    # ⇄ twin: Show-ExakitLogsOverview.
+    _lo_w=22
+    while IFS='|' read -r _lo_id _lo_rest; do
+        [ "${#_lo_id}" -gt "$_lo_w" ] && _lo_w="${#_lo_id}"
+    done <<EXAKIT_LO_EOF
+$_lo_rows
+EXAKIT_LO_EOF
+    printf '%-*s %-26s %-8s %s\n' "$_lo_w" "Target" "What" "Size" "Updated"
     while IFS='|' read -r _lo_id _lo_label _lo_kind _lo_src; do
         [ -n "$_lo_id" ] || continue
         if [ "$_lo_kind" = "cmd" ]; then
-            printf '%-22s %-26s %-8s %s\n' "$_lo_id" "$_lo_label" "live" "kept by the engine"
+            printf '%-*s %-26s %-8s %s\n' "$_lo_w" "$_lo_id" "$_lo_label" "live" "kept by the engine"
         else
-            printf '%-22s %-26s %-8s %s\n' "$_lo_id" "$_lo_label" \
+            printf '%-*s %-26s %-8s %s\n' "$_lo_w" "$_lo_id" "$_lo_label" \
                 "$(_exakit_log_size "$_lo_src")" "$(_exakit_log_mtime "$_lo_src")"
         fi
     done <<EXAKIT_LO_EOF
@@ -16583,11 +17357,37 @@ EXAKIT_LSH_EOF
         return 0
     fi
     [ -f "$_lsh_src" ] || die "The $_lsh_target log has not been written yet ($_lsh_src)."
+    # COLOUR CODES ONLY WHERE THE KIT DRAWS COLOUR. An engine writes its log
+    # lines with ANSI colour (exasol-scheduler's do), so a piped
+    # `exakit logs exasol-scheduler` printed raw escapes. Off a colour terminal
+    # (a pipe, NO_COLOR, TERM=dumb: UI_FANCY) the SGR codes are dropped from
+    # what is printed; the file keeps them. Twin of Show-ExakitLog.
     if [ "$_lsh_follow" = "1" ]; then
         info "Following $_lsh_src — Ctrl-C to stop"
-        tail -n "$_lsh_lines" -f "$_lsh_src"
-    else
+        if [ "${UI_FANCY:-0}" = 1 ]; then
+            tail -n "$_lsh_lines" -f "$_lsh_src"
+        else
+            tail -n "$_lsh_lines" -f "$_lsh_src" | exakit_strip_sgr
+        fi
+    elif [ "${UI_FANCY:-0}" = 1 ]; then
         tail -n "$_lsh_lines" "$_lsh_src"
+    else
+        tail -n "$_lsh_lines" "$_lsh_src" | exakit_strip_sgr
+    fi
+}
+
+# exakit_strip_sgr - stdin to stdout with every ANSI SGR (colour) sequence
+# dropped, line by line and flushed, so a followed log still streams.
+# mawk (the awk of Debian, Ubuntu and so WSL) reads a pipe in 4 KB blocks
+# whatever fflush() does to its output, so `exakit logs -f` showed nothing
+# until 4 KB had arrived (WSL-01): mawk is asked for its interactive mode
+# (-W interactive: unbuffered writes, line-buffered reads). Any other awk
+# takes the script as it is.
+exakit_strip_sgr() {
+    if awk -W version 2>&1 </dev/null | head -n 1 | grep -qi '^mawk'; then
+        awk -W interactive '{ gsub(/\033\[[0-9;]*m/, ""); print; fflush() }'
+    else
+        awk '{ gsub(/\033\[[0-9;]*m/, ""); print; fflush() }'
     fi
 }
 
@@ -17624,15 +18424,11 @@ _exakit_uninstall_kit_image_ids() {
     case "$_kii_eng" in docker|podman) ;; *) return 0 ;; esac
     printf '%s\n' "$_kii_eng"
     command -v "$_kii_eng" >/dev/null 2>&1 || return 0
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     _kii_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
     [ -n "$_kii_dir" ] && [ -d "$_kii_dir" ] || return 0
     _kii_id=""
-    for _kii_f in "$_kii_dir/.exasolLauncherState.json" "$_kii_dir/deployment.json"; do
-        [ -f "$_kii_f" ] || continue
-        _kii_id="$(tr -d '\012\015' < "$_kii_f" 2>/dev/null | \
-            sed -n 's/.*"deploymentId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-        [ -n "$_kii_id" ] && break
-    done
+    command -v detect_personal_deployment_id >/dev/null 2>&1 && _kii_id="$(detect_personal_deployment_id "$_kii_dir")"
     {
         if [ -n "$_kii_id" ] && [ "$_kii_id" != local ]; then
             exakit_run_bounded 30 "$_kii_eng" ps -a --filter "name=exasol-db-$_kii_id" --format '{{.Names}}' 2>/dev/null | \
@@ -17674,6 +18470,7 @@ _exakit_uninstall_kit_images() {
     _kim_ids=" $(printf '%s\n' "$_kim_record" | sed 1d | tr '\n' ' ')"
     _kim_any=0
     _kim_gone=""
+    _kim_kept=""; _kim_kept_refs=""
     for _kim_eng in $(printf '%s\n' "$_kim_record" | head -1); do
         command -v "$_kim_eng" >/dev/null 2>&1 || continue
         _kim_any=1
@@ -17738,6 +18535,9 @@ _exakit_uninstall_kit_images() {
                 case ", $_kim_gone, " in *", $_kr_label, "*) : ;; *) _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_label" ;; esac
             else
                 info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
+                _kr_label="$(_exakit_kit_image_label "$_kr_repo")"
+                case ", $_kim_kept, " in *", $_kr_label, "*) : ;; *) _kim_kept="${_kim_kept:+$_kim_kept, }$_kr_label" ;; esac
+                _kim_kept_refs="${_kim_kept_refs:+$_kim_kept_refs }$_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows
@@ -17749,7 +18549,16 @@ KIMROWS
             case ", $_kim_gone, " in *", $_kr_label, "*) _kim_line="${_kim_line:+$_kim_line, }$_kr_label" ;; esac
         done
         [ -n "$_kim_line" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_line"
+        # THE ONES IT KEPT ARE SAID TOO, on one line that outlives the quiet
+        # run. The dry run listed them as "will remove"; the real run's
+        # "Kept image" lines above go only to the log, which leaves with the
+        # kit home, so an image another container still used (a second kit on
+        # the same engine) stayed without a word (W1-03). Twin of $kept in
+        # Invoke-ExakitUninstallKitImages.
+        [ -n "$_kim_kept" ] && [ "$_kim_dry" != "1" ] && \
+            info_step "Container images kept ($_kim_eng): $_kim_kept. $_kim_eng did not remove them (a container may still use them, or $_kim_eng did not answer). Remove them later with: $_kim_eng rmi $_kim_kept_refs"
         _kim_gone=""
+        _kim_kept=""; _kim_kept_refs=""
     done
     if [ "$_kim_any" = 0 ]; then
         _kim_eng="$(printf '%s\n' "$_kim_record" | head -1)"
@@ -17831,6 +18640,155 @@ exakit_uninstall_blocked() {
         warn "exakit is still running in another window: $_ub_cmd (pid $_ub_pid). Close it, then run exakit uninstall again."
     done
     return 0
+}
+
+# _exakit_uninstall_owner_user_db - the folder name of the database the user
+# let the kit use (runtime.ownership "user"), when the uninstall keeps it and
+# the kit may still act on it: the recorded folder is the one in use
+# (exakit_personal_db_state is empty) and it is on disk. Nothing, and 1, for
+# every other database: the kit's own (destroyed), one with no receipt, or a
+# deployment of the user's found where the kit's was (kit_database_missing),
+# whose logins the kit never made. ⇄ twin: Get-ExakitUninstallOwnerUserDb in
+# setup/exakit.ps1.
+_exakit_uninstall_owner_user_db() {
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+    [ "$(manifest_get runtime.ownership 2>/dev/null || true)" = user ] || return 1
+    [ -z "$(exakit_personal_db_state 2>/dev/null || true)" ] || return 1
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] || return 1
+    basename "$EXAKIT_PERSONAL_DEPLOY_DIR"
+}
+
+# _exakit_uninstall_kit_logins <dry> <database> - SEC-01: what the kit made
+# inside a database the user let it use goes, the database stays. The SQL
+# lives once, in marketplace/kit_logins.py (its own comment says what it drops,
+# keeps and prints); this renders its lines with the kit's marks. A dry run
+# lists the steps and changes nothing: it reads the database (read only) to
+# name every schema a login or role would hand to SYS, and says "any other
+# schema it owns" when the database cannot be asked. A database that is not running is
+# never started: the module prints the statements to run later. Never fatal:
+# the uninstall goes on either way. ⇄ twin: Invoke-ExakitUninstallKitLogins in
+# setup/exakit.ps1.
+_exakit_uninstall_kit_logins() {
+    _ukl_dry="${1:-0}"
+    _ukl_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_ukl_root/marketplace/kit_logins.py" ] || return 0
+    if [ "$_ukl_dry" = 1 ]; then _ukl_mode=plan; else _ukl_mode=drop; fi
+    # Its stderr to the log, when the log's folder is there (a redirection
+    # onto a missing path would fail the step itself).
+    _ukl_log="${EXAKIT_LOG_FILE:-/dev/null}"
+    [ -d "$(dirname "$_ukl_log")" ] || _ukl_log=/dev/null
+    _ukl_rc=0
+    _ukl_out="$(run_python_any "$_ukl_root/marketplace/kit_logins.py" "$_ukl_mode" --home "$EXAKIT_HOME" \
+        --database "$2" 2>>"$_ukl_log")" || _ukl_rc=$?
+    while IFS= read -r _ukl_line; do
+        _ukl_text="${_ukl_line#* }"
+        case "$_ukl_line" in
+            "PLAN "*) info "  will remove: $_ukl_text" ;;
+            "OK "*)   ok_step "$_ukl_text" ;;
+            "WARN "*) warn "$_ukl_text" ;;
+            "INFO "*)
+                if [ "$_ukl_dry" = 1 ]; then info "  $_ukl_text"; else info_step "$_ukl_text"; fi ;;
+        esac
+    done <<EXAKIT_UKL_EOF
+$_ukl_out
+EXAKIT_UKL_EOF
+    case "$_ukl_rc" in
+        0|1|3) ;;
+        *) [ -n "$_ukl_out" ] || warn "The kit's logins in your database '$2' could not be checked, so they were not removed." ;;
+    esac
+    return 0
+}
+
+# _exakit_uninstall_launcher_users bin|private - the deployments beside the
+# kit's own that use the kit's Exasol Personal launcher, by folder name, one
+# per line (D4). Read before anything is destroyed: once the kit's own is
+# gone, the folder in use can resolve to one of the user's. A deployment is a
+# folder holding the launcher's state (.exasolLauncherState.json, or
+# deployment.json): a stray file or an empty folder needs no launcher to go.
+#   bin      the launcher in the kit's bin folder: every deployment in the
+#            launcher's folders but the kit's own (personal_other_deployments)
+#   private  the kit's private launcher (mode P, $EXAKIT_HOME/personal): only
+#            its own root counts, and starter-kit-local there is the kit's
+# ⇄ twin: Get-ExakitUninstallLauncherUsers in setup/exakit.ps1 (bin only:
+# Windows has no private launcher).
+_exakit_uninstall_launcher_users() {
+    if [ "$1" = private ]; then
+        # Both roots of the private home: a database the launcher has not moved
+        # into its own root yet is in the legacy one.
+        _ulu_root="$EXAKIT_HOME/personal/home/.exasol/launcher/deployments"
+        _ulu_old="$EXAKIT_HOME/personal/home/.exasol/personal/deployments"
+        _ulu_list="$(for _ulu_e in "$_ulu_root"/* "$_ulu_root"/.[!.]* "$_ulu_root"/..?* "$_ulu_old"/* "$_ulu_old"/.[!.]* "$_ulu_old"/..?*; do
+            [ -e "$_ulu_e" ] || continue
+            [ "${_ulu_e##*/}" = starter-kit-local ] && continue
+            [ "$_ulu_e" = "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && continue
+            printf '%s\n' "$_ulu_e"
+        done)"
+    else
+        _ulu_list="$(personal_other_deployments 2>/dev/null || true)"
+    fi
+    while IFS= read -r _ulu_d; do
+        [ -n "$_ulu_d" ] && [ -d "$_ulu_d" ] || continue
+        [ -f "$_ulu_d/.exasolLauncherState.json" ] || [ -f "$_ulu_d/deployment.json" ] || continue
+        printf '%s\n' "${_ulu_d##*/}"
+    done <<EXAKIT_ULU_EOF
+$_ulu_list
+EXAKIT_ULU_EOF
+}
+
+# _exakit_launcher_kept_line - why the kit's launcher stays (D4), for the
+# deployment names on stdin, one per line. Nothing for none.
+# ⇄ twin: Get-ExakitLauncherKeptLine in setup/exakit.ps1.
+_exakit_launcher_kept_line() {
+    _lkl_n=0
+    _lkl_list=""
+    _lkl_last=""
+    while IFS= read -r _lkl_name; do
+        [ -n "$_lkl_name" ] || continue
+        _lkl_n=$((_lkl_n + 1))
+        [ -z "$_lkl_last" ] || _lkl_list="${_lkl_list:+$_lkl_list, }'$_lkl_last'"
+        _lkl_last="$_lkl_name"
+    done
+    [ "$_lkl_n" -gt 0 ] || return 0
+    if [ "$_lkl_n" = 1 ]; then
+        printf "Keeping the Exasol Personal launcher: your deployment '%s' still uses it.\n" "$_lkl_last"
+    else
+        printf "Keeping the Exasol Personal launcher: your deployments %s and '%s' still use it.\n" "$_lkl_list" "$_lkl_last"
+    fi
+}
+
+# _exakit_uninstall_user_launcher <kit launcher> - 0 when a launcher of the
+# user's can open the deployments the kit's launcher runs: the one on PATH, or
+# the one the install recorded as theirs (components.personal.user_launcher),
+# its version readable and on the pinned release line (2.5) or newer. A 2.4
+# does not find a deployment in the 2.5 folder, and one that answers no version
+# proves nothing: neither counts. A link to the kit's own launcher is not
+# theirs. It is asked `version` only, time-bounded, and never changed.
+# ⇄ twin: Test-ExakitUninstallUserLauncher in setup/exakit.ps1.
+_exakit_uninstall_user_launcher() {
+    command -v personal_deployment_outranks >/dev/null 2>&1 || return 1
+    _uul_pin="${EXAKIT_PERSONAL_VERSION:-${EXAKIT_PERSONAL_VERSION_FALLBACK:-}}"
+    _uul_pin="${_uul_pin#v}"
+    case "$_uul_pin" in [0-9]*.[0-9]*) ;; *) return 1 ;; esac
+    _uul_path="$(command -v exasol 2>/dev/null || true)"
+    _uul_rec="$(manifest_get components.personal.user_launcher 2>/dev/null || true)"
+    for _uul_cli in "$_uul_path" "$_uul_rec"; do
+        case "$_uul_cli" in /*) ;; *) continue ;; esac
+        [ -f "$_uul_cli" ] && [ -x "$_uul_cli" ] || continue
+        [ "$_uul_cli" -ef "$1" ] && continue
+        _exakit_path_under "$(_exakit_resolve_link "$_uul_cli")" "$EXAKIT_HOME" && continue
+        _uul_ver="$(exakit_run_bounded "${EXAKIT_PERSONAL_PROBE_TIMEOUT:-10}" "$_uul_cli" version 2>/dev/null </dev/null | head -1 | tr -d '[:space:]' || true)"
+        _uul_ver="${_uul_ver#v}"
+        case "$_uul_ver" in
+            *[!0-9A-Za-z.+_-]*) continue ;;
+            [0-9]*.[0-9]*) ;;
+            *) continue ;;
+        esac
+        # The release line: 2.5.3 is 2.5, 2.6.0 is 2.6.
+        personal_deployment_outranks "$(printf '%s' "$_uul_pin" | awk -F. '{print $1"."$2".0"}')" \
+            "$(printf '%s' "$_uul_ver" | awk -F. '{print $1"."$2".0"}')" || return 0
+    done
+    return 1
 }
 
 exakit_uninstall_run() {
@@ -17991,6 +18949,23 @@ EXAKIT_PRESERVED_PATHS_EOF
         fi
     done
 
+    # 0) A DATABASE THE USER LET THE KIT USE (owner user) is never destroyed,
+    #    and it keeps the name it has (D5): nothing renames it back. The one
+    #    change made inside it is SEC-01 (_exakit_uninstall_kit_logins): the
+    #    kit's own logins and roles go, each schema they own handed to SYS
+    #    first. First, while the add-ons' receipts still name their logins;
+    #    the add-ons' own removal below then leaves the database alone
+    #    (EXAKIT_UNINSTALL_KEEP_DATABASE) and takes only what they put on this
+    #    computer. Any other database the kit does not own is left as it is.
+    _un_user_db=""
+    command -v _exakit_uninstall_owner_user_db >/dev/null 2>&1 && \
+        _un_user_db="$(_exakit_uninstall_owner_user_db 2>/dev/null || true)"
+    if [ -n "$_un_user_db" ]; then
+        info "Keeping your database '$_un_user_db' and all its data. It keeps the name '$_un_user_db'."
+        _un_phase "Removing the kit's logins from your database"
+        _exakit_uninstall_kit_logins "$_dry" "$_un_user_db"
+    fi
+
     # 0a) Boot entries first: a LaunchAgent or systemd unit left behind would
     #     try to start something that no longer exists on the next login.
     if command -v exakit_service_ids >/dev/null 2>&1; then
@@ -18019,6 +18994,15 @@ EXAKIT_PRESERVED_PATHS_EOF
     # Tells an add-on hook that the kit home goes next, so it does not promise
     # to keep something step 5 is about to delete (dash-server's instance).
     EXAKIT_UNINSTALL_FULL=1
+    # A database the user let the kit use stays whole (step 0): each add-on's
+    # removal leaves it alone (runtime.uninstall_keeps_database). Never left
+    # set from anywhere else.
+    if [ -n "$_un_user_db" ]; then
+        EXAKIT_UNINSTALL_KEEP_DATABASE=1
+        export EXAKIT_UNINSTALL_KEEP_DATABASE
+    else
+        unset EXAKIT_UNINSTALL_KEEP_DATABASE
+    fi
     # Which add-on skill folders are the kit's, decided before the add-ons go
     # (their uninstall drops the receipt the decision reads); step 3 removes them.
     if [ "$_dry" != "1" ] && command -v exakit_marketplace_installed_addons >/dev/null 2>&1; then
@@ -18030,16 +19014,34 @@ EXAKIT_PRESERVED_PATHS_EOF
             if ! exakit_component_is_managed "$_un_id"; then exakit_preserve_component "$_un_id"; continue; fi
             _un_fn="$(_exakit_addon_fn "$_un_id" uninstall)"
             command -v "$_un_fn" >/dev/null 2>&1 || continue
-            if "$_un_fn" "$_dry"; then
-                _un_addons_gone="${_un_addons_gone:+$_un_addons_gone, }$_un_id"
+            # THE ADD-ON'S OWN REASON GOES ON THE WARNING. The logs leave with
+            # the kit home in this same run, so a bare "reported issues" left
+            # nothing anywhere that said why (W1-01). Its stderr is held while
+            # it runs and passed on unchanged when it succeeds; on a failure
+            # its last line (the module's "<id>: <reason>") ends the warning.
+            # Twin of the catch in Invoke-ExakitUninstallRun.
+            _un_errf="$(mktemp "${TMPDIR:-/tmp}/exakit-unaddon.XXXXXX" 2>/dev/null || true)"
+            _un_rc=0
+            if [ -n "$_un_errf" ]; then
+                "$_un_fn" "$_dry" 2>"$_un_errf" || _un_rc=$?
             else
-                warn "Removing the $_un_id add-on reported issues (continuing uninstall)"
+                "$_un_fn" "$_dry" || _un_rc=$?
             fi
+            if [ "$_un_rc" = 0 ]; then
+                _un_addons_gone="${_un_addons_gone:+$_un_addons_gone, }$_un_id"
+                [ -n "$_un_errf" ] && [ -s "$_un_errf" ] && cat "$_un_errf" >&2
+            else
+                _un_why=""
+                [ -n "$_un_errf" ] && _un_why="$(sed -n '/[^[:space:]]/p' "$_un_errf" 2>/dev/null | tail -n 1 | sed "s/^$_un_id: //" | cut -c1-300)"
+                warn "Removing the $_un_id add-on reported issues (continuing uninstall)${_un_why:+: $_un_why}"
+            fi
+            [ -n "$_un_errf" ] && rm -f "$_un_errf"
         done
     fi
+    unset EXAKIT_UNINSTALL_KEEP_DATABASE
     [ -n "$_un_addons_gone" ] && _done "Add-ons removed: $_un_addons_gone"
 
-    _un_phase "Removing the database"
+    [ -n "$_un_user_db" ] || _un_phase "Removing the database"
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
@@ -18048,6 +19050,7 @@ EXAKIT_PRESERVED_PATHS_EOF
     # home, so only a run that found a deployment may remove them - a sandboxed
     # HOME (the test suites) must never reach the real engine's images.
     _un_had_deploy=0
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
     [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && _un_had_deploy=1
     # The deployment's port, read while its deployment.json still exists:
     # step 2b proves an MCP server is the kit's by EXA_DSN on this port.
@@ -18063,8 +19066,44 @@ EXAKIT_PRESERVED_PATHS_EOF
     if [ "$_un_had_deploy" = 1 ] && [ "$_type" = personal ] && exakit_component_is_managed database; then
         _un_kit_images="$(_exakit_uninstall_kit_image_ids)"
     fi
+    # The kit's own deployment gone, and one that is not provably the kit's
+    # in the launcher's folder: that one is the user's, and nothing below
+    # removes it or anything in it (exakit_personal_kit_missing).
+    _un_kit_gone=""
+    [ "$_type" = personal ] && _un_kit_gone="$(exakit_personal_kit_missing 2>/dev/null || true)"
+    # The deployments beside the kit's that use the kit's own launcher (D4),
+    # read now, before anything is destroyed (_exakit_uninstall_launcher_users).
+    # Mode P: the kit's private launcher home in the kit home.
+    _un_mode_p=""
+    if [ -e "$EXAKIT_HOME/personal/libexec/exasol" ] || \
+       { command -v detect_personal_private_mode >/dev/null 2>&1 && detect_personal_private_mode; }; then _un_mode_p=1; fi
+    # The kit's own launcher in the kit folder (mode K: the 2.5 itself, mode
+    # P: the wrapper), named in "Commands removed" when it goes with the kit.
+    _un_private_cli=""
+    [ -e "$EXAKIT_HOME/personal/bin/exasol" ] && _un_private_cli=1
+    _un_other_users=""
+    if [ "$_type" = personal ] && command -v _exakit_uninstall_launcher_users >/dev/null 2>&1; then
+        if [ -n "$_un_mode_p" ]; then
+            _un_other_users="$(_exakit_uninstall_launcher_users private)"
+        else
+            case "$_un_protected_bins" in
+                *" exasol "*) ;;
+                *) _un_other_users="$(_exakit_uninstall_launcher_users bin)" ;;
+            esac
+        fi
+    fi
+    # The deployment this run keeps (a database the kit does not own): it uses
+    # the launcher too.
+    _un_db_kept=""
     if [ -n "$_type" ] && ! exakit_component_is_managed database; then
-        exakit_preserve_component database
+        # A database the user let the kit use was kept, and said, at step 0.
+        [ -n "$_un_user_db" ] || exakit_preserve_component database
+        if [ -n "$_un_kit_gone" ]; then
+            info "The kit's own database was not found at ${_un_kit_gone%%|*}."
+            info "The Exasol Personal deployment at ${_un_kit_gone#*|} is not the kit's, so it is not removed."
+        fi
+        [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && \
+            _un_db_kept="$EXAKIT_PERSONAL_DEPLOY_DIR"
         # A database the kit does not own stays, and so do its images and the
         # MCP servers pointed at it.
         _un_had_deploy=0
@@ -18109,6 +19148,17 @@ EXAKIT_PRESERVED_PATHS_EOF
                 _un_csize="$(du -sh "$_un_cache" 2>/dev/null | awk '{print $1}')"
                 _step "Exasol launcher download cache $_un_cache${_un_csize:+ ($_un_csize)}"
                 _rm "$_un_cache"
+                # 2.5.0's cache is <cache root>/exasol/launcher/resources: its
+                # two parents stayed behind empty (U-01). Each goes only while
+                # empty (rmdir), never recursively. ⇄ twin: the same lines in
+                # Invoke-ExakitUninstallRun.
+                case "$_un_cache" in
+                    */exasol/launcher/resources)
+                        _un_cparent="$(dirname "$_un_cache")"
+                        for _un_cpd in "$_un_cparent" "$(dirname "$_un_cparent")"; do
+                            [ "$_dry" = "1" ] || rmdir "$_un_cpd" 2>/dev/null || break
+                        done ;;
+                esac
                 _done "Launcher download cache removed: $_un_cache${_un_csize:+ ($_un_csize)}"
             fi
             _un_prune="$(personal_prunable_state_dirs)"
@@ -18131,11 +19181,13 @@ EXAKIT_PRESERVED_PATHS_EOF
         EXAKIT_UNINSTALL_DB_SKIPPED=1
         warn "No runtime recorded in the manifest, so the database was NOT removed."
         info "If a local deployment exists it is still on disk, with all its data, at:"
-        info "  ${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
+        _un_dd="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+        command -v detect_personal_deploy_resolve >/dev/null 2>&1 && \
+            { detect_personal_deploy_resolve "$_un_dd"; _un_dd="$DETECT_PERSONAL_DEPLOY_DIR"; }
+        info "  $_un_dd"
         info "Remove it by hand, or re-install and then uninstall again to have the kit do it."
         # And when it IS there, the run must not end on "complete": the same
         # leftover report and status as a teardown that left it behind.
-        _un_dd="${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
         if [ "$_dry" != "1" ] && [ -e "$_un_dd" ]; then
             EXAKIT_UNINSTALL_DB_LEFT=1
             EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $_un_dd (the database and ALL its data)"
@@ -18154,6 +19206,34 @@ EXAKIT_PRESERVED_PATHS_EOF
        [ -z "$(personal_other_deployments 2>/dev/null)" ]; then
         _un_phase "Removing container images"
         _exakit_uninstall_kit_images "$_dry" "$_un_kit_images"
+    fi
+
+    # 1d) The kit's own launcher stays while another deployment uses it (D4):
+    #     one beside the kit's (read before the destroy, above), or the
+    #     database this run keeps. Said once, here; step 5 keeps the private
+    #     launcher home (mode P) and step 6 the launcher in the bin folder. A
+    #     launcher that is not the kit's is kept by step 6 as before. Mode P
+    #     also keeps its home when the teardown left the kit's own database
+    #     there: the deployment lives inside it, and the leftover report at the
+    #     end names it with the command that removes it.
+    _un_launcher_users=""
+    _un_keep_private=""
+    if [ -n "$_un_mode_p" ] || [ -e "${_un_exasol_path:-$EXAKIT_BIN_DIR/exasol}" ]; then
+        _un_launcher_users="$(printf '%s\n%s\n' "$_un_other_users" "${_un_db_kept##*/}" | awk 'NF && !seen[$0]++')"
+        [ -n "$_un_mode_p" ] || case "$_un_protected_bins" in *" exasol "*) _un_launcher_users="" ;; esac
+        # The kit's launcher in the kit folder next to a launcher of the
+        # user's own that can open them (2.5 or newer): their deployments run
+        # with theirs, so the kit's goes. Next to a 2.4 of theirs it stays.
+        if [ -n "$_un_launcher_users" ] && [ -z "$_un_mode_p" ] && \
+           [ "${_un_exasol_path:-}" = "$EXAKIT_HOME/personal/bin/exasol" ] && \
+           _exakit_uninstall_user_launcher "$_un_exasol_path"; then
+            _un_launcher_users=""
+        fi
+    fi
+    [ -n "$_un_launcher_users" ] && \
+        info_step "$(printf '%s\n' "$_un_launcher_users" | _exakit_launcher_kept_line)"
+    if [ -n "$_un_mode_p" ] && { [ -n "$_un_launcher_users" ] || [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ]; }; then
+        _un_keep_private="$EXAKIT_HOME/personal"
     fi
 
     # 2) Managed MCP configuration in every AI client the kit configures.
@@ -18177,12 +19257,34 @@ EXAKIT_PRESERVED_PATHS_EOF
     # deployment that stays: a database the kit did not remove keeps running,
     # and so would a server nobody is pointed at any more. A removed deployment
     # took its sidecars with it.
+    command -v personal_deploy_dir_refresh >/dev/null 2>&1 && personal_deploy_dir_refresh
+    # Only the one the kit wrote (mcp_sidecar_is_kits): a user's own MCP
+    # server on a deployment the kit adopted stays (OWN-04).
     if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
-       [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && command -v personal_cli >/dev/null 2>&1; then
+       [ -z "$_un_kit_gone" ] && \
+       [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && command -v personal_cli >/dev/null 2>&1 && \
+       { ! command -v mcp_sidecar_is_kits >/dev/null 2>&1 || mcp_sidecar_is_kits; }; then
         _step "the MCP server the kit set up beside your database (sidecar '${EXAKIT_MCP_SIDECAR:-mcp}')"
         if [ "$_dry" != "1" ]; then
-            run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || \
-                warn "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable ${EXAKIT_MCP_SIDECAR:-mcp} --remove"
+            run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null 2>&1 || \
+                warn "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable ${EXAKIT_MCP_SIDECAR:-mcp} --remove --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR"
+        fi
+    fi
+
+    # MODE K, D4, after step 2 (the kit's launcher, at the path personal_cli
+    # knows, removes the kit's MCP server there): the kit's launcher lives in
+    # the kit folder, which goes with
+    # the kit home. Another deployment still uses it, so it moves to
+    # ~/.local/bin/exasol when nothing is there, and otherwise stays where it
+    # is (its folder is kept). The D4 line above is the only line, as on
+    # Windows.
+    if [ -z "$_un_mode_p" ] && [ -n "$_un_launcher_users" ] && \
+       [ -x "$EXAKIT_HOME/personal/bin/exasol" ] && exakit_component_is_managed personal; then
+        if [ ! -e "$EXAKIT_BIN_DIR/exasol" ] && [ ! -L "$EXAKIT_BIN_DIR/exasol" ] && \
+           { [ "$_dry" = "1" ] || { mkdir -p "$EXAKIT_BIN_DIR" && mv -f "$EXAKIT_HOME/personal/bin/exasol" "$EXAKIT_BIN_DIR/exasol"; }; }; then
+            _un_exasol_path="$EXAKIT_BIN_DIR/exasol"
+        else
+            _un_keep_private="$EXAKIT_HOME/personal"
         fi
     fi
 
@@ -18202,6 +19304,24 @@ EXAKIT_PRESERVED_PATHS_EOF
     if [ -e "$EXAKIT_HOME/exapump" ] && ! _un_entry_preserved "$EXAKIT_HOME/exapump"; then
         _step "kit exapump profiles at $EXAKIT_HOME/exapump"
         _rm "$EXAKIT_HOME/exapump"
+    fi
+
+    # NO DEPLOYMENT IN THE KIT HOME GOES WITH IT: whatever is there now is one
+    # this run did not remove (the teardown's own is gone by here), in whatever
+    # folder: the private home's two roots, or one the user chose. Its top
+    # folder stays.
+    if [ -d "$EXAKIT_HOME" ]; then
+        while IFS= read -r _un_found; do
+            [ -n "$_un_found" ] || continue
+            _un_found="$(dirname "$_un_found")"
+            [ "$_dry" = "1" ] && [ "$_un_found" = "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && exakit_component_is_managed database && continue
+            case "$_un_found" in
+                "$EXAKIT_HOME/personal"/*) _un_keep_private="$EXAKIT_HOME/personal" ;;
+                *) _un_preserved_paths="$(printf '%s\n%s' "$_un_preserved_paths" "$_un_found" | sed '/^$/d')" ;;
+            esac
+        done <<EXAKIT_UN_FOUND_EOF
+$(find "$EXAKIT_HOME" -name .exasolLauncherState.json 2>/dev/null)
+EXAKIT_UN_FOUND_EOF
     fi
 
     _un_phase "Removing kit files"
@@ -18230,7 +19350,7 @@ EXAKIT_PRESERVED_PATHS_EOF
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
-        if _un_keep_notebooks || [ -n "$_un_preserved_paths" ]; then
+        if _un_keep_notebooks || [ -n "$_un_preserved_paths" ] || [ -n "$_un_keep_private" ]; then
             # Everything in the kit home but the user's work. The home is left
             # holding only that, which an install or an uninstall later accepts
             # as a kit home (see _un_safe_target).
@@ -18257,6 +19377,8 @@ EXAKIT_PRESERVED_PATHS_EOF
                         esac
                     fi
                     _un_entry_preserved "$_un_entry" && continue
+                    # The kit's private launcher home, kept at step 1d (D4).
+                    [ -n "$_un_keep_private" ] && [ "$_un_entry" = "$_un_keep_private" ] && continue
                     rm -rf "$_un_entry"
                 done
             fi
@@ -18287,7 +19409,16 @@ EXAKIT_PRESERVED_PATHS_EOF
         case "$_un_protected_bins" in *" $_bin "*) [ -e "$EXAKIT_BIN_DIR/$_bin" ] && info "Keeping $_bin (not installed by this kit)."; continue ;; esac
         _un_bin_path="$EXAKIT_BIN_DIR/$_bin"
         case "$_bin" in
-            exasol) _un_bin_path="${_un_exasol_path:-$_un_bin_path}" ;;
+            exasol)
+                _un_bin_path="${_un_exasol_path:-$_un_bin_path}"
+                # Kept while another deployment uses it (D4, said at step 1d).
+                [ -n "$_un_launcher_users" ] && continue
+                # Mode P: the kit's launcher lives in its private home (step 5),
+                # never in the bin folder, where an exasol is the user's own.
+                if [ -n "$_un_mode_p" ] && [ -z "$_un_exasol_path" ]; then
+                    [ -e "$_un_bin_path" ] && info "Keeping $_bin (not installed by this kit)."
+                    continue
+                fi ;;
             exapump) _un_bin_path="${_un_exapump_path:-$_un_bin_path}" ;;
         esac
         if [ -e "$_un_bin_path" ]; then
@@ -18301,6 +19432,9 @@ EXAKIT_PRESERVED_PATHS_EOF
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi
     done
+    if [ -n "$_un_private_cli" ] && [ -z "$_un_keep_private" ] && [ -z "$_un_launcher_users" ]; then
+        _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }exasol (the kit's own)"
+    fi
     [ -n "$_un_bins_gone" ] && _done "Commands removed: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"

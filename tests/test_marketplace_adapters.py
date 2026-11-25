@@ -235,6 +235,9 @@ class AdapterDryRunTest(unittest.TestCase):
         if shutil.which("pwsh"):
             scripts.append(["pwsh", "-NoProfile", "-Command",
                 f'. "{ROOT / "setup/lib/exakit-common.ps1"}"\n'
+                # exakit.ps1 loads persona.ps1 too; without it the PowerShell side has no
+                # Get-ExakitPersonaPython and needs a uv-managed 3.12 the machine may not have.
+                f'. "{ROOT / "setup/lib/persona.ps1"}"\n'
                 f'function Resolve-ExakitVersionsDoc {{ return "{selected}" }}\n'
                 'Invoke-ExakitMarketplacePython -Id json-tables -Operation latest\n'])
         for command in scripts:

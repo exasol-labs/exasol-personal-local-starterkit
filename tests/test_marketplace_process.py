@@ -12,8 +12,49 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
+import process  # noqa: E402
 from process import ManagedProcess  # noqa: E402
 from runtime import AddonFailure  # noqa: E402
+
+
+NETSTAT_EN = """
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1234
+  TCP    127.0.0.1:5100         0.0.0.0:0              LISTENING       4321
+  TCP    127.0.0.1:5100         127.0.0.1:52011        ESTABLISHED     4321
+  TCP    127.0.0.1:52011        127.0.0.1:5100         ESTABLISHED     900
+  TCP    127.0.0.1:52012        127.0.0.1:5100         TIME_WAIT       0
+  TCP    [::1]:5100             [::]:0                 LISTENING       4322
+"""
+NETSTAT_DE = (NETSTAT_EN.replace("Active Connections", "Aktive Verbindungen")
+              .replace("Proto  Local Address          Foreign Address        State           PID",
+                       "Proto  Lokale Adresse         Remoteadresse          Status           PID")
+              .replace("LISTENING", "ABHÖREN").replace("ESTABLISHED", "HERGESTELLT").replace("TIME_WAIT", "WARTEND"))
+
+
+class WindowsListenerTest(unittest.TestCase):
+    """Windows prints netstat's state column in the display language (German: ABHÖREN). Matching the English word
+    found no listener on a German Windows, so update and stop never reached a login-started dash-server (WIN-02)."""
+
+    def _pids(self, text: str, port: int) -> set[int]:
+        with unittest.mock.patch.object(process.sys, "platform", "win32"), \
+                unittest.mock.patch.object(process.subprocess, "run",
+                                           return_value=subprocess.CompletedProcess([], 0, stdout=text, stderr="")):
+            return process.listener_pids(port)
+
+    def test_english_netstat(self) -> None:
+        self.assertEqual({4321, 4322}, self._pids(NETSTAT_EN, 5100))
+        self.assertEqual(set(), self._pids(NETSTAT_EN, 52011))    # a client's end of a connection is no listener
+
+    def test_german_netstat(self) -> None:
+        self.assertEqual({4321, 4322}, self._pids(NETSTAT_DE, 5100))
+        self.assertEqual({1234}, self._pids(NETSTAT_DE, 135))
+        self.assertEqual(set(), self._pids(NETSTAT_DE, 5101))
+
+    def test_parser_reads_no_state_word(self) -> None:
+        self.assertEqual({135: {1234}, 5100: {4321, 4322}}, process.netstat_listeners(NETSTAT_DE))
 
 
 class ManagedProcessTest(unittest.TestCase):

@@ -17,8 +17,11 @@ The rerun keeps what the user already has:
   - The installer never starts another update, and this refuses to run inside
     a rerun, so the two cannot loop.
 
-Exit codes: the installer's own exit code; 6 when called from inside a rerun;
-7 when no installer script can be found.
+Exit codes: the installer's own exit code (0, or one of its own: 7 is the
+installer's "ended with no usable database"); this script's own two are
+kept off the installer's range so a caller can tell them apart: 66 when
+called from inside a rerun, 67 when no installer script can be found or
+started.
 """
 
 import argparse
@@ -26,8 +29,9 @@ import os
 import subprocess
 import sys
 
-EXIT_NESTED = 6
-EXIT_NOT_FOUND = 7
+# Off the installer's own codes (0-7): 7 there is "no usable database" (MCU-05).
+EXIT_NESTED = 66
+EXIT_NOT_FOUND = 67
 
 SCRIPTS = {
     "macos": "setup-macos.sh",

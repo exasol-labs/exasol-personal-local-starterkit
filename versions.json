@@ -1,47 +1,48 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-18",
+  "updated": "2026-11-20",
   "kit": {
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "components": {
     "personal": {
-      "version": "2.4.0",
+      "version": "2.5.0",
       "severity": "normal",
+      "min_kit_version": "0.3.1",
       "s3": {
         "base_url": "https://x-up.s3.eu-west-1.amazonaws.com/releases/exasol-personal",
         "sha256": {
-          "linux-arm64": "c5360ba697c753305da9056f4f1b5a53279d963418fc671bbc04044ba6d252a3",
-          "linux-x86_64": "9c8242aed903995c56986705f4eefe65b56ecd99cbb711cbecfcd360b7528838",
-          "macos-arm64": "f3e3d3c80f2818d1b3778e3c93c42957b9b2c9f47e8d67c12252d0e169e28dc6",
-          "macos-x86_64": "6276fffc83f1b79ebe7644ff585d2ca86ba73f48bd47edb03714114ee1b84530",
-          "windows-x86_64": "1dd3101d34e59c4e82b15dd1163e713b5e2afcb71239c4fc8411dc331bf0c0be"
+          "linux-arm64": "bf4f93b580f190dbc75a04b4643defe72fee395388a417b28e7d1349a9490deb",
+          "linux-x86_64": "2367ed053de8edde91cea29ae9dd090504592abd2cffeaaa5a2d2868d1a1901c",
+          "macos-arm64": "fc52f90d3f117581cd0daefb0d07eb523150c4cb507d99bab139240281bf4629",
+          "macos-x86_64": "fd598079a490cdd965ad45adae49b8bea286e5df81d938304258a5afb7e7b5d7",
+          "windows-x86_64": "065b2d2a8d30f63c84e24ff5b6c17d672bf1ba5fc3c1df6b30d31a38ebe9e0b0"
         }
       }
     },
     "exapump": {
-      "version": "0.14.0",
+      "version": "0.14.1",
       "repo": "exasol-labs/exapump",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "f0c72d2defd4820843e2f9ef3da70c294d4cbd31604457687ef74f0cdadaa7d1",
-        "linux-x86_64": "56644fed9ab18631cf3163257c6f207deb03c5df76d7dc376ad8df3a6489e08b",
-        "macos-aarch64": "36e9cfd328bf39b02d16226c1a277b97d41d90cc4367ec023758441e58018e40",
-        "macos-x86_64": "d09f0b9cef7b81cfdf7ec87e14b5073d39ddb245d6a60c3ab339dad7bc90b785",
-        "windows-x86_64": "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4"
+        "linux-aarch64": "633beaa235a0ddc52d3a57686f4c8483e416e9b76b4f0417061a3ec99204eba7",
+        "linux-x86_64": "4f45f93c4e28fed0e5caec0cf1cb2cdf27eff9f023444e6cfeac8be7a9a0d79c",
+        "macos-aarch64": "347e021a8b925c845e21404eb6b8defe33d1c8f6fedb033ea169aa5550ab2cbd",
+        "macos-x86_64": "aa8ddd8744507e842e3909901d155f5d3625ba13693e70c4771eb0d8b8e9b96c",
+        "windows-x86_64": "39280a992e0a4f97c1176a94cbe0f560dafb186913bce4fb7609119a520496fb"
       }
     },
     "uv": {
-      "version": "0.13.8",
+      "version": "0.13.9",
       "min_version": "0.13.4",
       "repo": "astral-sh/uv",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585",
-        "linux-x86_64": "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91",
-        "macos-aarch64": "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558",
-        "macos-x86_64": "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3",
-        "windows-x86_64": "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8"
+        "linux-aarch64": "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d",
+        "linux-x86_64": "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5",
+        "macos-aarch64": "5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca",
+        "macos-x86_64": "617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041",
+        "windows-x86_64": "edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb"
       }
     },
     "mcp": {
@@ -57,7 +58,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.24.64",
+      "version": "1.24.72",
       "severity": "normal"
     },
     "dash-server": {
@@ -109,12 +110,12 @@
       }
     },
     "semantic-views": {
-      "version": "v0.6.1",
+      "version": "v0.7.1",
       "repo": "exasol-labs/exasol-semantic-views",
       "severity": "normal",
-      "asset": "exasol-semantic-views-v0.6.1.zip",
+      "asset": "exasol-semantic-views-v0.7.1.zip",
       "sha256": {
-        "archive": "e9773247aab170741b958d43ed6be61f3b2f6c4e20d3cf60d4ad48c18653cf6e"
+        "archive": "1340e54c5763bdb8fc8a09770804a415d222215b49475b057a9352b086fc9d0a"
       }
     },
     "dbt-exasol": {

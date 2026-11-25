@@ -114,5 +114,50 @@ class SchedulerSidecarTest(unittest.TestCase):
         self.assertIn(("sidecar", "disable", "exasol-scheduler", "--remove"), self.calls)
 
 
+    def test_every_launcher_call_names_the_kits_deployment(self) -> None:
+        """Without --deployment-dir the launcher acts on the folder it runs from, or its default (UPG-02, WSL-02,
+        MCU-01, WPS-02): every call but --help names the kit's folder, and runs from the kit, not the caller's."""
+        argvs: list[tuple[list, dict]] = []
+
+        def run(argv, **kwargs):
+            argvs.append((list(argv), kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self.status), stderr="")
+
+        self.manifest.set_many({"components.exasol_scheduler.backend": "sidecar",
+                                "components.exasol_scheduler.version": "0.5.0",
+                                "components.exasol_scheduler.ownership": "kit"})
+        with patch.object(scheduler.subprocess, "run", side_effect=run), \
+                patch.object(scheduler, "_edit_sidecars", side_effect=self.edit), \
+                patch.object(scheduler, "_sql", return_value="EXAKIT_SCHED_NO_OTHER_SCHEMAS"):
+            scheduler._launch(self.ctx, "--help")
+            scheduler.status(self.ctx)
+            scheduler._sidecar_put(self.ctx, "SCHEDULER_SVC", "SCHED")
+            self.status = {"running": False}
+            scheduler.start(self.ctx)
+            scheduler.stop(self.ctx)
+            scheduler.uninstall(self.ctx)
+        launches = [(argv, kwargs) for argv, kwargs in argvs if argv and argv[0] == str(self.launcher)]
+        verbs = [" ".join(argv[1:4]) for argv, _ in launches]
+        for want in ("--help", "sidecar status exasol-scheduler", "start --deployment-dir",
+                     "sidecar enable exasol-scheduler", "sidecar disable exasol-scheduler"):
+            self.assertTrue(any(verb.startswith(want) for verb in verbs), (want, verbs))
+        for argv, kwargs in launches:
+            self.assertEqual(str(ROOT), kwargs.get("cwd"), argv)
+            if argv[1] == "--help":
+                self.assertNotIn("--deployment-dir", argv)
+            else:
+                self.assertEqual(["--deployment-dir", str(self.deployment)], argv[-2:], argv)
+        self.assertIn([str(self.launcher), "sidecar", "disable", "exasol-scheduler", "--remove",
+                       "--deployment-dir", str(self.deployment)], [argv for argv, _ in launches])
+
+    def test_no_deployment_of_the_kits_asks_no_launcher(self) -> None:
+        self.manifest.set_many({"runtime.deployment_dir": str(self.deployment.parent / "gone"),
+                                "components.exasol_scheduler.backend": "sidecar"})
+        with patch.object(scheduler.subprocess, "run") as run:
+            with self.assertRaises(scheduler.AddonFailure):
+                scheduler._launch(self.ctx, "start")
+            scheduler.stop(self.ctx)
+        run.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,11 +7,11 @@
   "role": "The kit's only database runtime. The Exasol launcher deploys it locally on macOS, Linux (through Docker Engine 29 or newer when it is usable, else Podman; native or inside WSL) and Windows x86_64 (Docker Desktop or Podman); Windows arm64 is not supported and the installer says so and exits. In WSL the launcher takes its Linux path, so the engine must be reachable inside the distro (Podman installed there, or Docker Desktop's WSL integration); Podman there, and Podman's machine on Windows, needs WSL 2.7 or newer unless Podman uses its iptables firewall driver. A deployment keeps the engine it was first deployed on.",
   "repo": "exasol/exasol-personal",
   "docs": "https://github.com/exasol/exasol-personal#readme",
-  "binary": "~/.local/bin/exasol",
-  "deployment_dir": "~/.exasol/personal/deployments/default",
+  "binary": "~/.exasol-starter-kit/personal/bin/exasol",
+  "deployment_dir": "~/.exasol/launcher/deployments/starter-kit-local",
   "dsn": "127.0.0.1:8563",
   "admin_user": "sys",
-  "installed_by": "The installer, at steps 1 and 2 of 6.",
+  "installed_by": "The installer, at steps 1 and 2 of 4.",
   "quickstart": [
     {
       "step": "Is it running?",
@@ -23,7 +23,7 @@
     },
     {
       "step": "Deployment detail",
-      "run": "exasol info"
+      "run": "exakit info"
     }
   ],
   "commands": [
@@ -70,23 +70,35 @@
       "description": "A MAJOR Exasol Personal upgrade is a real data migration, so it never starts on its own: the update reports it, takes no destructive action, and points at the Exasol Personal migration guidance for that version. Your database data is left where it is."
     },
     {
-      "command": "exasol info",
-      "options": "",
-      "summary": "The launcher's own deployment overview.",
+      "command": "exakit exasol info",
+      "options": "-d starter-kit-local",
+      "summary": "The launcher's own view of the kit's database.",
+      "description": "Typed without -d, exasol info and exasol status look at the launcher's default deployment, which is not the kit's. exakit exasol runs the kit's own launcher.",
       "examples": [
-        "exasol info"
+        "exakit exasol info -d starter-kit-local"
       ]
     }
   ],
   "environment": [
     {
       "name": "EXAKIT_REUSE_DB",
-      "effect": "1 adopts an existing deployment (default), 0 destroys it and deploys fresh."
+      "effect": "Answers the one question a new install asks when Exasol Personal 2.5 is on this computer with databases of yours. A deployment name (EXAKIT_REUSE_DB=dev) picks that database: it is renamed to starter-kit-local and stays yours. new or 0 deploys the kit's own starter-kit-local and leaves yours alone. 1 picks your default database, or the only one. Unset, a terminal asks, and without one the answer is a new database."
+    },
+    {
+      "name": "EXAKIT_REPLACE_DB",
+      "effect": "1 consents to deleting the kit's own stopped starter-kit-local and its data, and deploying a fresh one. It never applies to a database of yours."
     }
   ],
   "notes": [
-    "An existing database is adopted, running or stopped. Only one that cannot start is replaced, and the installer says so.",
-    "A database update (exakit update personal) replaces the launcher binary only: the deployment, its engine, its data and its password stay. The first start afterwards takes longer, once, while the launcher rebuilds part of the runtime."
+    "The launcher is not on PATH: run it with exakit exasol <args>. On Windows it is %USERPROFILE%\\.exasol-starter-kit\\personal\\bin\\exasol.exe.",
+    "The database listens on 127.0.0.1:8563, or on the next free port when another Exasol uses it. exakit info shows it.",
+    "On Windows the database folder is %LOCALAPPDATA%\\exasol\\launcher\\deployments\\starter-kit-local. Next to your own Exasol Personal 2.4, or one newer than 2.5, on macOS and Linux it is under ~/.exasol-starter-kit/personal/. A kit 0.3.0 database in ~/.exasol/personal/deployments/default is renamed to starter-kit-local by exakit update, and the 2.5.0 launcher moves it to the new folder by itself.",
+    "The kit's database is always the deployment starter-kit-local, next to anything of yours. exakit status reports on it. Typed by hand, exasol status looks at the launcher's default deployment instead.",
+    "With Exasol Personal 2.5 and databases of yours, a new install asks one question: a new starter-kit-local (the default, and the answer without a terminal), or one of yours, which is renamed to starter-kit-local and stays yours. Your other databases are not touched.",
+    "The kit always runs its own 2.5 launcher, in its own folder, and leaves yours alone. Next to your own Exasol Personal 2.4, or one newer than 2.5, on macOS and Linux it also has a home folder of its own. On Windows, next to your own 2.4, its 2.5 moves your stopped 2.4 databases into the 2.5 folder (exakit exasol deployments list shows them), and next to one newer than 2.5 the installer stops.",
+    "Re-running the installer uses starter-kit-local again, running or stopped. Only the kit's own database is ever replaced, when it cannot start, and the installer says so.",
+    "A database update (exakit update personal) replaces the launcher binary only: the deployment, its engine, its data and its password stay. The first start afterwards takes longer, once, while the launcher rebuilds part of the runtime. From kit 0.3.0 the update also renames the database to starter-kit-local, with the same data, port and sources.",
+    "exakit uninstall deletes the kit's own database and its data. A database of yours stays starter-kit-local, and only the kit's logins inside it are dropped. The kit's own launcher stays while another deployment uses it and no launcher of yours on 2.5 or newer can open it: as ~/.local/bin/exasol (%USERPROFILE%\\.local\\bin\\exasol.exe on Windows) when nothing is there, else in the kit folder."
   ],
   "troubleshooting": [
     {
@@ -95,7 +107,15 @@
     },
     {
       "symptom": "Port 8563 is already in use",
-      "remedy": "Stop the other app holding it, then exakit start."
+      "remedy": "A new install gives the kit's database the next free port by itself. For the database you have, stop the other app holding its port, then exakit start."
+    },
+    {
+      "symptom": "exasol status does not show the kit's database",
+      "remedy": "The kit's database is the deployment starter-kit-local. Run exakit status, or exakit exasol status -d starter-kit-local."
+    },
+    {
+      "symptom": "Windows: the installer says this Exasol Personal is newer than the starter kit supports",
+      "remedy": "The installer stopped before it changed anything. The starter kit runs beside Exasol Personal 2.4 and 2.5 on Windows. Next to a newer one, install it inside a WSL2 distro: run the Linux install command there."
     },
     {
       "symptom": "exakit start fails with 'nft did not return successfully' (Podman on WSL older than 2.7)",

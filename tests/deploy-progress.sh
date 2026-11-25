@@ -397,6 +397,9 @@ _lnx08_unit() {
     _lu="$(mktemp -d)"; mkdir -p "$_lu/bin" "$_lu/units"
     printf '#!/bin/sh\n[ "$1" = --version ] && echo "systemd %s (x)"\nexit 0\n' "$1" > "$_lu/bin/systemctl"
     chmod +x "$_lu/bin/systemctl"
+    # And launchctl, which /bin holds on macOS: nothing here may reach the
+    # real login session (autostart-sandbox-guard.sh).
+    printf '#!/bin/sh\nexit 0\n' > "$_lu/bin/launchctl"; chmod +x "$_lu/bin/launchctl"
     HOME="$_lu" EXAKIT_HOME="$_lu/kh" EXAKIT_SYSTEMD_USER_DIR="$_lu/units" PATH="$_lu/bin:/usr/bin:/bin" bash -c '
         . "$1/setup/lib/common.sh" 2>/dev/null
         detect_os() { echo linux; }

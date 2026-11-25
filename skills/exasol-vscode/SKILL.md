@@ -58,7 +58,8 @@ the same local database everything else uses:
 exakit info      # DSN, admin user, and where the password file lives
 ```
 
-Defaults are `127.0.0.1:8563`, admin user `sys`, TLS with a **self-signed
+Defaults are `127.0.0.1:8563` (or the port `exakit info` shows, when another Exasol
+already had 8563), admin user `sys`, TLS with a **self-signed
 certificate** — so if the extension offers a certificate-verification setting,
 it must be relaxed for a local connection, exactly as the kit's DBeaver and
 DbVisualizer guidance describes (`exakit guide`).

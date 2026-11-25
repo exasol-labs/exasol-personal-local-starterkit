@@ -44,14 +44,17 @@ class AddonSafetyTest(unittest.TestCase):
 
     def test_dash_failed_update_attempts_to_restore_running_service(self) -> None:
         self.manifest.set_many({"components.dash_server.ownership": "kit"})
-        with patch.object(dash_server, "status", return_value="running"), \
-             patch.object(dash_server, "stop") as stop, \
+        service = Mock()
+        service.status.return_value = "running"
+        with patch.object(dash_server, "_service", return_value=service), \
+             patch.object(dash_server, "package_version", return_value="0.1.0"), \
+             patch.object(dash_server, "_target", return_value="0.2.0"), \
              patch.object(dash_server, "install", side_effect=AddonFailure("package failed")), \
-             patch.object(dash_server, "start") as start:
+             patch.object(dash_server, "_start_on") as start_on:
             with self.assertRaisesRegex(AddonFailure, "package failed"):
                 dash_server.update(self.ctx)
-        stop.assert_called_once_with(self.ctx)
-        start.assert_called_once_with(self.ctx)
+        service.stop.assert_called_once_with(5100)
+        start_on.assert_called_once_with(self.ctx, 5100)
         self.assertIsNone(self.manifest.get("desired.dash_server"))
 
     def test_dash_venv_uses_managed_python_override(self) -> None:

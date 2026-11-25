@@ -74,9 +74,35 @@ def migrated(doc):
 
 
 class Store(object):
-    def __init__(self, kit_home):
+    def __init__(self, kit_home, exa=None):
         self.root = os.path.join(kit_home, "sources")
         self._held = 0
+        # The deployment's local/runtime/exa the engine stages into this run
+        # (Runtime.exa), when it has one: registry paths under another one
+        # that is gone are read as under this one (rebased).
+        self.exa = exa
+
+    def rebased(self, path):
+        """``path`` under the current deployment, when it was recorded under a
+        deployment folder that is gone. The registry and the journals hold
+        absolute paths under <deployment>/local/runtime/exa, and the Exasol
+        Personal launcher MOVES that folder (2.5.0 moves the 2.4 one, as a
+        whole): the staged files are then the same ones, under the new folder.
+        A path under a folder that is still there, or outside any deployment,
+        is itself."""
+        exa = self.exa
+        if not exa or not isinstance(path, str) or not os.path.isdir(exa):
+            return path
+        for marker in {os.sep.join(["", "local", "runtime", "exa", ""]), "/local/runtime/exa/"}:
+            at = path.find(marker)
+            if at <= 0:
+                continue
+            old = path[:at + len(marker) - 1]
+            same = old.lower() == exa.lower() if os.name == "nt" else old == exa
+            if same or os.path.exists(old):
+                return path
+            return exa + path[at + len(marker) - 1:]
+        return path
 
     def path(self, *parts):
         return os.path.join(self.root, *parts)
@@ -98,9 +124,21 @@ class Store(object):
         lock_target = self.path("registry.json")
         if not os.path.exists(lock_target):
             self._write(lock_target, {"schema_version": 1, "artifacts": {}})
-        with core_state.manifest_lock(lock_target):
+        # Waited for on every platform: a second command that went ahead
+        # without it would decide on sources the first is still changing.
+        held = contextlib.ExitStack()
+        try:
+            held.enter_context(core_state.manifest_lock(lock_target))
+        except core_state.StateError as error:
+            raise SourceError(str(error))
+        with held:
             self._held = 1
             try:
+                # A registry recorded under a deployment folder the launcher
+                # has moved since is written back under the current one, once.
+                raw = self._read(lock_target, None)
+                if isinstance(raw, dict) and raw != self.registry():
+                    self.save_registry(self.registry())
                 yield
             finally:
                 self._held = 0
@@ -199,8 +237,24 @@ class Store(object):
 
     # --- the shared-file registry -------------------------------------------------
     def registry(self):
-        return self._read(self.path("registry.json"), {"schema_version": 1, "artifacts": {}}) or \
+        doc = self._read(self.path("registry.json"), {"schema_version": 1, "artifacts": {}}) or \
             {"schema_version": 1, "artifacts": {}}
+        artifacts = doc.get("artifacts")
+        if not self.exa or not isinstance(artifacts, dict):
+            return doc
+        # Every path as it is now (rebased); two records of one file merge.
+        out = {}
+        for path, entry in artifacts.items():
+            now_path = self.rebased(path)
+            if now_path not in out:
+                out[now_path] = entry
+                continue
+            kept = dict(out[now_path])
+            kept["consumers"] = list(kept.get("consumers") or []) + \
+                [c for c in entry.get("consumers") or [] if c not in (kept.get("consumers") or [])]
+            kept["owned"] = bool(kept.get("owned")) or bool(entry.get("owned"))
+            out[now_path] = kept
+        return dict(doc, artifacts=out)
 
     def save_registry(self, doc):
         self._write(self.path("registry.json"), doc)

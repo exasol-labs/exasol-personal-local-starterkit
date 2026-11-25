@@ -43,7 +43,7 @@ from pathlib import Path
 
 import kit_telemetry
 import preprocessor_modules
-from runtime import AddonFailure, KitContext, utf8_child
+from runtime import AddonFailure, KitContext, id_text, made_in_this_database, uninstall_keeps_database, utf8_child
 
 ID = "semantic-views"
 RECEIPT = "components.semantic_views"
@@ -334,8 +334,10 @@ def install(ctx: KitContext) -> None:
         # and uninstall removes what is there. The role is the kit's to remove only when this install made it, so that
         # is recorded now too, from the database as it was before the installer ran.
         ctx.manifest.set_many({f"{RECEIPT}.ownership": "kit", f"{RECEIPT}.state": "installing",
-                               f"{RECEIPT}.role_created": bool(ctx.manifest.get(f"{RECEIPT}.role_created"))
-                               or not before["role"]})
+                               f"{RECEIPT}.role_created": (bool(ctx.manifest.get(f"{RECEIPT}.role_created")) and
+                                                           made_in_this_database(ctx.manifest.get, RECEIPT))
+                               or not before["role"],
+                               f"{RECEIPT}.made_in": id_text(ctx.manifest.get("runtime.deployment_id"))})
         try:
             _run_installer(ctx, release)
         except Exception:
@@ -422,6 +424,15 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path | str]:
         raise AddonFailure("Semantic Views is not kit-owned; it will not be removed")
     home = paths(ctx)[0]
     targets = [home] if home.exists() else []
+    if uninstall_keeps_database():
+        # A full uninstall over a database the user let the kit use: Semantic Views stays in it whole, its schemas,
+        # models, role and Semantic SQL module (the kit's own logins and roles there are kit_logins.py's). Only its
+        # folder on this computer goes, with the receipt.
+        if not dry_run:
+            for target in targets:
+                shutil.rmtree(target, ignore_errors=True)
+            ctx.manifest.delete(RECEIPT, "desired.semantic_views")
+        return targets
     if dry_run:
         # Every action the removal below performs, read from the receipt (a preview asks no database): a preview of
         # the folder alone hid that five schemas and a role leave the database. Defined models stop it all.
@@ -434,7 +445,7 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path | str]:
             plan.append(f"the {ROLE} grant to {login} (REVOKE)")
         plan.append(f"the schemas {', '.join(SCHEMAS)} where present (DROP SCHEMA ... CASCADE); "
                     "nothing is removed while a semantic model is defined, or when the models cannot be counted")
-        if ctx.manifest.get(f"{RECEIPT}.role_created"):
+        if ctx.manifest.get(f"{RECEIPT}.role_created") and made_in_this_database(ctx.manifest.get, RECEIPT):
             plan.append(f"the role {ROLE} (DROP ROLE ... CASCADE)")
         return plan + targets
     found = _present(ctx)
@@ -460,7 +471,8 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path | str]:
     # What this removal drops, named for the caller: after an interrupted install (state=installing) that is the
     # report of what the install had created, so it lists what was there, never the five names it might have made.
     removed: list[Path | str] = [f"schema {name}" for name in SCHEMAS if name in found["schemas"]]
-    if found["role"] and ctx.manifest.get(f"{RECEIPT}.role_created"):
+    if found["role"] and ctx.manifest.get(f"{RECEIPT}.role_created") and \
+            made_in_this_database(ctx.manifest.get, RECEIPT):
         statements.append(f"DROP ROLE {ROLE} CASCADE")
         removed.append(f"role {ROLE}")
     if statements:

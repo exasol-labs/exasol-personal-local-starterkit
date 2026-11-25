@@ -55,7 +55,7 @@ podman ps -a --filter name=exasol-db
 podman inspect --format "{{.State.Error}}" <container-name>
 ```
 
-A deployment that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it.
+A deployment of the kit's own that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it. A database of yours is never offered for removal.
 
 ### Windows connection failures
 
@@ -87,7 +87,7 @@ If you're installing inside a WSL distro, install Podman in that distro too, or 
 
 ### WSL 2.7 and nftables
 
-Exasol Personal 2.4 puts each deployment on its own network, which Podman builds with its nftables firewall driver. The kernel that WSL 2.6 and older ship has no nftables, so a Podman deploy inside WSL, or the first start of an existing deployment after the launcher update to 2.4, fails with:
+Exasol Personal 2.4 and later put each deployment on its own network, which Podman builds with its nftables firewall driver. The kernel that WSL 2.6 and older ship has no nftables, so a Podman deploy inside WSL, or the first start of an existing deployment after the launcher update to 2.4, fails with:
 
 ```
 Error: netavark: nftables error: "nft" did not return successfully while applying ruleset

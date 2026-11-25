@@ -111,6 +111,22 @@ class SidecarDefinitionEditorTests(unittest.TestCase):
         self.assertEqual(self.run_editor("drop", str(self.file), "mcp").stdout.strip(), "changed")
         self.assertEqual(list(self.doc()["sidecars"]), ["mine"])
 
+    def test_put_keeps_a_foreign_sidecar_of_the_same_name(self) -> None:
+        # OWN-04: the user's own `mcp` sidecar on a deployment the kit adopted is never replaced.
+        definition = self.dir / "def.json"
+        definition.write_text(json.dumps({"enabled": True, "container": {"image": "kit:1"}}), encoding="utf-8")
+        before = self.file.read_text(encoding="utf-8")
+        kept = self.run_editor("put", str(self.file), "mcp", str(definition), "--keep-foreign")
+        self.assertEqual((kept.returncode, kept.stdout.strip()), (3, "foreign"))
+        self.assertEqual(self.file.read_text(encoding="utf-8"), before)
+        # Not saved there yet: written as before.
+        self.run_editor("drop", str(self.file), "mcp")
+        put = self.run_editor("put", str(self.file), "mcp", str(definition), "--keep-foreign")
+        self.assertEqual((put.returncode, put.stdout.strip()), (0, "changed"))
+        # Already the kit's own definition: unchanged, not foreign.
+        again = self.run_editor("put", str(self.file), "mcp", str(definition), "--keep-foreign")
+        self.assertEqual((again.returncode, again.stdout.strip()), (0, "unchanged"))
+
     def test_put_reads_a_definition_written_with_a_utf8_bom(self) -> None:
         # Windows PowerShell 5.1's `Set-Content -Encoding UTF8` starts the file with EF BB BF; json.loads on a plain
         # utf-8 read raised "Unexpected UTF-8 BOM" and the MCP sidecar was never saved.
@@ -154,6 +170,25 @@ class SidecarDefinitionEditorTests(unittest.TestCase):
         definition.write_text(json.dumps({"enabled": True, "container": {"image": "x:1"}}), encoding="utf-8")
         self.run_editor("put", str(self.file), "mcp", str(definition))
         self.assertEqual(self.doc(), {"version": 1, "sidecars": {"mcp": {"enabled": True, "container": {"image": "x:1"}}}})
+
+    def test_is_kits_proves_only_the_definition_the_kit_writes(self) -> None:
+        # A kit before 0.3.1 kept no record of the folder it wrote its sidecar in: the update proves it by the
+        # sidecar itself, its read-only login and its port. The launcher's own (the user's) signs in from the secret.
+        self.assertEqual(self.run_editor("is-kits", str(self.file), "mcp", "mcp_readonly", "4896").returncode, 1)
+        definition = self.dir / "def.json"
+        definition.write_text(json.dumps({"enabled": True, "container": {
+            "image": "x:1", "env": [{"name": "EXA_USER", "value": "mcp_readonly"},
+                                    {"name": "EXA_PASSWORD", "valueFile": str(self.secret)}],
+            "ports": [{"name": "mcp", "containerPort": 4896, "hostPort": 4896, "hostIP": "127.0.0.1"}]}}),
+            encoding="utf-8")
+        self.run_editor("put", str(self.file), "mcp", str(definition))
+        kits = self.run_editor("is-kits", str(self.file), "mcp", "mcp_readonly", "4896")
+        self.assertEqual((kits.returncode, kits.stdout, kits.stderr), (0, "", ""))
+        self.assertEqual(self.run_editor("is-kits", str(self.file), "mcp", "someone_else", "4896").returncode, 1)
+        self.assertEqual(self.run_editor("is-kits", str(self.file), "mcp", "mcp_readonly", "4897").returncode, 1)
+        self.assertEqual(self.run_editor("is-kits", str(self.file), "mine", "mcp_readonly", "4896").returncode, 1)
+        self.assertEqual(self.run_editor("is-kits", str(self.dir / "none.yaml"), "mcp", "mcp_readonly", "4896").returncode, 1)
+        self.assertEqual(self.run_editor("is-kits", str(self.file), "mcp", "mcp_readonly").returncode, 2)
 
 
 if __name__ == "__main__":

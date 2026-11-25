@@ -65,7 +65,8 @@ class SelectionParityTest(unittest.TestCase):
                                "EXAKIT_MARKETPLACE_ADDONS": answer, "EXAKIT_MARKETPLACE_ONLY": "",
                                "EXAKIT_NO_FANCY": "1", "EXAKIT_ABOUT_OFFLINE": "1",
                                "EXAKIT_VERSION_POLICY": "pinned", "EXAKIT_TEST_CAPTURE": str(capture)}
-                        result = subprocess.run(script, env=env, capture_output=True, text=True, timeout=30)
+                        # A cold pwsh on a busy CI runner can take over 30 s to load exakit-common.ps1.
+                        result = subprocess.run(script, env=env, capture_output=True, text=True, timeout=120)
                         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                         selected = capture.read_text().strip()
                         self.assertEqual(expected, selected.split(",") if selected else [])

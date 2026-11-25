@@ -43,6 +43,15 @@ class CsvGuardTest(unittest.TestCase):
         with open(dst, "rb") as handle:
             self.assertEqual(handle.read(), b'\xef\xbb\xbfid,note\n1,"two\r\nlines"\n2,"say ""hi"""\n')
 
+    def test_a_lone_cr_at_the_end_of_the_file_becomes_lf(self):
+        # printf 'a,b\n1,2\r' - flagged by both twins (review 0.3.1, item 2),
+        # so the copy must not keep the CR exapump would read as data.
+        src = self.write("eof.csv", b"a,b\n1,2\r")
+        dst = os.path.join(self.dir, "eof-lf.csv")
+        self.assertTrue(csv_guard.to_lf(src, dst))
+        with open(dst, "rb") as handle:
+            self.assertEqual(handle.read(), b"a,b\n1,2\n")
+
     def test_an_inch_mark_in_an_unquoted_field_does_not_keep_later_crs(self):
         src = self.write("inch.csv", b'sku,product,qty\r\n1,27" monitor,4\r\n2,USB cable,10\r\n3,mouse,7\r\n')
         dst = os.path.join(self.dir, "out.csv")

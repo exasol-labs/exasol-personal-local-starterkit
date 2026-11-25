@@ -265,6 +265,103 @@ _eva() { ( EXAKIT_DATASETS="$1"; unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADD
 check "EXAKIT_DATASETS=external passes the check" "rc=0" "$(_eva external)"
 check "...beside a dataset too" "rc=0" "$(_eva tpch,external)"
 check "an unknown id is still refused, nothing installed (exit 2)" "rc=2" "$(_eva tpch,nonsense)"
+# EXAKIT_REUSE_DB names which database the kit uses (the one question), or 0
+# for a new one: not a yes or no. Its form is checked here, the database at
+# the database step.
+_evr() { ( unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS; EXAKIT_REUSE_DB="$1"
+           exakit_validate_env_answers >/dev/null 2>&1; printf 'rc=%s' "$?" ); }
+check "EXAKIT_REUSE_DB=dev (a database name) passes the check" "rc=0" "$(_evr dev)"
+check "...so do 0, 1 and new" "rc=0|rc=0|rc=0" "$(_evr 0)|$(_evr 1)|$(_evr new)"
+check "...and what can be no name is refused (exit 2)" "rc=2|rc=2" "$(_evr 'my db')|$(_evr '-x')"
+
+echo ""
+echo "the password generators end under a parent that ignores SIGPIPE (H-01):"
+# A Python harness ignores SIGPIPE and its children inherit that: tr read
+# /dev/urandom for ever after head had its bytes, and the install hung. Each
+# generator runs under trap '' PIPE with a 15 s budget.
+_pw_kill_tree() { # the subshell, and the tr and head it started, so none reads /dev/urandom on after the test
+    for _pw_child in $(pgrep -P "$1" 2>/dev/null); do _pw_kill_tree "$_pw_child"; done
+    kill "$1" 2>/dev/null
+}
+_pw_bounded() { # _pw_bounded <function> -> what it printed, or TIMEOUT
+    ( trap '' PIPE; "$1" > "$WORK/pw.$1" 2>/dev/null ) &
+    _pw_pid=$!
+    _pw_t=0
+    while kill -0 "$_pw_pid" 2>/dev/null && [ "$_pw_t" -lt 150 ]; do sleep 0.1; _pw_t=$((_pw_t + 1)); done
+    if kill -0 "$_pw_pid" 2>/dev/null; then
+        _pw_kill_tree "$_pw_pid"; wait "$_pw_pid" 2>/dev/null
+        printf 'TIMEOUT'
+        return 0
+    fi
+    wait "$_pw_pid" 2>/dev/null
+    cat "$WORK/pw.$1"
+}
+_pw="$(_pw_bounded _exakit_generate_sql_password_token)"
+check "the SQL password token ends, 24 characters, A then A-Z0-9" "ok" \
+    "$(printf '%s' "$_pw" | grep -qE '^A[A-Z0-9]{23}$' && echo ok || printf 'bad:%s' "$_pw")"
+if [ "$_pw" != TIMEOUT ] && _exakit_validate_sql_password_token "$_pw"; then _r=valid; else _r=invalid; fi
+check "...and passes the kit's own token check" "valid" "$_r"
+_pw="$(_pw_bounded generate_password)"
+check "generate_password ends, 24 characters of A-Za-z0-9" "ok" \
+    "$(printf '%s' "$_pw" | grep -qE '^[A-Za-z0-9]{24}$' && echo ok || printf 'bad:%s' "$_pw")"
+check "...and two runs differ" "differ" \
+    "$([ "$(generate_password)" != "$(generate_password)" ] && echo differ || echo same)"
+
+echo ""
+echo "a random source that cannot be read fails the password, never hands on a short one (SEC-02):"
+# A sandbox, a broken head, a container without /dev/urandom: the generator
+# printed "A", the token check took it, and CREATE USER ... IDENTIFIED BY A
+# followed. Here head refuses /dev/urandom and passes everything else on.
+_nr() { ( head() { case "$*" in *urandom*) return 1 ;; esac; command head "$@"; }; "$@" ); }
+_out="$(_nr _exakit_random_chars 'A-Z0-9' 23)"; _rc=$?
+check "the random characters fail, printing nothing" "rc=1 []" "rc=$_rc [$_out]"
+_out="$(_nr _exakit_generate_sql_password_token)"; _rc=$?
+check "the SQL password token fails, printing nothing" "rc=1 []" "rc=$_rc [$_out]"
+_out="$(_nr generate_password)"; _rc=$?
+check "generate_password fails, printing nothing" "rc=1 []" "rc=$_rc [$_out]"
+_tok() { if _exakit_validate_sql_password_token "$1"; then printf valid; else printf invalid; fi; }
+check "the token check refuses A, a cut-short token and a long one, takes the full one" \
+    "invalid invalid invalid valid" \
+    "$(_tok A) $(_tok A1234567890ABCDEFGHIJKL) $(_tok A1234567890ABCDEFGHIJKLMN) $(_tok A1234567890ABCDEFGHIJKLM)"
+# The MCP step itself: no stored password, the generator fails, so it stops
+# before any statement - no CREATE USER with a password a broken source chose.
+_sec02_mcp_step() { (
+    require_python3() { :; }
+    exakit_exapump_bin() { printf '/usr/bin/true\n'; }
+    _exakit_add_bin_to_shell_rc() { :; }
+    _exakit_manifest_runtime_value() {
+        case "$1" in
+            runtime.user) printf 'sys\n' ;;
+            runtime.password_file) printf '%s\n' "$WORK/sec02.adminpw" ;;
+        esac
+    }
+    read_credential() { :; }
+    store_credential() { printf 'STORED %s=%s\n' "$1" "$2" >> "$WORK/sec02.log"; }
+    _exakit_parse_runtime_host() { printf 'localhost\n'; }
+    _exakit_parse_runtime_port() { printf '8563\n'; }
+    _exakit_write_exapump_config() { :; }
+    _exakit_exapump_sql_has_token() { return 1; }
+    _exakit_run_exapump_sql() {
+        printf 'SQL %s\n' "$3" >> "$WORK/sec02.log"
+        case "$3" in
+            "CREATE USER"*) exit 3 ;;
+        esac
+    }
+    die() { printf 'DIE %s\n' "$*" >> "$WORK/sec02.log"; exit 1; }
+    head() {
+        case "$*" in
+            *urandom*) return 1 ;;
+        esac
+        command head "$@"
+    }
+    exakit_configure_mcp_readonly_access >/dev/null 2>&1
+); }
+: > "$WORK/sec02.log"; printf 'admin-secret' > "$WORK/sec02.adminpw"
+_sec02_mcp_step; _out="rc=$?"
+check "the MCP step stops (exit 1)" "rc=1" "$_out"
+check "...naming the random source, before any statement or stored password" \
+    "DIE Could not generate a password for the MCP read-only database user, because the system random source could not be read." \
+    "$(cat "$WORK/sec02.log")"
 
 echo ""
 echo "noninteractive-answers: $PASS passed, $FAIL failed"

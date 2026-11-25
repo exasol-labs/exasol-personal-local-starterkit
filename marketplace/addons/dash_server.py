@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -353,27 +354,71 @@ def _target(ctx: KitContext) -> str:
     return ctx.target_version(ID, default)
 
 
+def _recorded_port(ctx: KitContext) -> int:
+    """The port the kit's server runs on: the receipt's. The launcher always binds it (dash_launcher.py), whatever
+    EXAKIT_DASH_SERVER_PORT says, so a running server is looked for here, never on the port an update asks for."""
+    try:
+        port = int(ctx.manifest.get(f"{RECEIPT}.port", 5100))
+    except (ValueError, TypeError):
+        return 5100
+    return port if 1 <= port <= 65535 else 5100
+
+
+def _start_on(ctx: KitContext, port: int) -> None:
+    service = _service(ctx)
+    if service.status(port) == "running":
+        return
+    service.start(_launch_command(ctx), port)
+    if not _http(port, "/mcp", browser=False):
+        raise AddonFailure(f"Dash Server started but /mcp does not answer on port {port}")
+
+
 def update(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
         raise AddonFailure("Dash Server is not kit-owned; its owner manages updates")
-    if (package_version(ctx) == _target(ctx) and ctx.manifest.get(f"{RECEIPT}.validated") is not False
-            and os.environ.get("EXAKIT_FORCE_COMPONENT_INSTALL") != "1"):
+    # THE RUNNING SERVER IS ON THE RECORDED PORT. EXAKIT_DASH_SERVER_PORT=<new> exakit update dash-server (the help's
+    # own example) used to look for it on the NEW port, find nothing, stop nothing and start nothing: the old server
+    # kept serving the old code on the old port, where every AI client still pointed (#48, DOC-05, LNX-08). Now the
+    # server on the recorded port is stopped, the new version or the new port is put in place, and it is started
+    # again there. A changed port moves even at the same version.
+    old_port = _recorded_port(ctx)
+    new_port = _port(ctx)
+    current = (package_version(ctx) == _target(ctx) and ctx.manifest.get(f"{RECEIPT}.validated") is not False
+               and os.environ.get("EXAKIT_FORCE_COMPONENT_INSTALL") != "1")
+    if current and new_port == old_port:
         ctx.log_event(f"Dash Server {_target(ctx)} is current; nothing to update")   # a running service is left running
         return
-    was_running = status(ctx) == "running"
+    service = _service(ctx)
+    was_running = service.status(old_port) == "running"
     if was_running:
-        stop(ctx)
+        service.stop(old_port)
     try:
-        install(ctx)
-        if not validate(ctx):
-            raise AddonFailure("Dash Server did not validate after the update")
+        if current:
+            # The same version on a new port: nothing to install, only the move.
+            ctx.manifest.set_many({f"{RECEIPT}.port": _settle_port(ctx)})
+        else:
+            install(ctx)
+            if not validate(ctx):
+                raise AddonFailure("Dash Server did not validate after the update")
     except Exception:
+        # Back where it was: the AI clients still point at the old port.
+        ctx.manifest.set_many({f"{RECEIPT}.port": old_port})
         if was_running:
             try:
-                start(ctx)
+                _start_on(ctx, old_port)
             except (AddonFailure, OSError):
                 pass
         raise
     if was_running:
         start(ctx)
+    port = _recorded_port(ctx)
+    if port != old_port:
+        # Every AI client registered the control plane at the old port: point them at the new one, as the install
+        # registers it.
+        from integration import register_mcp_endpoint
+
+        ctx.activity(f"Dash Server moved from port {old_port} to {port}")
+        warning = register_mcp_endpoint(ctx, ID, sys.modules[__name__])
+        if warning:
+            ctx.activity(f"Dash Server: {warning}")
     ctx.manifest.set_many({"desired.dash_server": ctx.manifest.get(f"{RECEIPT}.version")})

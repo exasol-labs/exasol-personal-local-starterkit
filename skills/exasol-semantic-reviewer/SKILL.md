@@ -4,7 +4,7 @@ addon: semantic-views
 description: Review proposed or published Exasol Semantic Views models and prepare approval-ready handoffs for data engineers and domain owners. Use when an agent must assess model scope, source evidence, entity grain, relationships, metrics, validation results, semantic diffs, acceptance queries, publication metadata, or operational feedback; coordinate human approval gates; or assemble a semantic-layer review bundle before publication or promotion.
 ---
 
-> **Exasol starter kit:** Exasol's own skill, copied unchanged from [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views) at `v0.6.1`. On this machine the `exakit` skill comes first: how to connect, how to load data and which tool to reach for.
+> **Exasol starter kit:** Exasol's own skill, copied unchanged from [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views) at `v0.7.1`. On this machine the `exakit` skill comes first: how to connect, how to load data and which tool to reach for.
 
 # Exasol Semantic Reviewer
 

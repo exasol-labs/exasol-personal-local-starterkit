@@ -147,12 +147,14 @@ has "...the kit source passed through" "SOURCE=exasol-labs/kit@main" "$(cat "$WO
 has "...and no stdin under --no-stdin" "no-stdin" "$(cat "$WORK/rerun-env")"
 FAKE_INSTALLER_RC=5 python3 "$RERUN" --platform linux --kit-root "$FK" --no-stdin </dev/null
 check "the installer's exit code comes back" "5" "$?"
+FAKE_INSTALLER_RC=7 python3 "$RERUN" --platform linux --kit-root "$FK" --no-stdin </dev/null
+check "...its 7 (no usable database) too, which is not one of the rerun's own" "7" "$?"
 python3 "$RERUN" --platform macos --kit-root "$WORK/empty" --fallback-root "$FK" --no-stdin </dev/null
 check "a kit copy without setup scripts falls back to the checkout" "0" "$?"
 python3 "$RERUN" --platform macos --kit-root "$WORK/empty" --no-stdin 2>/dev/null </dev/null
-check "no installer anywhere: exit 7" "7" "$?"
+check "no installer anywhere: exit 67, never the installer's own 7 (no usable database)" "67" "$?"
 EXAKIT_CORE_RERUN=1 python3 "$RERUN" --platform macos --kit-root "$FK" --no-stdin 2>/dev/null </dev/null
-check "never from inside a rerun: exit 6" "6" "$?"
+check "never from inside a rerun: exit 66, off the installer's codes" "66" "$?"
 
 printf '\n== exakit update: the pending-task check ==\n'
 # A sandboxed install whose kit copy carries the real setup/core and a stub

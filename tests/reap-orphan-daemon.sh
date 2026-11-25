@@ -52,8 +52,13 @@ chmod +x "$TMP/mac-runner-aarch64"
 
 # Redirect the listeners' stdio to /dev/null: otherwise the long-lived child
 # inherits the command-substitution pipe and $(start_daemon ...) never returns.
-start_daemon() { # start_daemon <port> -> echoes pid, command looks like the orphan
-    python3 "$TMP/mac-runner-aarch64" "$1" __daemon__ 2 12288 >/dev/null 2>&1 &
+# The kit's deployment folder: a runner of the kit's own works inside it (its
+# working directory), as the launcher's runner does. One of another deployment
+# works inside that one's folder (OWN-02).
+DEPLOY="$TMP/kit-deployment"; OTHER="$TMP/other-deployment"
+mkdir -p "$DEPLOY" "$OTHER"
+start_daemon() { # start_daemon <port> [folder] -> echoes pid, command looks like the orphan
+    ( cd "${2:-$DEPLOY}" && exec python3 "$TMP/mac-runner-aarch64" "$1" __daemon__ 2 12288 ) >/dev/null 2>&1 &
     _pid=$!; CHILDREN="$CHILDREN $_pid"; sleep 1; echo "$_pid"
 }
 start_foreign() { # start_foreign <port> -> echoes pid, a non-Exasol listener
@@ -74,7 +79,7 @@ port_in_use(){ [ "\${FORCE_PORT_IN_USE:-0}" = 1 ] && return 0; (exec 3<>"/dev/tc
 # would answer for the ephemeral port this suite actually started a daemon on.
 # An empty deployment directory makes personal_db_port fall back to the port
 # set below - which is the whole point of the override.
-EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/kit-deployment"
 # THE AGE GATE IS OFF FOR THE CASES BELOW, and that is not it being ignored -
 # it is the only way to test them. personal_is_orphan_daemon now spares a
 # matching daemon younger than EXAKIT_PERSONAL_REAP_MIN_AGE (180s shipped),
@@ -129,6 +134,24 @@ RC="$(run_reaper_busy "$P3")"
 check "lingering-socket false positive" 0 "$RC"
 
 echo
+echo "only a runner of the kit's own deployment is ever reaped (OWN-02):"
+# The user's OTHER deployment, running on the same port while the kit's is
+# stopped: its runner carries the same name and is past the start budget, but
+# it works in another folder. Never killed; the port is reported busy.
+P6="$(pick_port $((P3 + 1)))"
+PID6="$(start_daemon "$P6" "$OTHER")"
+RC6="$(run_reaper "$P6")"; sleep 1
+check "another deployment's runner survives" yes "$(alive "$PID6")"
+check "...and the port is reported held" 1 "$(printf '%s' "$RC6" | tail -1)"
+kill -9 "$PID6" 2>/dev/null || true
+# The kit's own, stale: reaped as before (case 1 is one too).
+P7="$(pick_port $((P6 + 1)))"
+PID7="$(start_daemon "$P7" "$DEPLOY")"
+RC7="$(run_reaper "$P7")"; sleep 1
+check "the kit's own stale runner is reaped" no "$(alive "$PID7")"
+check "...and the port is reported free" 0 "$(printf '%s' "$RC7" | tail -1)"
+
+echo
 echo "a runner that is still coming up is NOT an orphan:"
 # LIF-09, and this is the worst path in the kit. personal_status answers
 # `conflict` for any port that is bound while the database does not yet answer
@@ -139,7 +162,7 @@ echo "a runner that is still coming up is NOT an orphan:"
 # setup/exakit records what that costs: a SIGKILLed runner leaves the launcher
 # `interrupted`, after which every start fails identically forever, and the
 # only cure is `exakit repair-runtime` - which deletes the database.
-P4="$(pick_port $((P3 + 1)))"
+P4="$(pick_port $((P7 + 1)))"
 PID4="$(start_daemon "$P4")"
 RC4="$(run_reaper_aged "$P4" 180)"; sleep 1
 check "a one-second-old daemon survives the reaper" "yes" "$(alive "$PID4")"

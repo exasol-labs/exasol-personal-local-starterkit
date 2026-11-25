@@ -106,7 +106,7 @@ change is at the source: show it, run it only after a yes.
 
 ## 6. TLS and the CA file
 
-- **`verify` always needs `ca` on Exasol Personal 2.4**, even for a public CA:
+- **`verify` always needs `ca` on Exasol Personal 2.4 and later**, even for a public CA:
   the database's JDBC loader has an empty Java trust store, and the connect fails
   with "the trustAnchors parameter must be non-empty". The plan warns when
   `verify` has no CA; do not connect past that warning.

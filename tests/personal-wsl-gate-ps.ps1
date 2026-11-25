@@ -596,9 +596,13 @@ Write-Host "Install-PersonalDeployment, an existing stopped deployment: the star
 $saved2 = @{}
 foreach ($name in @("Test-PersonalDeploymentExists", "Get-PersonalEngineExisting", "Test-PersonalDeploymentRunning", "Get-PersonalLauncherState",
                     "Test-PersonalLauncherSupports", "Show-PersonalGuestRebuildNote", "Get-PersonalAutoApproveFlag", "Invoke-ExakitLogged",
-                    "Test-PersonalWslPodmanNetworkOk", "Test-ExakitInteractive")) {
+                    "Test-PersonalWslPodmanNetworkOk", "Test-ExakitInteractive", "Test-ExakitComponentManaged")) {
     $saved2[$name] = (Get-Item "Function:\$name").ScriptBlock
 }
+# The kit's own database, unless a case says otherwise: only the kit's own is
+# ever offered for a replace (CONTRACT section 4).
+$script:StubManaged = $true
+function Test-ExakitComponentManaged { param([string]$Id) return $script:StubManaged }
 $script:DepCalls = New-Object System.Collections.ArrayList
 $script:StartLine = ""
 $script:StubInteractive = $false
@@ -650,6 +654,23 @@ $script:StubInteractive = $true
 Invoke-Dep
 Has   "unset, on a console -> the check runs before the question" "WSL" ($script:DepCalls -join "|")
 $script:StubInteractive = $false
+# A database of the user's: the start's own evidence is still said, and the
+# replace question never comes, whatever EXAKIT_REPLACE_DB says.
+$script:StubManaged = $false
+$script:StartLine = $nft
+Invoke-Dep -Replace "1"
+$lines = ($script:Said -join "`n")
+Check "the user's database, nft error -> no database" $true $script:PersonalNoDatabase
+Has   "  says the network sentence"              "This WSL kernel cannot create the deployment network" $lines
+Lacks "  never destroyed"                        "LAUNCHER destroy" ($script:DepCalls -join "|")
+$script:StartLine = "Error: something else"
+Invoke-Dep -Replace "1"
+$lines = ($script:Said -join "`n")
+Has   "the user's database, another error -> never offered for a replace" "Nothing was deleted. This database is yours, so the kit never deletes it." $lines
+Lacks "  no release check: no replace can happen" "WSL" ($script:DepCalls -join "|")
+Lacks "  never destroyed, even with EXAKIT_REPLACE_DB=1" "LAUNCHER destroy" ($script:DepCalls -join "|")
+Has   "  the reason says the kit never deletes it" "The kit never deletes it" (Get-ExakitFailureReason)
+$script:StubManaged = $true
 $script:StartLine = ""
 foreach ($name in @($saved2.Keys)) { Set-Item -Path "Function:\$name" -Value $saved2[$name] }
 Remove-Item Env:\EXAKIT_REUSE_DB, Env:\EXAKIT_REPLACE_DB -ErrorAction SilentlyContinue

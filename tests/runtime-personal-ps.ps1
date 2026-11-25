@@ -241,10 +241,12 @@ function Get-PersonalLauncherState { return "" }
 Check "ours, launcher cannot say, database answers -> running" $true (Test-PersonalDeploymentRunning)
 function Test-PersonalDbAnswers { return $false }
 Check "ours, launcher says nothing, port open but no answer -> not running" $false (Test-PersonalDeploymentRunning)
-# No deployment of ours at all: something answers on 8563 (Windows and WSL
-# share the port), and without a SELECT through the kit's own profile it is
-# never adopted - the run that did adopt one handed every later step a
-# password that could never work.
+# No deployment of ours at all: something answers on the port (Windows and
+# WSL share it), and it is never adopted - the run that did adopt one handed
+# every later step a password that could never work. Not even a SELECT
+# through the kit's own profile makes it the kit's any more: the kit's
+# database is its starter-kit-local, on the port it picked (CONTRACT
+# section 3), and nothing is adopted by its port.
 function Test-PersonalDeploymentExists { return $false }
 function Test-PersonalDbAnswers { return $true }
 Check "no deployment of ours, port answers, no profile -> NOT adopted" $false (Test-PersonalDeploymentRunning)
@@ -252,7 +254,7 @@ function Test-ExakitDbReachable { return $false }
 function Get-ExakitManifestValue($Key) { if ($Key -eq "components.exapump.profile") { return "starter-kit" }; return $null }
 Check "no deployment of ours, the profile's SELECT fails -> NOT adopted" $false (Test-PersonalDeploymentRunning)
 function Test-ExakitDbReachable { return $true }
-Check "no deployment of ours, the profile's SELECT works -> running" $true (Test-PersonalDeploymentRunning)
+Check "no deployment of ours, the profile's SELECT works -> still NOT adopted (no adoption by port)" $false (Test-PersonalDeploymentRunning)
 
 Write-Host "the reconcile is the ownership proof:"
 # Wait-PersonalSlowFirstBoot: the database answers, and the launcher's own
@@ -359,7 +361,9 @@ function Invoke-ExakitLogged {
 }
 function Show-Calls { return ($script:calls -join "`n") }
 function Index-Of([string]$Needle) {
-    for ($i = 0; $i -lt $script:calls.Count; $i++) { if ($script:calls[$i] -eq $Needle) { return $i } }
+    # The call itself, or the call with more arguments after it (every launcher
+    # call that acts on a deployment ends in --deployment-dir <folder>).
+    for ($i = 0; $i -lt $script:calls.Count; $i++) { if ($script:calls[$i] -eq $Needle -or $script:calls[$i].StartsWith("$Needle ")) { return $i } }
     return -1
 }
 function Invoke-Captured([scriptblock]$Body) {
@@ -440,6 +444,9 @@ Remove-Item Env:EXAKIT_CONTAINER_ENGINE -ErrorAction SilentlyContinue
 Remove-Item Function:podman -ErrorAction SilentlyContinue
 
 Write-Host "a deployment that never booted is offered for replacement, default yes:"
+# The kit's own deployment (OWN-06: only that one is ever deployed again or
+# offered for removal).
+function Test-ExakitComponentManaged { param([string]$Id) return $true }
 function Test-PersonalDeploymentExists { return $true }
 function Get-PersonalLauncherState { return "deployment_failed" }
 function Wait-PersonalSlowFirstBoot { return $false }

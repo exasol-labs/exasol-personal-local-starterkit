@@ -38,9 +38,13 @@
 #
 #   Non-interactive answers (for agent-driven or scripted installs, so the
 #   install honours a choice instead of silently taking the default):
-#   EXAKIT_REUSE_DB=0|1     adopt an existing database: 1 reuse (default), 0 decline.
-#                           On macOS declining never deletes; replacing a stopped
-#                           deployment (and losing its data) needs EXAKIT_REPLACE_DB=1.
+#   EXAKIT_REUSE_DB=<name>|new|0|1
+#                           which database the kit uses when Exasol Personal 2.5 is
+#                           on the machine with databases of yours: a name of one of
+#                           them, new or 0 for a new one (the default without a
+#                           terminal), 1 for your default or only one. Yours is
+#                           never deleted: replacing the kit's own stopped database
+#                           (and losing its data) needs EXAKIT_REPLACE_DB=1.
 #   EXAKIT_MCP_CLIENTS=...  which MCP clients to configure, BY NAME (names are
 #                           stable across releases; menu numbers are not):
 #                           claude (= both the desktop app and the Claude Code
