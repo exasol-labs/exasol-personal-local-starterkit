@@ -701,7 +701,7 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # 2.5.0 moves the deployment folder itself; kits before 0.3.1 do not follow
 # it, so its versions.json row carries min_kit_version 0.3.1.
 EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.5.0}"
-EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.1}"
+EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.14.2}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.4.0}"
 EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # uv is the Python tool runner: uvx is the process the AI client launches to
@@ -712,7 +712,7 @@ EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-4.1.0}"
 # will RUN at all: below it uv's bundled CA store trusts an emSign root whose
 # intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
 # on the machine is used only at or above this floor.
-EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.9}"
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.10}"
 EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
 EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in

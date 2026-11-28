@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-20",
+  "updated": "2026-11-28",
   "kit": {
     "version": "0.3.1"
   },
@@ -21,28 +21,28 @@
       }
     },
     "exapump": {
-      "version": "0.14.1",
+      "version": "0.14.2",
       "repo": "exasol-labs/exapump",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "633beaa235a0ddc52d3a57686f4c8483e416e9b76b4f0417061a3ec99204eba7",
-        "linux-x86_64": "4f45f93c4e28fed0e5caec0cf1cb2cdf27eff9f023444e6cfeac8be7a9a0d79c",
-        "macos-aarch64": "347e021a8b925c845e21404eb6b8defe33d1c8f6fedb033ea169aa5550ab2cbd",
-        "macos-x86_64": "aa8ddd8744507e842e3909901d155f5d3625ba13693e70c4771eb0d8b8e9b96c",
-        "windows-x86_64": "39280a992e0a4f97c1176a94cbe0f560dafb186913bce4fb7609119a520496fb"
+        "linux-aarch64": "049aaa2d2ee85d5fd1e63211566f5b0553248d6e5584d5299c962059d004acf7",
+        "linux-x86_64": "920c690a41cff6b61a510c5f78567cfce6925923f8dd6cc164a9d74ba81e9d59",
+        "macos-aarch64": "9bbc59cf667dad7dc11e48872d225cde5f11c2308b66bb1431cf162cacd09a76",
+        "macos-x86_64": "44120776fad29f61e240fdcce4c4113c5d2d52f3307f9c62c6c2058bb6fbf076",
+        "windows-x86_64": "fae184fef21ca56d5e646fa884d918706706a1ba92f034587338deb24931d99b"
       }
     },
     "uv": {
-      "version": "0.13.9",
+      "version": "0.13.10",
       "min_version": "0.13.4",
       "repo": "astral-sh/uv",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d",
-        "linux-x86_64": "a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5",
-        "macos-aarch64": "5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca",
-        "macos-x86_64": "617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041",
-        "windows-x86_64": "edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb"
+        "linux-aarch64": "14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2",
+        "linux-x86_64": "bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c",
+        "macos-aarch64": "e419bf07533bdbf48795fc793601c834dd79db57a8c49ce8e25cfe3a8639958d",
+        "macos-x86_64": "153e03197588204c04fc4c81cc4bafbfa4280222a385e4ee36a87aeec0ae63b4",
+        "windows-x86_64": "297b3881fe1adfb922becc2c1613202abb41dc83ea5ff43d472aa087ca1f8683"
       }
     },
     "mcp": {
@@ -62,7 +62,7 @@
       "severity": "normal"
     },
     "dash-server": {
-      "version": "0.2.1",
+      "version": "0.3.1",
       "repo": "exasol-labs/dash-server",
       "package": "dash-server",
       "severity": "normal"
